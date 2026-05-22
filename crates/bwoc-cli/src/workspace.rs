@@ -32,6 +32,9 @@ pub struct ListArgs {
     pub backend_filter: Option<String>,
     /// Filter to agents whose daemon is actually running (PID file + signal-0 check).
     pub running_only: bool,
+    /// Filter to agents with at least one pending inbox envelope.
+    /// Pairs with `bwoc inbox <agent>` for the "what needs attention" flow.
+    pub inbox_pending_only: bool,
 }
 
 pub struct PruneArgs {
@@ -188,6 +191,9 @@ pub fn run_list(args: ListArgs) -> i32 {
             }
         }
         if args.running_only && crate::livecheck::running_pid(&root, a).is_none() {
+            return false;
+        }
+        if args.inbox_pending_only && crate::livecheck::inbox_count(&root, a) == 0 {
             return false;
         }
         true

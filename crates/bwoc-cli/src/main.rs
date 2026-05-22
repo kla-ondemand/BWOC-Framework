@@ -578,6 +578,9 @@ struct ListArgs {
     /// Filter to agents whose daemon is actually running (PID file + signal-0).
     #[arg(long)]
     running: bool,
+    /// Filter to agents with at least one pending inbox envelope.
+    #[arg(long = "inbox-pending")]
+    inbox_pending: bool,
 }
 
 impl ListArgs {
@@ -589,6 +592,7 @@ impl ListArgs {
             status_filter: self.status,
             backend_filter: self.backend.map(|b| b.cli_name().to_string()),
             running_only: self.running,
+            inbox_pending_only: self.inbox_pending,
         }
     }
 }

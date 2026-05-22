@@ -58,7 +58,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc status [name]` | Per-agent health + runtime indicator (●/○) + uptime via socket query |
 | `bwoc list` | Registry view with runtime indicator + INBOX count + `--running` / `--status` / `--backend` filters |
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
-| `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor` |
+| `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
 | `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out |
 | `bwoc ping <name>` | CLI client for the daemon's PING command |
 | `bwoc chat <name>` (+ `--tmux`) | Auto-resolves backend from registry; exec's `bwoc spawn` |

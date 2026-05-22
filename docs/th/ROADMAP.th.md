@@ -58,7 +58,7 @@
 | `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query |
 | `bwoc list` | registry view + runtime indicator + INBOX count + filter `--running` / `--status` / `--backend` |
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
-| `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale |
+| `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale; WARN กรณี `agent.log` ใหญ่ (10 MiB, `--auto` truncate) + `inbox.jsonl` ใหญ่ (5 MiB, WARN-only — user data); `--json` สำหรับ shape stable ใช้ CI gating |
 | `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn |
 | `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
 | `bwoc chat <name>` (+ `--tmux`) | resolve backend จาก registry; exec `bwoc spawn` |

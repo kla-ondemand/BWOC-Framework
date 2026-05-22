@@ -58,6 +58,9 @@ pub struct ListArgs {
 pub struct PruneArgs {
     pub path: Option<PathBuf>,
     pub apply: bool,
+    /// Emit JSON instead of the human-readable report. Useful for CI:
+    ///   `bwoc workspace prune --json | jq '.phantoms | length'`
+    pub json: bool,
 }
 
 pub fn run_info(args: InfoArgs) -> i32 {
@@ -492,6 +495,61 @@ pub fn run_prune(args: PruneArgs) -> i32 {
                 orphans.push(p);
             }
         }
+    }
+
+    // JSON branch: emit structured shape, optionally apply phantom removal,
+    // and exit early. Same logic as the human path but no decorative text.
+    if args.json {
+        let phantoms: Vec<serde_json::Value> = phantom_indices
+            .iter()
+            .map(|&i| {
+                let a = &registry.agents[i];
+                serde_json::json!({
+                    "id": a.id,
+                    "path": a.path,
+                    "backend": a.backend,
+                    "status": a.status,
+                })
+            })
+            .collect();
+        let orphans_json: Vec<String> = orphans
+            .iter()
+            .map(|o| {
+                o.strip_prefix(&root)
+                    .map(|r| r.display().to_string())
+                    .unwrap_or_else(|_| o.display().to_string())
+            })
+            .collect();
+        let mut removed: Vec<String> = Vec::new();
+        if args.apply {
+            for &i in phantom_indices.iter().rev() {
+                removed.push(registry.agents.remove(i).id);
+            }
+            if let Err(e) = registry.save(&root) {
+                eprintln!("bwoc workspace prune --json: failed to save agents.toml: {e}");
+                return 1;
+            }
+        }
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "phantoms": phantoms,
+            "orphans": orphans_json,
+            "applied": args.apply,
+            "removed": removed,
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc workspace prune --json: serialize failed: {e}");
+                return 1;
+            }
+        }
+        // Exit 0 if clean OR fully applied; 2 if orphans remain (matches human path).
+        return if !orphans.is_empty() && args.apply {
+            2
+        } else {
+            0
+        };
     }
 
     println!();

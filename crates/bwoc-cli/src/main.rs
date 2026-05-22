@@ -705,6 +705,9 @@ enum WorkspaceCommand {
         /// Apply the safe removals (phantom entries). Orphan dirs are never auto-removed.
         #[arg(long)]
         apply: bool,
+        /// Emit JSON `{ workspace, phantoms, orphans, applied, removed }` for CI gating.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -948,8 +951,8 @@ fn main() -> ExitCode {
                         json,
                     })
                 }
-                WorkspaceCommand::Prune { path, apply } => {
-                    workspace::run_prune(workspace::PruneArgs { path, apply })
+                WorkspaceCommand::Prune { path, apply, json } => {
+                    workspace::run_prune(workspace::PruneArgs { path, apply, json })
                 }
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))

@@ -43,8 +43,9 @@ git push origin v2026.5.22-0
 
 Tag จะตรงกับ filter ของ workflow (`v[0-9][0-9][0-9][0-9].*`) และกระตุ้น [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
 
-1. **Build แบบ matrix** — 4 target ทำงานพร้อมกัน:
-   - `x86_64-unknown-linux-gnu`
+1. **Build แบบ matrix** — 5 target ทำงานพร้อมกัน:
+   - `x86_64-unknown-linux-gnu` (Linux x64)
+   - `aarch64-unknown-linux-gnu` (Linux ARM64, native บน runner `ubuntu-24.04-arm`)
    - `aarch64-apple-darwin` (macOS Apple Silicon)
    - `x86_64-apple-darwin` (macOS Intel)
    - `x86_64-pc-windows-msvc`
@@ -74,7 +75,7 @@ CalVer tag **มี** `-<patch>` เสมอ ดังนั้น workflow ต
 ## สิ่งที่ยังไม่อยู่ใน pipeline
 
 - **Code signing** — Apple notarization (macOS) และ Windows Authenticode ยังไม่ได้ตั้งค่า binary ปล่อยแบบไม่ signed พร้อม SHA-256 checksum ผู้ใช้จะเห็น prompt "untrusted developer" ตอน launch ครั้งแรก การเพิ่ม signing ต้องให้ maintainer จัดการ cert และเก็บ key ใน GitHub Actions secrets
-- **Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` `aarch64-unknown-linux-gnu` และ `x86_64-unknown-linux-musl` เพิ่มเข้า matrix ได้เมื่อมีความต้องการจริง
+- **Linux musl** — `aarch64-unknown-linux-gnu` ship แล้ว; `x86_64-unknown-linux-musl` (และ `aarch64-unknown-linux-musl`) เพิ่มเข้า matrix ได้เมื่อมีความต้องการสำหรับ distro ที่ไม่มี glibc (Alpine, distroless container)
 - **Homebrew formula / Scoop manifest / cargo binstall metadata** — distribution อยู่ใน ecosystem ของตัวเอง
 
 ## Rolling back

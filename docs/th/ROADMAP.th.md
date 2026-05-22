@@ -82,7 +82,7 @@
 - **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
 - **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
 - **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
-- **Build Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` ใน release matrix
+- **Build Linux musl** — `x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` ship แล้ว; musl (Alpine / distroless) เพิ่มได้เมื่อมีความต้องการ
 - **เครื่องมือ memory mining และ interface Tier 2 backend ที่ pluggable**
 - **Daemon path สำหรับ Windows ผ่าน named-pipe** — แทน stub cfg-gated ด้วย implementation Windows จริง
 

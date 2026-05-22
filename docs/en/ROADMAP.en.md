@@ -82,7 +82,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 - **Restart-on-crash supervision** — the daemon currently exits on signal; auto-respawn / health-check loop not implemented.
 - **Cross-backend validation** — full uppāda + ṭhiti against all 4 backend CLIs in CI (proves Samānattatā).
 - **Code signing** — Apple notarization + Windows Authenticode for release artifacts (user-cert authorization required).
-- **Linux ARM / musl builds** — only `x86_64-unknown-linux-gnu` in the release matrix.
+- **Linux musl build** — `x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` ship; musl (Alpine / distroless) can be added when demanded.
 - **Memory mining tooling and pluggable Tier 2 backend interface.**
 - **Windows named-pipe daemon path** — replace the cfg-gated stub with a real Windows implementation.
 

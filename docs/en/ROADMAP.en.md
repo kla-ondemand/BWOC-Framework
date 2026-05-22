@@ -77,7 +77,6 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 ### Remaining for ship
 
 - **Restart-on-crash supervision** — the daemon currently exits on signal; auto-respawn / health-check loop not implemented.
-- **`bwoc log <agent>`** — daemon emits to stderr currently; no log-tail IPC command.
 - **Per-workspace memory** (`<workspace>/.bwoc/memory/`).
 - **Cross-backend validation** — full uppāda + ṭhiti against all 4 backend CLIs in CI (proves Samānattatā).
 - **Code signing** — Apple notarization + Windows Authenticode for release artifacts (user-cert authorization required).
@@ -95,7 +94,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 
 | Item | Notes |
 |---|---|
-| `bwoc stop <name>` | Sends `STOP` over the socket (when daemon is alive) + flips registry status. Idempotent. |
+| `bwoc stop <name>` | 3-step escalation ladder: socket `STOP` → SIGTERM → SIGKILL (~3s wait between steps); idempotent; reports which step ended the daemon. |
 | `bwoc retire <name>` | Removes from registry; `--keep-files` retains the agent dir. |
 | `bwoc workspace prune` | Reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift. |
 | User → agent inbox (sammā-vācā Phase 0) | `bwoc send` + `bwoc inbox` ship as JSONL envelopes; foundation for agent → agent messaging. |
@@ -103,7 +102,6 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 ### Remaining for Phase 3
 
 - **Full vaya** for `bwoc retire` — currently registry-only with optional file delete; needs worktree cleanup + branch release + memory prune + interconnect deregistration.
-- **Signal escalation** for `bwoc stop` — current behavior is socket `STOP` → exit; no SIGTERM → SIGKILL ladder if daemon ignores `STOP`.
 - **Agent → agent messaging** — Sammā-vācā channel proper; Sāraṇīyadhamma 6 cordiality rules.
 - **Trust scoring** — Kalyāṇamitta 7 qualities applied to capability declarations and message provenance.
 - **`.bwoc/interconnect/`** per-workspace routing config.

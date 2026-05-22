@@ -73,11 +73,11 @@
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | persona substitution + mindset/skill stub seeding ตอน incarnate |
 | Module `livecheck` ที่ใช้ร่วม | รวม 5 copy ของ `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
+| `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 
 ### ที่เหลือก่อน ship
 
 - **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
-- **`bwoc log <agent>`** — daemon emit ไป stderr ปัจจุบัน; ไม่มี log-tail IPC command
 - **Memory ระดับ workspace** (`<workspace>/.bwoc/memory/`)
 - **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
 - **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
@@ -95,7 +95,7 @@
 
 | รายการ | หมายเหตุ |
 |---|---|
-| `bwoc stop <name>` | ส่ง `STOP` ผ่าน socket (เมื่อ daemon alive) + flip registry status idempotent |
+| `bwoc stop <name>` | escalation ladder 3 ขั้น: socket `STOP` → SIGTERM → SIGKILL (รอ ~3s ระหว่างขั้น); idempotent; รายงานว่าขั้นไหนทำให้ daemon จบ |
 | `bwoc retire <name>` | ลบจาก registry; `--keep-files` เก็บ agent dir ไว้ |
 | `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย |
 | User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |
@@ -103,7 +103,6 @@
 ### ที่เหลือสำหรับ Phase 3
 
 - **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — ปัจจุบัน registry-only พร้อม optional file delete; ต้องเพิ่ม worktree cleanup + branch release + memory prune + interconnect deregistration
-- **Signal escalation** สำหรับ `bwoc stop` — พฤติกรรมปัจจุบันคือ socket `STOP` → exit; ไม่มี ladder SIGTERM → SIGKILL ถ้า daemon ไม่สนใจ `STOP`
 - **Agent → agent messaging** — channel สัมมาวาจาจริง; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
 - **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ
 - **`.bwoc/interconnect/`** config routing ระดับ workspace

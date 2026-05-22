@@ -458,7 +458,7 @@ fn resolve(
         }
     }
 
-    let role = resolve_one(args.role, "agentRole", &descriptions, tty, bundle, None)?;
+    let role = resolve_role(args.role, &descriptions, tty, bundle)?;
     let primary_model =
         resolve_primary_model(args.primary_model, args.backend, &descriptions, tty, bundle)?;
 
@@ -644,6 +644,79 @@ fn resolve_primary_model(
         return Ok(models[n - 1].to_string());
     }
     // Otherwise treat as a custom model name (free-text fallback).
+    Ok(trimmed.to_string())
+}
+
+/// Common agent roles offered in the `bwoc new` picker. First entry is
+/// the recommended default. Free-text input is always accepted —
+/// this is a convenience, not a whitelist. The role string ends up
+/// verbatim in the manifest's `agentRole` field, so keep them concise
+/// (one or two words, not a sentence).
+const AGENT_ROLE_SUGGESTIONS: &[&str] = &[
+    "code reviewer",
+    "documentation writer",
+    "test author",
+    "refactoring helper",
+    "onboarding assistant",
+    "migration specialist",
+];
+
+/// Specialized prompt for `agentRole` — shows a numbered list of common
+/// roles so the user can pick by number, by typed phrase, or by hitting
+/// Enter to accept the first (recommended) entry. Mirror of
+/// `resolve_primary_model` for consistency.
+fn resolve_role(
+    cur: Option<String>,
+    descriptions: &HashMap<String, String>,
+    tty: bool,
+    bundle: &fluent_bundle::FluentBundle<fluent_bundle::FluentResource>,
+) -> Result<String, NewError> {
+    if let Some(v) = cur {
+        return Ok(v);
+    }
+    if !tty {
+        return Err(NewError::MissingFields(vec!["agentRole".to_string()]));
+    }
+
+    let roles = AGENT_ROLE_SUGGESTIONS;
+    let mut stdout = io::stdout();
+
+    let header = i18n::t(bundle, "new-role-picker-header");
+    let default_hint = i18n::t(bundle, "new-model-picker-default-hint");
+    writeln!(stdout, "{header}")?;
+    for (i, r) in roles.iter().enumerate() {
+        if i == 0 {
+            writeln!(stdout, "  {}. {r}  {default_hint}", i + 1)?;
+        } else {
+            writeln!(stdout, "  {}. {r}", i + 1)?;
+        }
+    }
+
+    let desc = descriptions
+        .get("agentRole")
+        .map(|s| s.as_str())
+        .unwrap_or("required field");
+    let prompt = i18n::t_with(
+        bundle,
+        "new-prompt-format",
+        &[("key", "agentRole"), ("desc", desc)],
+    );
+    write!(stdout, "{prompt}")?;
+    stdout.flush()?;
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    let trimmed = line.trim();
+
+    if trimmed.is_empty() {
+        return Ok(roles[0].to_string());
+    }
+    if let Ok(n) = trimmed.parse::<usize>()
+        && n >= 1
+        && n <= roles.len()
+    {
+        return Ok(roles[n - 1].to_string());
+    }
     Ok(trimmed.to_string())
 }
 

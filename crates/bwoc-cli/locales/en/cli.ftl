@@ -21,6 +21,7 @@ new-prompt-format-with-default = { $key } ({ $desc }) [default: { $default }]:{"
 new-detect-stack = Detected project: { $stack } — defaults will be filled for lintCmd / formatCmd / testCmd / buildCmd (press Enter to accept each).
 new-detect-unknown = No project stack detected — please type each of lintCmd / formatCmd / testCmd / buildCmd manually.
 new-model-picker-header = Common { $backend } models (pick a number, or type a custom model name):
+new-role-picker-header = Common agent roles (pick a number, or type a custom role):
 new-model-picker-default-hint = (default: 1)
 
 # bwoc check — header + PASS/WARN/FAIL labels + summaries

@@ -313,15 +313,27 @@ pub fn run_list(args: ListArgs) -> i32 {
     if args.json {
         let value = serde_json::json!({
             "workspace": root.display().to_string(),
-            "agents": filtered.iter().map(|a| serde_json::json!({
-                "id": a.id,
-                "path": a.path,
-                "backend": a.backend,
-                "status": a.status,
-                "incarnated": a.incarnated,
-                "running": crate::livecheck::running_pid(&root, a).is_some(),
-                "inbox_count": crate::livecheck::inbox_count(&root, a),
-            })).collect::<Vec<_>>(),
+            "agents": filtered.iter().map(|a| {
+                let running = crate::livecheck::running_pid(&root, a).is_some();
+                // Null when not running OR when running but the daemon
+                // didn't answer the STATUS probe (older daemons may not).
+                // Consumers can branch on (running, uptime_seconds).
+                let uptime_seconds = if running {
+                    crate::livecheck::query_uptime(&root, a)
+                } else {
+                    None
+                };
+                serde_json::json!({
+                    "id": a.id,
+                    "path": a.path,
+                    "backend": a.backend,
+                    "status": a.status,
+                    "incarnated": a.incarnated,
+                    "running": running,
+                    "uptime_seconds": uptime_seconds,
+                    "inbox_count": crate::livecheck::inbox_count(&root, a),
+                })
+            }).collect::<Vec<_>>(),
         });
         match serde_json::to_string_pretty(&value) {
             Ok(s) => {

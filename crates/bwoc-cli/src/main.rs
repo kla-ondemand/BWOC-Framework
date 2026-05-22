@@ -477,6 +477,10 @@ struct SuperviseArgs {
     /// the supervisor gives up rather than burn CPU on a crash loop.
     #[arg(long = "max-restarts-per-min", default_value_t = 10)]
     max_restarts_per_min: usize,
+    /// Emit one JSON event per action (spawn / crash_respawn / clean_exit /
+    /// rate_limit_hit / signal_stop) to stdout. For monitoring pipelines.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<SuperviseArgs> for supervise::SuperviseArgs {
@@ -485,6 +489,7 @@ impl From<SuperviseArgs> for supervise::SuperviseArgs {
             agent: a.agent,
             workspace: a.workspace,
             max_restarts_per_min: a.max_restarts_per_min,
+            json: a.json,
         }
     }
 }

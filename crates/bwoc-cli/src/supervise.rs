@@ -30,6 +30,26 @@ pub struct SuperviseArgs {
     /// Beyond this, the supervisor gives up (exit 2) — keeps crash
     /// loops from cooking the laptop.
     pub max_restarts_per_min: usize,
+    /// Emit one JSON event per action to stdout (spawn, exit, respawn,
+    /// rate-limit, signal-stop). Pipes cleanly to a log aggregator.
+    pub json: bool,
+}
+
+/// One JSON event. Each is printed as a single compact line on stdout
+/// when `--json` is set. Schema is intentionally narrow and stable.
+fn emit_event(json: bool, kind: &str, agent: &str, detail: serde_json::Value) {
+    if !json {
+        return;
+    }
+    let v = serde_json::json!({
+        "ts": crate::util::utc_now_iso8601(),
+        "agent": agent,
+        "event": kind,
+        "detail": detail,
+    });
+    if let Ok(line) = serde_json::to_string(&v) {
+        println!("{line}");
+    }
 }
 
 pub fn run(args: SuperviseArgs) -> i32 {
@@ -66,6 +86,12 @@ pub fn run(args: SuperviseArgs) -> i32 {
         "bwoc supervise: watching {} (max {}/min restarts)",
         entry.id, args.max_restarts_per_min
     );
+    emit_event(
+        args.json,
+        "watch_start",
+        &entry.id,
+        serde_json::json!({ "max_restarts_per_min": args.max_restarts_per_min }),
+    );
 
     let should_stop = Arc::new(AtomicBool::new(false));
     {
@@ -81,6 +107,7 @@ pub fn run(args: SuperviseArgs) -> i32 {
     loop {
         if should_stop.load(Ordering::SeqCst) {
             eprintln!("bwoc supervise: caught signal — exiting");
+            emit_event(args.json, "signal_stop", &entry.id, serde_json::json!({}));
             return 0;
         }
 
@@ -93,30 +120,57 @@ pub fn run(args: SuperviseArgs) -> i32 {
                  Investigate the daemon crash cause; rerun when ready.",
                 restarts.len()
             );
+            emit_event(
+                args.json,
+                "rate_limit_hit",
+                &entry.id,
+                serde_json::json!({ "restarts_in_window": restarts.len() }),
+            );
             return 2;
         }
         restarts.push(Instant::now());
+        emit_event(
+            args.json,
+            "spawn",
+            &entry.id,
+            serde_json::json!({
+                "restarts_in_window": restarts.len(),
+                "max": args.max_restarts_per_min,
+            }),
+        );
 
         // Spawn the daemon. Stderr → agent.log (same as `bwoc start`).
         let exit_status = match spawn_and_wait(&agent_path, &should_stop) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("bwoc supervise: spawn failed: {e}");
+                emit_event(
+                    args.json,
+                    "spawn_failed",
+                    &entry.id,
+                    serde_json::json!({ "error": e.to_string() }),
+                );
                 return 1;
             }
         };
 
         if should_stop.load(Ordering::SeqCst) {
             eprintln!("bwoc supervise: caught signal mid-run — exiting");
+            emit_event(args.json, "signal_stop", &entry.id, serde_json::json!({}));
             return 0;
         }
 
-        // Clean exit (status 0) → stop supervising. The daemon was
-        // told to stop, or finished its job. Don't restart.
+        // Clean exit (status 0) → stop supervising.
         if exit_status.success() {
             eprintln!(
                 "bwoc supervise: {} exited cleanly — supervisor stopping",
                 entry.id
+            );
+            emit_event(
+                args.json,
+                "clean_exit",
+                &entry.id,
+                serde_json::json!({ "exit_code": 0 }),
             );
             return 0;
         }
@@ -128,6 +182,15 @@ pub fn run(args: SuperviseArgs) -> i32 {
             exit_status,
             restarts.len(),
             args.max_restarts_per_min,
+        );
+        emit_event(
+            args.json,
+            "crash_respawn",
+            &entry.id,
+            serde_json::json!({
+                "exit_code": exit_status.code(),
+                "restarts_in_window": restarts.len(),
+            }),
         );
         std::thread::sleep(Duration::from_secs(1));
     }

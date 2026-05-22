@@ -113,6 +113,12 @@ struct InboxArgs {
     /// Tail mode — block and print new envelopes as they arrive (Ctrl-C to stop).
     #[arg(long)]
     watch: bool,
+    /// Truncate the inbox after printing (acknowledge / delete all messages).
+    #[arg(long)]
+    clear: bool,
+    /// Skip the interactive confirmation for `--clear`. Required for non-TTY.
+    #[arg(long)]
+    yes: bool,
 }
 
 impl From<InboxArgs> for inbox::InboxArgs {
@@ -123,6 +129,8 @@ impl From<InboxArgs> for inbox::InboxArgs {
             json: a.json,
             limit: a.limit,
             watch: a.watch,
+            clear: a.clear,
+            yes: a.yes,
         }
     }
 }

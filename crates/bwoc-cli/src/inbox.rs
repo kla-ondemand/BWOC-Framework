@@ -18,6 +18,11 @@ pub struct InboxArgs {
     /// Tail mode: print historical messages then block, printing new
     /// envelopes as they arrive. Exit with Ctrl-C.
     pub watch: bool,
+    /// Truncate the inbox after printing (acknowledge messages). TTY
+    /// prompts unless `yes` is also set.
+    pub clear: bool,
+    /// Skip the interactive confirmation for `clear`. Required for non-TTY.
+    pub yes: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -113,9 +118,61 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
         print_envelope(i + 1, m);
     }
 
+    // --clear is incompatible with --watch (one drains, the other listens
+    // forever — combining them is almost certainly a mistake). Reject
+    // explicitly so the user picks one.
+    if args.clear && args.watch {
+        eprintln!("bwoc inbox: --clear and --watch can't be combined (clear drains; watch waits)");
+        return Ok(());
+    }
+
+    if args.clear {
+        clear_inbox(&inbox_path, messages.len(), args.yes)?;
+    }
+
     if args.watch {
         watch_inbox(&inbox_path, messages.len())?;
     }
+    Ok(())
+}
+
+/// Truncate the inbox file after the user confirms. The daemon's
+/// `check_inbox_for_new` already handles file truncation gracefully —
+/// it resets its cursor on shrink, so a live daemon won't crash or
+/// re-announce pre-clear messages.
+fn clear_inbox(inbox_path: &std::path::Path, count: usize, yes: bool) -> Result<(), InboxError> {
+    use std::io::{IsTerminal, Write};
+
+    if count == 0 {
+        println!("(nothing to clear)");
+        return Ok(());
+    }
+    if !yes {
+        if !std::io::stdin().is_terminal() {
+            eprintln!("bwoc inbox --clear: non-TTY without --yes — aborted");
+            return Ok(());
+        }
+        print!(
+            "Delete {count} message(s) from {}? [y/N]: ",
+            inbox_path.display()
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let answer = line.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("(aborted — nothing changed)");
+            return Ok(());
+        }
+    }
+    // Truncate to zero by re-opening with truncate=true. Simpler than
+    // remove+create — preserves the file inode so a watching daemon's
+    // open handle (if any) stays valid in the truncation case.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(inbox_path)?;
+    println!("Cleared {count} message(s) from {}.", inbox_path.display());
     Ok(())
 }
 

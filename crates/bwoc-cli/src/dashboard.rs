@@ -14,6 +14,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use bwoc_core::manifest::Manifest;
 use bwoc_core::workspace::{AgentEntry, AgentsRegistry};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
@@ -201,14 +202,179 @@ fn draw_frame(f: &mut ratatui::Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(5), // banner
-            Constraint::Min(0),    // agents table
+            Constraint::Min(0),    // body (agents + detail)
             Constraint::Length(1), // footer
         ])
         .split(area);
 
     draw_banner(f, layout[0], app);
-    draw_agents(f, layout[1], app);
+    draw_body(f, layout[1], app);
     draw_footer(f, layout[2], app);
+}
+
+fn draw_body(f: &mut ratatui::Frame, area: Rect, app: &mut App) {
+    let h = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    draw_agents(f, h[0], app);
+    draw_detail(f, h[1], app);
+}
+
+fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" detail ")
+        .border_style(Style::default().add_modifier(Modifier::DIM));
+
+    let Some(idx) = app.table_state.selected() else {
+        let p = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "(select an agent to see details)",
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+        ])
+        .alignment(Alignment::Center)
+        .block(block);
+        f.render_widget(p, area);
+        return;
+    };
+    let Some(entry) = app.agents.get(idx) else {
+        f.render_widget(Paragraph::new("").block(block), area);
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        f.render_widget(Paragraph::new("").block(block), area);
+        return;
+    };
+
+    let agent_path = root.join(&entry.path);
+    let mut lines: Vec<Line> = Vec::new();
+
+    let key_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+
+    lines.push(Line::from(vec![
+        Span::styled("id          ", key_style),
+        Span::raw(entry.id.clone()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("path        ", key_style),
+        Span::raw(entry.path.clone()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("backend     ", key_style),
+        Span::raw(entry.backend.clone()),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("incarnated  ", key_style),
+        Span::raw(entry.incarnated.clone()),
+    ]));
+    lines.push(Line::from(""));
+
+    // Manifest fields (load on demand; failures shown gracefully).
+    match Manifest::load_from_path(&agent_path.join("config.manifest.json")) {
+        Ok(m) => {
+            lines.push(Line::from(Span::styled(
+                "manifest:",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(vec![
+                Span::styled("  role        ", key_style),
+                Span::raw(m.agent_role),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  model       ", key_style),
+                Span::raw(m.primary_model),
+            ]));
+            if let Some(fb) = m.fallback_model {
+                lines.push(Line::from(vec![
+                    Span::styled("  fallback    ", key_style),
+                    Span::raw(fb),
+                ]));
+            }
+            lines.push(Line::from(vec![
+                Span::styled("  memory      ", key_style),
+                Span::raw(m.memory_path),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  version     ", key_style),
+                Span::raw(m.version),
+            ]));
+        }
+        Err(e) => {
+            lines.push(Line::from(Span::styled(
+                format!("manifest: failed ({e})"),
+                Style::default().fg(Color::Red),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    // Health probe — same shape as `bwoc doctor` / `bwoc status` per-agent
+    // checks, returning one summarised verdict.
+    let (mark, color, msg) = match probe(root, entry) {
+        Health::Ok => ("✓", Color::Green, "all probes passed".to_string()),
+        Health::Warn(m) => ("⚠", Color::Yellow, m),
+        Health::Fail(m) => ("✗", Color::Red, m),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("health      ", key_style),
+        Span::styled(
+            mark,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(msg, Style::default().fg(color)),
+    ]));
+
+    let p = Paragraph::new(lines).block(block);
+    f.render_widget(p, area);
+}
+
+// --- health probe (mirror of status.rs::probe / doctor.rs's per-agent
+// checks; kept duplicated here to avoid promoting probe to a shared
+// module just for this one consumer — when a third caller appears,
+// promote to bwoc-cli::health or similar) -----------------------------------
+
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+
+#[derive(Debug)]
+enum Health {
+    Ok,
+    Warn(String),
+    Fail(String),
+}
+
+fn probe(root: &std::path::Path, a: &AgentEntry) -> Health {
+    let p = root.join(&a.path);
+    if !p.is_dir() {
+        return Health::Fail(format!("directory missing: {}", p.display()));
+    }
+    if !p.join("AGENTS.md").is_file() {
+        return Health::Fail("missing AGENTS.md".to_string());
+    }
+    let missing: Vec<&str> = BACKEND_SYMLINKS
+        .iter()
+        .copied()
+        .filter(|link| !p.join(link).exists())
+        .collect();
+    if !missing.is_empty() {
+        return Health::Warn(format!(
+            "missing symlinks: {} (run `bwoc doctor --auto`)",
+            missing.join(", ")
+        ));
+    }
+    if !p.join("config.manifest.json").is_file() {
+        return Health::Warn("config.manifest.json missing".to_string());
+    }
+    Health::Ok
 }
 
 fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {

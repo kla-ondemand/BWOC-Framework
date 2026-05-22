@@ -99,13 +99,13 @@
 | รายการ | หมายเหตุ |
 |---|---|
 | `bwoc stop <name>` | escalation ladder 3 ขั้น: socket `STOP` → SIGTERM → SIGKILL (รอ ~3s ระหว่างขั้น); idempotent; รายงานว่าขั้นไหนทำให้ daemon จบ `--all` mass-stop agent ที่ไม่ stopped ทั้งหมด (clap บังคับ mutex กับ `name`) |
-| `bwoc retire <name>` | ลบจาก registry; `--keep-files` เก็บ agent dir ไว้ |
+| `bwoc retire <name>` | ลบจาก registry; file mode 3 แบบ: default (ลบ dir), `--keep-files` (เก็บทั้งหมด), `--keep-memory` (เก็บแค่ `memories/`, ลบที่เหลือ — archive ความรู้ที่ agent สั่งสมในขณะที่ปล่อย agent ไป) `--keep-files` กับ `--keep-memory` เป็น clap-mutex |
 | `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย |
 | User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |
 
 ### ที่เหลือสำหรับ Phase 3
 
-- **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — ปัจจุบัน registry-only พร้อม optional file delete; ต้องเพิ่ม worktree cleanup + branch release + memory prune + interconnect deregistration
+- **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — file mode ship แล้ว (default/--keep-files/--keep-memory); ที่ค้าง: worktree cleanup (เมื่อ set worktreeBase), branch release, interconnect deregistration (เมื่อ interconnect ship)
 - **Agent → agent messaging** — channel สัมมาวาจาจริง; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
 - **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ
 - **`.bwoc/interconnect/`** config routing ระดับ workspace

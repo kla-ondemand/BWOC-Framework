@@ -19,6 +19,9 @@ use crate::user_home;
 pub struct DoctorArgs {
     pub path: Option<PathBuf>,
     pub auto: bool,
+    /// Emit a structured JSON report instead of the human-readable list.
+    /// Stable shape for CI gating and external monitoring.
+    pub json: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,12 +103,72 @@ pub fn run(args: DoctorArgs) -> i32 {
         }),
     }
 
-    print_report(&results, args.auto);
+    if args.json {
+        emit_json(&results);
+    } else {
+        print_report(&results, args.auto);
+    }
 
     if results.iter().any(|r| matches!(r.status, Status::Fail(_))) {
         2
     } else {
         0
+    }
+}
+
+/// Stable JSON shape:
+/// ```text
+/// {
+///   "results": [
+///     { "name": "<check name>", "status": "pass"|"warn"|"fail"|"fixed",
+///       "detail": "<message or null>" },
+///     ...
+///   ],
+///   "summary": { "pass": N, "warn": N, "fail": N, "fixed": N },
+///   "exit": 0 | 2     // 2 iff any "fail" present
+/// }
+/// ```
+fn emit_json(results: &[CheckResult]) {
+    let mut pass = 0u32;
+    let mut warn = 0u32;
+    let mut fail = 0u32;
+    let mut fixed = 0u32;
+    let items: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            let (status, detail) = match &r.status {
+                Status::Pass => {
+                    pass += 1;
+                    ("pass", None)
+                }
+                Status::Warn(m) => {
+                    warn += 1;
+                    ("warn", Some(m.as_str()))
+                }
+                Status::Fail(m) => {
+                    fail += 1;
+                    ("fail", Some(m.as_str()))
+                }
+                Status::Fixed(m) => {
+                    fixed += 1;
+                    ("fixed", Some(m.as_str()))
+                }
+            };
+            serde_json::json!({
+                "name": r.name,
+                "status": status,
+                "detail": detail,
+            })
+        })
+        .collect();
+    let value = serde_json::json!({
+        "results": items,
+        "summary": { "pass": pass, "warn": warn, "fail": fail, "fixed": fixed },
+        "exit": if fail > 0 { 2 } else { 0 },
+    });
+    match serde_json::to_string_pretty(&value) {
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("bwoc doctor --json: serialize failed: {e}"),
     }
 }
 

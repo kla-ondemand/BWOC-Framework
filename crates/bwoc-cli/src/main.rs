@@ -77,7 +77,7 @@ enum Commands {
     },
     /// List agents registered in the enclosing workspace's agents.toml.
     List(ListArgs),
-    /// Diagnose environment + workspace; with `--auto`, fix safe issues in place.
+    /// Diagnose environment + workspace; with `--auto`, fix safe issues in place. `--json` for structured output.
     Doctor(DoctorArgs),
     /// Retire an agent — remove it from the workspace's registry (vaya).
     Retire(RetireArgs),
@@ -475,6 +475,9 @@ struct DoctorArgs {
     /// Attempt to fix safe issues automatically (missing dirs, missing symlinks).
     #[arg(long)]
     auto: bool,
+    /// Emit structured JSON instead of the human-readable list.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<DoctorArgs> for doctor::DoctorArgs {
@@ -482,6 +485,7 @@ impl From<DoctorArgs> for doctor::DoctorArgs {
         Self {
             path: a.path,
             auto: a.auto,
+            json: a.json,
         }
     }
 }

@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/bilingual-reminder.sh 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": ".claude/hooks/auto-version.sh 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

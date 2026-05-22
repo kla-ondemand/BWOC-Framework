@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bwoc_core::manifest::Manifest;
 
@@ -123,11 +123,14 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Daemon start time — used by the STATUS command to report uptime.
+    let start = Instant::now();
+
     // Single-threaded accept loop with poll. Each accept is non-blocking
     // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
-            Ok((stream, _addr)) => handle_client(stream, &running),
+            Ok((stream, _addr)) => handle_client(stream, &running, &start),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -156,7 +159,11 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn handle_client(mut stream: std::os::unix::net::UnixStream, running: &Arc<AtomicBool>) {
+fn handle_client(
+    mut stream: std::os::unix::net::UnixStream,
+    running: &Arc<AtomicBool>,
+    start: &Instant,
+) {
     use std::io::{BufRead, BufReader, Write};
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
@@ -164,6 +171,17 @@ fn handle_client(mut stream: std::os::unix::net::UnixStream, running: &Arc<Atomi
         return;
     }
     let cmd = line.trim();
+
+    // STATUS needs a dynamic response — uptime varies per call. Handle it
+    // before the static-byte-slice branch.
+    if cmd == "STATUS" {
+        let uptime = start.elapsed().as_secs();
+        let pid = std::process::id();
+        let response = format!("OK uptime_secs={uptime} pid={pid}\n");
+        let _ = stream.write_all(response.as_bytes());
+        return;
+    }
+
     let response: &[u8] = match cmd {
         "PING" => b"PONG\n",
         "STOP" => {

@@ -30,9 +30,22 @@ The template's `CLAUDE.md` is for incarnated agents reading themselves; this fil
 
 ## Bilingual Parity (HARD RULE)
 
-Every `docs/en/*.en.md` has a counterpart `docs/th/*.th.md`. When you edit one, edit the other in the same change. This applies to both the framework root `docs/` (currently empty placeholders) and `modules/agent-template/docs/`.
+Every `docs/en/*.en.md` has a counterpart `docs/th/*.th.md`. When you edit one, edit the other in the same change. This applies to both the framework root `docs/` and `modules/agent-template/docs/`.
 
 Existing template doc pairs: `OVERVIEW`, `PHILOSOPHY`, `PRD`, `SELF-IMPROVEMENT`, `SRS`, `THREAT-MODEL`.
+
+### What requires a TH pair (root level)
+
+| File type | TH pair required? | Why |
+|---|---|---|
+| **Doctrine docs at root** — `VISION.md`, any future `PHILOSOPHY-AT-ROOT.md` | **Yes** (`VISION.md` ↔ `VISION.th.md`) | Project identity; the Thai-speaking audience reads these to decide whether BWOC is for them. |
+| **Spec docs under `docs/<lang>/`** | **Yes** | Already enforced by the per-lang directory convention. |
+| **Mechanical OSS docs at root** — `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `LICENSE`, `VERSION.md` | **No, by design** | Translation cost outweighs value for short-lived process docs that change with every PR. EN-only keeps the maintenance burden honest. |
+| **Crate READMEs** — `crates/*/README.md` | **No, until needed** | Code-side convention. Adopt TH pair only when the framework explicitly targets a Thai developer audience. |
+| **Implementation notes** — `notes/YYYY-MM-DD_<title>.md` | **No** | Per-session logs; ephemeral. |
+| **`.claude/` content** — `loop-roadmap.md`, etc. | **No** | Operator-internal; not a public-contributor surface. |
+
+When in doubt: if the doc states project direction or principles, pair it. If it documents how-to-contribute or current state-of-the-repo, EN-only is fine.
 
 ## Repo State Quirks
 

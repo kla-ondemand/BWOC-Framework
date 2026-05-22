@@ -23,6 +23,11 @@ pub struct InboxArgs {
     pub clear: bool,
     /// Skip the interactive confirmation for `clear`. Required for non-TTY.
     pub yes: bool,
+    /// Print just the message count (one integer) instead of envelopes.
+    /// Useful for shell scripts:
+    ///   `if [ $(bwoc inbox alpha --count) -gt 0 ]; then ...`
+    /// With `--json`, emits `{"count": N}`.
+    pub count: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +79,18 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
 
     let inbox_path = workspace.join(&entry.path).join(".bwoc/inbox.jsonl");
     let messages = read_messages(&inbox_path)?;
+
+    // --count short-circuit: just the integer, before --limit/--json
+    // shape any view. Filters are no-ops on a count anyway.
+    if args.count {
+        if args.json {
+            let value = serde_json::json!({ "count": messages.len() });
+            println!("{}", serde_json::to_string(&value)?);
+        } else {
+            println!("{}", messages.len());
+        }
+        return Ok(());
+    }
 
     // Apply --limit (last N).
     let view: Vec<&serde_json::Value> = if let Some(n) = args.limit {

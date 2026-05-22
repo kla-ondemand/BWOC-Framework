@@ -295,6 +295,10 @@ struct InboxArgs {
     /// Skip the interactive confirmation for `--clear`. Required for non-TTY.
     #[arg(long)]
     yes: bool,
+    /// Print just the envelope count (one integer) instead of messages.
+    /// With `--json`, emits `{"count": N}`.
+    #[arg(long)]
+    count: bool,
 }
 
 impl From<InboxArgs> for inbox::InboxArgs {
@@ -307,6 +311,7 @@ impl From<InboxArgs> for inbox::InboxArgs {
             watch: a.watch,
             clear: a.clear,
             yes: a.yes,
+            count: a.count,
         }
     }
 }

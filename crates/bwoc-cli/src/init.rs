@@ -44,6 +44,8 @@ pub fn run(args: InitArgs) -> i32 {
             println!("{}", i18n::t(&bundle, "init-created-workspace-toml"));
             println!("{}", i18n::t(&bundle, "init-created-agents-toml"));
             println!("{}", i18n::t(&bundle, "init-created-agents-dir"));
+            println!("{}", i18n::t(&bundle, "init-created-projects-dir"));
+            println!("{}", i18n::t(&bundle, "init-created-notes-dir"));
             println!();
             println!("{}", i18n::t(&bundle, "init-next-steps-header"));
             println!(
@@ -98,8 +100,22 @@ fn init(args: InitArgs) -> Result<PathBuf, InitError> {
     let agents_dir = root.join(&ws.defaults.agents_dir);
     fs::create_dir_all(&agents_dir)?;
 
+    // Scaffold the standard workspace layout: empty dirs the user is
+    // expected to populate. `projects/` for the work agents help build,
+    // `notes/` for implementation logs per `NAMING.en.md` §category 10
+    // (`YYYY-MM-DD_<title>.md`). Pre-existing dirs are kept (create_dir_all
+    // is idempotent). Add more here if/when conventions emerge.
+    for extra in WORKSPACE_EXTRAS {
+        fs::create_dir_all(root.join(extra))?;
+    }
+
     Ok(root)
 }
+
+/// Standard sub-directories scaffolded by `bwoc init` alongside `.bwoc/`
+/// and the configured `agents_dir`. Add new entries here when a new
+/// convention lands in `WORKSPACE.en.md`.
+const WORKSPACE_EXTRAS: &[&str] = &["projects", "notes"];
 
 fn workspace_name(root: &Path) -> String {
     root.file_name()
@@ -137,6 +153,8 @@ mod tests {
         assert!(dir.join(".bwoc/workspace.toml").exists());
         assert!(dir.join(".bwoc/agents.toml").exists());
         assert!(dir.join("agents").is_dir());
+        assert!(dir.join("projects").is_dir());
+        assert!(dir.join("notes").is_dir());
         let _ = fs::remove_dir_all(&dir);
     }
 

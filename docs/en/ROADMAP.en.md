@@ -71,7 +71,8 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | Shell completion | `bwoc completion <bash\|zsh\|fish\|powershell\|elvish>` via clap_complete |
 | `bwoc init` writes `.gitignore` | Excludes daemon ephemerals (PID/socket/cursor) for user workspaces |
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | Persona substitution + mindset/skill stub seeding at incarnation |
-| `bwoc new --json` | Emits `{ agent_id, target, registered_in, symlinks, mindset_stubs, skill_stubs, persona_filled }` instead of the human report. Useful for scripted multi-agent setup. Last write-command without JSON; completes the JSON-everywhere matrix. |
+| `bwoc new --json` | Emits `{ agent_id, target, registered_in, symlinks, mindset_stubs, skill_stubs, persona_filled }` instead of the human report. Useful for scripted multi-agent setup. |
+| `bwoc init --json` | Emits `{ workspace, name, version, defaults, files_created }` instead of the human creation report. Pairs with `bwoc new --json` for end-to-end script chaining: `PATH=$(bwoc init /p --json \| jq -r .workspace) && bwoc new alpha --workspace "$PATH" --json …`. Last entry-point command to gain `--json` — JSON-everywhere matrix now covers every read AND write surface (interactive ones — spawn / chat / dashboard — excluded by design). |
 | Shared `livecheck` module | Consolidated 5 copies of `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
 | `bwoc-agent --serve` Windows stub | Compiles + runs default mode; `--serve` returns exit 2 with "Unix-only" message |
 | `bwoc workspace info --path-only` | Emit just the resolved workspace root (one line, no decoration) — pairs with `cd "$(bwoc workspace info --path-only)"` shell idiom |

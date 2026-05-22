@@ -71,7 +71,8 @@
 | Shell completion | `bwoc completion <bash\|zsh\|fish\|powershell\|elvish>` ผ่าน clap_complete |
 | `bwoc init` เขียน `.gitignore` | exclude daemon ephemerals (PID/socket/cursor) สำหรับ user workspace |
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | persona substitution + mindset/skill stub seeding ตอน incarnate |
-| `bwoc new --json` | Emit `{ agent_id, target, registered_in, symlinks, mindset_stubs, skill_stubs, persona_filled }` แทน human report สำหรับ scripted multi-agent setup write-command สุดท้ายที่ยังไม่มี JSON; ครอบ JSON-everywhere matrix ครบ |
+| `bwoc new --json` | Emit `{ agent_id, target, registered_in, symlinks, mindset_stubs, skill_stubs, persona_filled }` แทน human report สำหรับ scripted multi-agent setup |
+| `bwoc init --json` | Emit `{ workspace, name, version, defaults, files_created }` แทน human creation report ใช้คู่กับ `bwoc new --json` สำหรับ script chain end-to-end: `PATH=$(bwoc init /p --json \| jq -r .workspace) && bwoc new alpha --workspace "$PATH" --json …` entry-point สุดท้ายที่ยังไม่มี `--json` — JSON-everywhere matrix ครอบทุก read+write surface แล้ว (interactive — spawn / chat / dashboard — งดเว้นโดยตั้งใจ) |
 | Module `livecheck` ที่ใช้ร่วม | รวม 5 copy ของ `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
 | `bwoc workspace info --path-only` | print workspace root ที่ resolved ออกมาบรรทัดเดียว ไม่มีตกแต่ง — สำหรับ shell idiom `cd "$(bwoc workspace info --path-only)"` |

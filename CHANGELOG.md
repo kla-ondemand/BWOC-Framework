@@ -196,6 +196,70 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
 - `docs/en/FAQ.en.md` + `docs/th/FAQ.th.md` — newcomer FAQ across Conceptual, Project Mechanics, Setup, Multi-Language and Multi-Backend, Conventions, Operations, and Contributing categories. Extracts the three READMEs Qs and expands with Qs surfaced by VISION/GLOSSARY/ARCHITECTURE/INCARNATION/WORKSPACE/NAMING. README FAQ section now points here for the full set.
 - `.claude/settings.json` — registers both hooks for the team.
 
+**Phase 2 + 3 implementation arc** (theme-grouped; per-commit detail in `git log` and [`notes/2026-05-22_phase-2-thiti-surface.md`](notes/2026-05-22_phase-2-thiti-surface.md))
+
+- **Lifecycle verbs** (Phase 3 vaya + state machine):
+  - `bwoc retire <name>` (registry removal; `--keep-files` retains agent dir)
+  - `bwoc stop <name>` — 3-step escalation ladder: socket `STOP` → SIGTERM → SIGKILL (~3s wait between steps); reports which step ended the daemon
+  - `bwoc start <name>` — flips registry status AND spawns `bwoc-agent --serve`; `--no-daemon` opt-out; idempotent across all (status × daemon) combinations
+  - `bwoc workspace prune` — reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift
+
+- **Daemon + IPC** (Phase 2 ṭhiti):
+  - `bwoc-agent --serve` Unix daemon: writes `.bwoc/agent.{pid,sock}`; line-text IPC protocol (`PING`/`STATUS`/`STOP`) debuggable with `nc -U`
+  - Persistent inbox cursor (`.bwoc/inbox.cursor`) — daemon resumes after restart
+  - `bwoc ping <agent>` — CLI client for PING
+  - Stderr redirect to `<agent>/.bwoc/agent.log` for `bwoc log` to tail
+  - `bwoc-agent --version` / `-V` / `--help` / `-h` flags (was: `--serve` only)
+  - Windows: `--serve` is a clean cfg-gated stub (default mode + `--version`/`--help` work); named-pipe daemon path queued
+
+- **Messaging stack** (sammā-vācā Phase 0):
+  - `bwoc send <agent> <msg>` — JSONL envelope to `<agent>/.bwoc/inbox.jsonl`
+  - `bwoc inbox <agent>` — `--limit` · `--json` · `--watch` · `--clear`
+  - INBOX column in `bwoc list`
+  - Daemon-side inbox watch: announces new envelopes to stderr as they arrive
+
+- **Observation + UX**:
+  - `bwoc list` — runtime ●/○ indicator; filters `--status` / `--backend` / `--running`
+  - `bwoc status [name]` — health + identity + uptime; per-agent detail surfaces persona scope + mindset/skill/memory counts; `--json` mirrors the human shape
+  - `bwoc dashboard` (TUI) — ratatui-based; agents pane + detail pane + 2s auto-refresh + `t` hotkey to spawn chat in a new tmux window + workspace-level projects/notes/memory counts in banner
+  - `bwoc chat <agent>` — auto-resolves backend from registry; `--tmux` for new-window mode
+  - `bwoc doctor` — env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`
+  - `bwoc log <agent>` — tails daemon stderr; `-f` follow · `-n N` lines · `--clear` truncate-in-place
+  - `bwoc completion <shell>` — bash/zsh/fish/powershell/elvish via clap_complete
+  - `bwoc help` — 10 topical guides: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona`, `memory`
+  - `--json` across read-only commands: `list`, `status`, `workspace info`, `workspace validate`, `check`, `inbox`, `memory list|search`
+  - Banner ANSI Shadow wordmark + command index for the no-subcommand case
+  - Unicode-width column padding in `bwoc list` (Thai header alignment)
+
+- **Per-workspace memory** (`<workspace>/.bwoc/memory/`):
+  - `bwoc init` scaffolds the directory with a README documenting the 4-tier scope hierarchy
+  - `bwoc memory list | show | put | search` — full read/write/search CLI with path-traversal refusal, atomic write (stage-to-temp + rename), `--force` overwrite gate, case-insensitive substring search; both human and `--json` output where useful
+
+- **Persona configuration at incarnation**:
+  - `bwoc new --scope` / `--out-of-scope` — fill `{{scopeDescription}}` / `{{outOfScope}}` placeholders in AGENTS.md + persona/README.md
+  - `bwoc new --mindsets a,b,c` / `--skills a,b,c` — seed stub `.md` files matching the SPEC.md scaffold
+  - Manifest schema gained `scopeDescription` + `outOfScope` fields (optional)
+  - IncarnationReport surfaces persona_filled + mindset_stubs + skill_stubs counts
+
+- **CI + Release**:
+  - `.github/workflows/ci.yml` — matrix build + test across `ubuntu-latest` · `macos-latest` · `windows-latest`; fmt + clippy gated on Ubuntu only (rules are OS-independent)
+  - `.github/workflows/release.yml` — triggers on CalVer tag `v<YYYY>.<M>.<D>-<patch>`; 5-target release matrix (Linux x64 + Linux ARM64 + macOS Apple Silicon + macOS Intel + Windows x64); auto-creates GitHub Release with notes + SHA-256 sidecars; `fail_on_unmatched_files: true` so partial releases never ship
+  - `.github/workflows/docs.yml` — naming-audit `notes/README.md` exemption added (category 5 slot READMEs)
+  - `docs/en/RELEASING.en.md` + `docs/th/RELEASING.th.md` (bilingual pair) — pre-flight, tag-and-push, prerelease vs stable, rollback policy
+  - `VERSION.md` "Dual Namespaces" — Cargo SemVer (auto-bumped per edit, dev checkpoint) + Release CalVer (public release identity, manual tag)
+
+- **Refactor + hygiene**:
+  - `crate::livecheck` module consolidates 5 byte-identical copies of `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` across status/doctor/workspace/dashboard/start
+  - End-to-end smoke test at `crates/bwoc-cli/tests/smoke.rs` — `init → new → list` against a real tempdir
+  - Test-friendly `cfg(unix)` gating on signal-0 / HOME-env / `/tmp`-path tests for Windows portability
+  - `bwoc-agent` Windows stub: `serve_loop` + 4 helpers cfg-gated; non-Unix returns "daemon is Unix-only" exit 2
+
+- **Docs sync**:
+  - ROADMAP + README + VERSION.md + CLAUDE.md all kept current with shipped features; multiple per-iter sync commits
+  - Root-level bilingual policy documented in CLAUDE.md (which docs require TH pair, which don't)
+  - CHANGELOG Known Issues trimmed from 4 → 1 stale items removed
+  - 4 implementation notes under `notes/`: bwoc-new UX, gap-analysis, Pages+release pipeline, Phase 2 ṭhiti surface backfill
+
 ### Changed
 
 - `modules/agent-template/README.md` — added badges, table of contents, and footer; trimmed the "Incarnating a New Agent" section to a quickstart that points at `docs/en/INCARNATION.en.md`.

@@ -20,7 +20,18 @@ use bwoc_core::manifest::Manifest;
 mod i18n;
 
 fn main() -> ExitCode {
-    let serve = std::env::args().any(|a| a == "--serve");
+    // Lightweight arg handling — keeps the daemon binary clap-free (it
+    // only ever takes 1-2 flags, not a real subcommand tree).
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("bwoc-agent {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_usage();
+        return ExitCode::SUCCESS;
+    }
+    let serve = args.iter().any(|a| a == "--serve");
     let lang = i18n::resolve_lang();
     let bundle = i18n::bundle_for(&lang);
 
@@ -53,6 +64,34 @@ fn main() -> ExitCode {
         return serve_loop(&cwd);
     }
     ExitCode::SUCCESS
+}
+
+fn print_usage() {
+    println!(
+        "bwoc-agent {} — runtime shipped with each incarnated BWOC agent
+
+USAGE:
+    bwoc-agent [FLAGS]
+
+FLAGS:
+    --serve         Run as daemon: write .bwoc/agent.pid, open Unix socket
+                    at .bwoc/agent.sock, watch inbox, block on SIGTERM/SIGINT.
+                    Unix-only (Windows named-pipe path queued).
+
+    --version, -V   Print version and exit
+    --help, -h      Print this message and exit
+
+DEFAULT (no flags):
+    Print the liveness banner from `config.manifest.json` in cwd and exit.
+    Used by `bwoc check` and Phase 1 sanity tests.
+
+ENV:
+    BWOC_LANG       Locale for output (en | th). Falls back to $LANG then en.
+
+SEE ALSO:
+    bwoc help daemon    — IPC protocol, doctor sweeps, lifecycle.",
+        env!("CARGO_PKG_VERSION")
+    );
 }
 
 /// Non-Unix stub. The full `--serve` daemon mode relies on Unix domain

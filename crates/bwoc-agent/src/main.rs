@@ -55,20 +55,33 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `--serve` mode: write a PID file under `.bwoc/agent.pid` and block
-/// until SIGTERM / SIGINT. Removes the PID file on graceful exit.
+/// `--serve` mode: write a PID file at `.bwoc/agent.pid`, open a Unix
+/// domain socket at `.bwoc/agent.sock`, and accept simple line-based
+/// requests until SIGTERM / SIGINT. Removes both files on exit.
 ///
-/// This is the Phase 2 foundation. The control socket (real IPC for
-/// `bwoc status` / `log` / `send` / `stop`) lands later; for now the
-/// PID file alone is enough to surface "running" vs "not running"
-/// state to the CLI.
+/// Phase 0 IPC protocol — line-based, one request per connection:
+///   `PING\n`       → `PONG\n`
+///   anything else  → `ERR unknown command\n`
+///
+/// Future commands (STATUS / LOG / SEND / STOP) will slot in here as
+/// they're spec'd. Keeping it line-text instead of binary so it's
+/// debuggable with `nc -U`.
 fn serve_loop(cwd: &std::path::Path) -> ExitCode {
+    use std::io::ErrorKind;
+    use std::os::unix::net::UnixListener;
+
     let bwoc_dir = cwd.join(".bwoc");
     if let Err(e) = std::fs::create_dir_all(&bwoc_dir) {
         eprintln!("bwoc-agent --serve: failed to create .bwoc/: {e}");
         return ExitCode::from(1);
     }
     let pid_path = bwoc_dir.join("agent.pid");
+    let sock_path = bwoc_dir.join("agent.sock");
+
+    // If a previous run left a socket behind, remove it (the pid file is
+    // handled by the doctor stale-sweep separately).
+    let _ = std::fs::remove_file(&sock_path);
+
     let pid = std::process::id();
     if let Err(e) = std::fs::write(&pid_path, format!("{pid}\n")) {
         eprintln!(
@@ -77,10 +90,26 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
         );
         return ExitCode::from(1);
     }
-    eprintln!(
-        "bwoc-agent --serve: pid {pid} written to {}",
-        pid_path.display()
-    );
+    let listener = match UnixListener::bind(&sock_path) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!(
+                "bwoc-agent --serve: failed to bind {}: {e}",
+                sock_path.display()
+            );
+            let _ = std::fs::remove_file(&pid_path);
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(e) = listener.set_nonblocking(true) {
+        eprintln!("bwoc-agent --serve: failed to set non-blocking: {e}");
+        let _ = std::fs::remove_file(&pid_path);
+        let _ = std::fs::remove_file(&sock_path);
+        return ExitCode::from(1);
+    }
+
+    eprintln!("bwoc-agent --serve: pid {pid} → {}", pid_path.display());
+    eprintln!("bwoc-agent --serve: socket → {}", sock_path.display());
     eprintln!("bwoc-agent --serve: blocking on SIGTERM / SIGINT (Ctrl-C)");
 
     let running = Arc::new(AtomicBool::new(true));
@@ -89,24 +118,57 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
         r.store(false, Ordering::SeqCst);
     }) {
         eprintln!("bwoc-agent --serve: failed to install signal handler: {e}");
-        // Best-effort cleanup before bailing.
         let _ = std::fs::remove_file(&pid_path);
+        let _ = std::fs::remove_file(&sock_path);
         return ExitCode::from(1);
     }
 
+    // Single-threaded accept loop with poll. Each accept is non-blocking
+    // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(200));
+        match listener.accept() {
+            Ok((stream, _addr)) => handle_client(stream),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                eprintln!("bwoc-agent --serve: accept error: {e}");
+                break;
+            }
+        }
     }
 
-    // Graceful exit — remove the PID file.
+    // Graceful exit — remove PID file + socket.
     if let Err(e) = std::fs::remove_file(&pid_path) {
         eprintln!(
             "bwoc-agent --serve: warning — failed to remove {}: {e}",
             pid_path.display()
         );
     }
+    if let Err(e) = std::fs::remove_file(&sock_path) {
+        eprintln!(
+            "bwoc-agent --serve: warning — failed to remove {}: {e}",
+            sock_path.display()
+        );
+    }
     eprintln!("bwoc-agent --serve: stopped cleanly");
     ExitCode::SUCCESS
+}
+
+#[cfg(unix)]
+fn handle_client(mut stream: std::os::unix::net::UnixStream) {
+    use std::io::{BufRead, BufReader, Write};
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    if reader.read_line(&mut line).is_err() {
+        return;
+    }
+    let cmd = line.trim();
+    let response: &[u8] = match cmd {
+        "PING" => b"PONG\n",
+        _ => b"ERR unknown command\n",
+    };
+    let _ = stream.write_all(response);
 }
 
 /// Pure-data formatter for the liveness output. Kept separate from `main` so

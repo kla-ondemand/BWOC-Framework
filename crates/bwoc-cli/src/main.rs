@@ -18,6 +18,7 @@ mod help;
 mod i18n;
 mod init;
 mod new;
+mod ping;
 mod retire;
 mod spawn;
 mod start;
@@ -86,6 +87,26 @@ enum Commands {
     Stop(StopArgs),
     /// Reactivate a stopped agent — set status = "active".
     Start(StartArgs),
+    /// Ping a `bwoc-agent --serve`'d agent over its Unix socket (PING → PONG).
+    Ping(PingArgs),
+}
+
+#[derive(Args, Debug)]
+struct PingArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<PingArgs> for ping::PingArgs {
+    fn from(a: PingArgs) -> Self {
+        Self {
+            name: a.name,
+            workspace: a.workspace,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -486,6 +507,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Start(args)) => {
             let code = start::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Ping(args)) => {
+            let code = ping::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

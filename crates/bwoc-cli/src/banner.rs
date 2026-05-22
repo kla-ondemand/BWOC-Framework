@@ -59,6 +59,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "Pause an agent — set status = stopped without removing files",
     ),
     ("start", "Reactivate a stopped agent — set status = active"),
+    (
+        "ping",
+        "Ping a --serve'd agent over its Unix socket (PING → PONG)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

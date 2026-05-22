@@ -110,15 +110,10 @@ pub struct IncarnationReport {
     /// Workspace root that the new agent was registered to, if any.
     pub registered_in: Option<PathBuf>,
     /// Mindset stub files created under `mindsets/` (relative paths).
-    /// Currently populated but not displayed by print_report — surface in
-    /// the next iter that touches the report.
-    #[allow(dead_code)]
     pub mindset_stubs: Vec<String>,
     /// Skill stub files created under `skills/` (relative paths).
-    #[allow(dead_code)]
     pub skill_stubs: Vec<String>,
     /// Whether persona scope placeholders got substituted (vs left for manual edit).
-    #[allow(dead_code)]
     pub persona_filled: bool,
 }
 
@@ -1096,6 +1091,30 @@ fn print_report(
         // Symlink lines are data ("CLAUDE.md -> AGENTS.md"); no localization.
         println!("+ {s}");
     }
+
+    // Persona substitution + mindset/skill seeding feedback. These only
+    // fire when the user actually supplied --scope/--out-of-scope/--mindsets
+    // /--skills (or answered the TTY prompts) — silent otherwise to keep
+    // the default output untouched.
+    if report.persona_filled {
+        println!();
+        println!("Persona scope: substituted into AGENTS.md + persona/README.md");
+    }
+    if !report.mindset_stubs.is_empty() {
+        println!();
+        println!("Mindset stubs seeded:");
+        for s in &report.mindset_stubs {
+            println!("+ {s}");
+        }
+    }
+    if !report.skill_stubs.is_empty() {
+        println!();
+        println!("Skill stubs seeded:");
+        for s in &report.skill_stubs {
+            println!("+ {s}");
+        }
+    }
+
     println!();
     match &report.registered_in {
         Some(ws) => {

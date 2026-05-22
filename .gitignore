@@ -174,12 +174,23 @@ temp/
 *.rej
 
 # ---------------------------------------------------------------------------
-# BWOC agent runtime artifacts
+# BWOC framework-repo testing state
 # ---------------------------------------------------------------------------
-# Agents may write per-session state; only the template/examples are tracked.
+# The framework REPO is itself a BWOC workspace (.bwoc/workspace.toml at root)
+# used for end-to-end testing of the CLI against the live template. None of
+# that test state should be committed — incarnated test agents go in agents/,
+# user-side work goes in projects/, and the daemon's runtime files (PID,
+# socket, inbox cursor) plus the registry live in .bwoc/.
+#
+# IMPORTANT: this policy is the OPPOSITE of what `bwoc init` writes for
+# user workspaces. User workspaces TRACK .bwoc/workspace.toml + agents.toml
+# (shared config) and only ignore the daemon ephemerals. See
+# crates/bwoc-cli/src/init.rs::GITIGNORE_TEMPLATE for the user-workspace
+# default.
 task-log.jsonl
 !task-log.example.jsonl
 /agents/
+agents/
 /worktrees/
-.bwoc/cache/
-.bwoc/local/
+projects/
+.bwoc/

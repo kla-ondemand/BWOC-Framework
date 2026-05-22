@@ -18,9 +18,13 @@ use std::path::PathBuf;
 use bwoc_core::workspace::AgentsRegistry;
 
 pub struct StopArgs {
+    /// Empty when `--all`. The CLI shim enforces "exactly one of name | all".
     pub name: String,
     pub workspace: Option<PathBuf>,
     pub yes: bool,
+    /// Stop every non-stopped agent in the workspace. Mutually exclusive
+    /// with `name`. Still honors `--yes` for the mass-action confirm.
+    pub all: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,7 +47,8 @@ pub enum StopError {
 }
 
 pub fn run(args: StopArgs) -> i32 {
-    match stop(args) {
+    let result = if args.all { stop_all(args) } else { stop(args) };
+    match result {
         Ok(()) => 0,
         Err(StopError::Aborted) => {
             eprintln!("bwoc stop: aborted — nothing changed");
@@ -59,6 +64,110 @@ pub fn run(args: StopArgs) -> i32 {
             }
         }
     }
+}
+
+/// Stop every non-stopped agent in the workspace. Shows the list +
+/// count, asks for confirmation (or honors `--yes`), then signal-
+/// escalates each in sequence. Registry saves once at the end, so a
+/// crash mid-loop still leaves partial intent recorded on subsequent
+/// agents.
+fn stop_all(args: StopArgs) -> Result<(), StopError> {
+    let workspace = resolve_workspace(args.workspace).ok_or(StopError::NoWorkspace)?;
+    let mut registry = AgentsRegistry::load(&workspace)?;
+
+    // Candidates: agents not already stopped. Status "active" is the
+    // common case; any other non-"stopped" string counts too.
+    let candidate_idxs: Vec<usize> = registry
+        .agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.status != "stopped")
+        .map(|(i, _)| i)
+        .collect();
+
+    if candidate_idxs.is_empty() {
+        println!();
+        println!("bwoc stop --all: no non-stopped agents in this workspace.");
+        println!();
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "About to stop {} agent(s) in {}:",
+        candidate_idxs.len(),
+        workspace.display()
+    );
+    for &i in &candidate_idxs {
+        let a = &registry.agents[i];
+        println!(
+            "  - {} ({} → stopped, backend: {})",
+            a.id, a.status, a.backend
+        );
+    }
+    println!();
+    println!("Files stay on disk. Use `bwoc retire` to remove entirely.");
+    println!();
+
+    if !args.yes {
+        if !io::stdin().is_terminal() {
+            return Err(StopError::Aborted);
+        }
+        let mut stdout = io::stdout();
+        write!(stdout, "Proceed with mass stop? [y/N]: ")?;
+        stdout.flush()?;
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        let answer = line.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            return Err(StopError::Aborted);
+        }
+    }
+
+    let mut counts = [0u32; 5]; // NotRunning, SocketOk, Sigterm, Sigkill, CouldNotKill
+    for &i in &candidate_idxs {
+        let entry = registry.agents[i].clone();
+        let agent_path = workspace.join(&entry.path);
+        let outcome = escalating_shutdown(&agent_path);
+        let label = match outcome {
+            StopOutcome::NotRunning => {
+                counts[0] += 1;
+                "no daemon"
+            }
+            StopOutcome::SocketOk => {
+                counts[1] += 1;
+                "STOP via socket"
+            }
+            StopOutcome::Sigterm => {
+                counts[2] += 1;
+                "SIGTERM"
+            }
+            StopOutcome::Sigkill => {
+                counts[3] += 1;
+                "SIGKILL"
+            }
+            StopOutcome::CouldNotKill => {
+                counts[4] += 1;
+                "WARNING still alive"
+            }
+        };
+        println!("  {}: {}", entry.id, label);
+        registry.agents[i].status = "stopped".to_string();
+    }
+    registry.save(&workspace)?;
+
+    println!();
+    println!(
+        "{} stopped. (no-daemon: {}, socket: {}, SIGTERM: {}, SIGKILL: {}, still-alive: {})",
+        candidate_idxs.len(),
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+        counts[4],
+    );
+    println!();
+    Ok(())
 }
 
 fn stop(args: StopArgs) -> Result<(), StopError> {

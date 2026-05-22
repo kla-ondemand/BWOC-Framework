@@ -400,9 +400,15 @@ impl From<StartArgs> for start::StartArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
 struct StopArgs {
     /// Name of the agent. Matches by id ("agent-foo") or bare name ("foo").
-    name: String,
+    /// Mutually exclusive with `--all` (clap group enforces).
+    name: Option<String>,
+    /// Stop every non-stopped agent in the workspace. Honors `--yes`.
+    /// Mutually exclusive with `name`.
+    #[arg(long)]
+    all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -414,9 +420,10 @@ struct StopArgs {
 impl From<StopArgs> for stop::StopArgs {
     fn from(a: StopArgs) -> Self {
         Self {
-            name: a.name,
+            name: a.name.unwrap_or_default(), // clap group ensures one of (name, all)
             workspace: a.workspace,
             yes: a.yes,
+            all: a.all,
         }
     }
 }

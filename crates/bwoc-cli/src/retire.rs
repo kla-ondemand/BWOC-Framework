@@ -241,6 +241,7 @@ mod tests {
     fn retire_removes_entry_and_files() {
         let root = setup_workspace("removes");
         let args = RetireArgs {
+            keep_memory: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -261,6 +262,7 @@ mod tests {
     fn retire_keeps_files_when_flagged() {
         let root = setup_workspace("keep");
         let args = RetireArgs {
+            keep_memory: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -281,6 +283,7 @@ mod tests {
     fn retire_fails_for_unknown_name() {
         let root = setup_workspace("unknown");
         let args = RetireArgs {
+            keep_memory: false,
             name: "nonexistent".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -302,6 +305,7 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let r = setup_workspace("idmatch");
             let args = RetireArgs {
+                keep_memory: false,
                 name: name.into(),
                 workspace: Some(r.clone()),
                 yes: true,

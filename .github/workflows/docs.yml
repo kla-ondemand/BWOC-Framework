@@ -48,7 +48,11 @@ jobs:
 
       - name: notes/ naming
         run: |
+          # README.md inside notes/ is exempt (category 5 in NAMING:
+          # slot-level READMEs explain the convention to contributors).
+          # Per-session note files still require YYYY-MM-DD_<title>.md.
           violations=$(find . -path '*/notes/*.md' 2>/dev/null \
+            | grep -v '/README\.md$' \
             | grep -vE '/[0-9]{4}-[0-9]{2}-[0-9]{2}_[a-z0-9-]+\.md$' \
             || true)
           if [ -n "$violations" ]; then

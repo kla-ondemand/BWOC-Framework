@@ -12,6 +12,7 @@ use std::process::ExitCode;
 mod banner;
 mod check;
 mod doctor;
+mod help;
 mod i18n;
 mod init;
 mod new;
@@ -27,7 +28,10 @@ mod workspace;
     name = "bwoc",
     version,
     about = "BWOC — Buddhist Way of Coding agent framework CLI.",
-    long_about = "Phase 1 v2.0. See modules/agent-template/docs/en/PHILOSOPHY.en.md §0.1 The Arc."
+    long_about = "Phase 1 v2.0. See modules/agent-template/docs/en/PHILOSOPHY.en.md §0.1 The Arc.",
+    // We provide our own `help` subcommand (topical guides). Disable clap's
+    // auto-generated one to avoid the duplicate-name conflict.
+    disable_help_subcommand = true
 )]
 struct Cli {
     /// Language for CLI output. Phase 1 ships with `en` and `th`.
@@ -65,6 +69,20 @@ enum Commands {
     Retire(RetireArgs),
     /// Show per-agent health + identity snapshot (read-only).
     Status(StatusArgs),
+    /// Topic-specific help (backends, workspace, manifest, arc, getting-started).
+    Help(HelpArgs),
+}
+
+#[derive(Args, Debug)]
+struct HelpArgs {
+    /// Topic name. Run `bwoc help` (no arg) to list available topics.
+    topic: Option<String>,
+}
+
+impl From<HelpArgs> for help::HelpArgs {
+    fn from(a: HelpArgs) -> Self {
+        Self { topic: a.topic }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -344,6 +362,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Status(args)) => {
             let code = status::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Help(args)) => {
+            let code = help::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

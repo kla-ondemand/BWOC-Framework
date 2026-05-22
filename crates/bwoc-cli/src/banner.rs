@@ -42,6 +42,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("retire", "Retire an agent — remove from registry (vaya)"),
     ("status", "Per-agent health + identity snapshot (read-only)"),
+    (
+        "help",
+        "Topic-specific help (backends, workspace, manifest, arc, getting-started)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

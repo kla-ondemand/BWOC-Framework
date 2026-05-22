@@ -72,6 +72,10 @@ pub fn run(args: DoctorArgs) -> i32 {
                 for r in check_stale_sockets(&root, args.auto) {
                     results.push(r);
                 }
+                // Inbox cursor sanity (corrupt or out-of-bounds files).
+                for r in check_inbox_cursors(&root, args.auto) {
+                    results.push(r);
+                }
             }
         }
         None => results.push(CheckResult {
@@ -363,6 +367,135 @@ fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
                     sock_path.display()
                 )),
             });
+        }
+    }
+    out
+}
+
+/// Detect `<agent>/.bwoc/inbox.cursor` files that are corrupt or out of
+/// bounds. Sister sweep to `check_stale_pids` / `check_stale_sockets`.
+///
+/// Three failure modes:
+///   - Malformed (won't parse as u64)         → FAIL; --auto removes the file
+///   - Cursor > inbox file size               → FAIL; --auto removes the
+///                                               file. The daemon's own
+///                                               truncation-recovery
+///                                               handles this at startup,
+///                                               but doctor surfacing it
+///                                               makes the inconsistency
+///                                               visible to the human.
+///   - Cursor present + inbox file missing    → FAIL; --auto removes
+///
+/// Live, in-bounds cursors are silently OK.
+fn check_inbox_cursors(root: &Path, auto: bool) -> Vec<CheckResult> {
+    let Ok(registry) = AgentsRegistry::load(root) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for a in &registry.agents {
+        let bwoc = root.join(&a.path).join(".bwoc");
+        let cursor_path = bwoc.join("inbox.cursor");
+        if !cursor_path.is_file() {
+            continue; // No cursor yet; nothing to check.
+        }
+        let raw = match std::fs::read_to_string(&cursor_path) {
+            Ok(s) => s,
+            Err(e) => {
+                out.push(CheckResult {
+                    name: format!("inbox cursor: {}", a.id),
+                    status: Status::Warn(format!("could not read {}: {e}", cursor_path.display())),
+                });
+                continue;
+            }
+        };
+        let pos: u64 = match raw.trim().parse() {
+            Ok(n) => n,
+            Err(_) => {
+                if auto {
+                    let _ = std::fs::remove_file(&cursor_path);
+                    out.push(CheckResult {
+                        name: format!("inbox cursor: {}", a.id),
+                        status: Status::Fixed(format!(
+                            "removed malformed cursor file: {}",
+                            cursor_path.display()
+                        )),
+                    });
+                } else {
+                    out.push(CheckResult {
+                        name: format!("inbox cursor: {}", a.id),
+                        status: Status::Fail(format!(
+                            "malformed cursor file at {} (rerun with --auto to remove)",
+                            cursor_path.display()
+                        )),
+                    });
+                }
+                continue;
+            }
+        };
+        let inbox_path = bwoc.join("inbox.jsonl");
+        let size = std::fs::metadata(&inbox_path).map(|m| m.len()).ok();
+        match size {
+            None => {
+                // Cursor exists but inbox file doesn't — orphan cursor.
+                if auto {
+                    if std::fs::remove_file(&cursor_path).is_ok() {
+                        out.push(CheckResult {
+                            name: format!("inbox cursor: {}", a.id),
+                            status: Status::Fixed(
+                                "removed orphan cursor (no inbox.jsonl)".to_string(),
+                            ),
+                        });
+                    } else {
+                        out.push(CheckResult {
+                            name: format!("inbox cursor: {}", a.id),
+                            status: Status::Fail(format!(
+                                "orphan cursor at {} but couldn't remove",
+                                cursor_path.display()
+                            )),
+                        });
+                    }
+                } else {
+                    out.push(CheckResult {
+                        name: format!("inbox cursor: {}", a.id),
+                        status: Status::Fail(format!(
+                            "cursor at {} but inbox.jsonl missing (rerun with --auto to remove)",
+                            cursor_path.display()
+                        )),
+                    });
+                }
+            }
+            Some(sz) if pos > sz => {
+                // Out-of-bounds cursor.
+                if auto {
+                    if std::fs::remove_file(&cursor_path).is_ok() {
+                        out.push(CheckResult {
+                            name: format!("inbox cursor: {}", a.id),
+                            status: Status::Fixed(format!(
+                                "removed out-of-bounds cursor ({pos} > inbox size {sz}) — daemon will reset to EOF"
+                            )),
+                        });
+                    } else {
+                        out.push(CheckResult {
+                            name: format!("inbox cursor: {}", a.id),
+                            status: Status::Fail(format!(
+                                "out-of-bounds cursor at {} (cursor {pos} > size {sz}) but couldn't remove",
+                                cursor_path.display()
+                            )),
+                        });
+                    }
+                } else {
+                    out.push(CheckResult {
+                        name: format!("inbox cursor: {}", a.id),
+                        status: Status::Fail(format!(
+                            "cursor {pos} > inbox size {sz} at {} (rerun with --auto to remove)",
+                            cursor_path.display()
+                        )),
+                    });
+                }
+            }
+            Some(_) => {
+                // In bounds — silently OK.
+            }
         }
     }
     out

@@ -154,20 +154,101 @@ When an item touches docs, preserve multilingual parity. When it touches a refer
 
 **Phase 1 v2.0 Fluent conversion — COMPLETE** across all 8 CLI + agent surfaces.
 
-### Next picks (in priority order for future cron fires)
+---
 
-- 🔒 HELD policy items (CODEOWNERS · ISSUE_TEMPLATE/config.yml) — gated on user direction.
-- Phase 1 v2.0 release tag — user decision.
-2. **🔒 HELD — `CODEOWNERS`** — needs user direction on review assignments.
-3. **🔒 HELD — `ISSUE_TEMPLATE/config.yml`** — needs user direction on Discussions URL and contact routing.
-4. **Phase 1 v2.0 ship readiness** — non-HELD items remaining after the full Fluent conversion = 0 (other than the two HELD policy items). Tag is a user decision. Multi-OS matrix + signed release binaries = Phase 2.
+## Phase 2 + 3 implementation (post-DoD, post-iter-24)
 
-### Doc layer status: substantially complete
+A second long arc of cron-driven iters (`c045cc3d` → `d1937f6a`) on user directives "improve cli to easy to use" and "implement all roadmap phases, focus easy to use". Summary grouped by theme; CHANGELOG.md + `git log` are the per-commit ledger.
 
-The /doc cron loop has done its job. Every spec doc the user identified is now in place, bilingual, with auto-version hooks live and a unified naming standard. Future cron fires will either find diminishing returns in pure doc work OR should be redirected. Suggested next directions for user consideration:
-- **Implementation pivot**: port `incarnate.sh` → `bwoc new`; implement `bwoc init` / `workspace info` / `workspace validate`; minimal `bwoc spawn` exec; `bwoc-agent` "I am alive" runtime.
-- **Audit tooling**: implement `/check-naming` skill (audit *.md per NAMING spec) and update the bilingual-reminder hook to cover root-level `FILENAME.md` ↔ `FILENAME.th.md` (currently only `docs/en/*.en.md`).
-- **Policy authorization**: unblock the HELD Tier 1 items (CODEOWNERS, ISSUE_TEMPLATE/config.yml) by directing the policy; then drop the three non-policy templates (bug_report, feature_request, PR_TEMPLATE).
+### Lifecycle verbs (Phase 3 vaya + new state machine)
+
+- **`bwoc retire`** — remove agent from registry, optional `--keep-files`. TTY confirm + `--yes`.
+- **`bwoc stop`** — set status=stopped; later wired to send STOP via socket when daemon is alive.
+- **`bwoc start`** — set status=active AND spawn `bwoc-agent --serve`. Idempotent across all 4 (status × daemon) state combinations. `--no-daemon` opt-out.
+- **`bwoc workspace prune`** — reconcile phantom registry entries vs orphan agent dirs. `--apply` removes safe drift.
+
+### Messaging stack (Phase 3 sammā-vācā Phase 0)
+
+- **`bwoc send <agent> <msg>`** — append JSONL envelope to `<agent>/.bwoc/inbox.jsonl`.
+- **`bwoc inbox <agent>`** — read companion. `--limit N` · `--json` · `--watch` (live tail) · `--clear` (truncate with confirm).
+- **`bwoc list` INBOX column** — count of pending envelopes per agent (— for 0).
+- **Inbox cursor persistence** — `<agent>/.bwoc/inbox.cursor` so `bwoc-agent --serve` restart doesn't skip messages received while offline.
+- **Daemon-side inbox announce** — `--serve` polls inbox every ~100ms, prints `bwoc-agent: inbox ← user: <msg>` to stderr as envelopes arrive.
+
+### Process supervision (Phase 2 ṭhiti)
+
+- **`bwoc-agent --serve`** daemon mode — writes PID + Unix socket at `.bwoc/agent.{pid,sock}`. ctrlc signal handler; graceful cleanup. `inbox.cursor` for restart-safe message replay.
+- **Line-text IPC protocol over Unix socket** — debuggable with `nc -U`:
+  - `PING\n` → `PONG\n` (used by `bwoc ping <agent>`)
+  - `STATUS\n` → `OK uptime_secs=N pid=N\n` (used by `bwoc status` for uptime display)
+  - `STOP\n` → `OK shutting down\n` + daemon exits (used by `bwoc stop`)
+- **`bwoc ping <agent>`** — CLI client for PING.
+- **`bwoc status` runtime indicator** — `● running (pid N, uptime 5m12s)` / `○ not running` via PID file + signal-0 + socket query.
+- **`bwoc list` runtime column** — `●/○` prefix per row; `--running` filter to narrow to live daemons.
+- **`bwoc chat <agent>`** — auto-resolves backend + path from registry, exec's `bwoc spawn`. `--tmux` opens in new tmux window.
+
+### TUI dashboard (Phase 2 → 4 progressive)
+
+- **Phase 0** — ratatui shell, draws title + footer, q/Esc/Ctrl-C quit, alt-screen restore.
+- **Phase 1** — agents pane populated from `agents.toml`; ↑↓/jk nav; `r` refresh.
+- **Phase 2** — detail pane reusing doctor health probes.
+- **Phase 3** — Fluent i18n (22 `dash-*` keys per locale).
+- **Phase 4+** — auto-refresh every 2s; runtime/uptime/inbox count in detail; persona scope + mindsets/skills/memories counts; workspace projects + notes counts in banner; `t` hotkey opens tmux new-window running `bwoc spawn`; transient `last_action` feedback in footer.
+
+### Doctor extensions
+
+Beyond the original env + workspace checks:
+- **Stale-PID sweep** (`agent.pid` exists, process gone) — `--auto` removes.
+- **Stale-socket sweep** (`agent.sock` exists, no live owner) — `--auto` removes.
+- **Stale-cursor sweep** (`inbox.cursor` malformed / out-of-bounds / orphan) — `--auto` removes.
+
+### Read-only command surface (--json across)
+
+All these emit human tables by default, structured JSON with `--json`:
+`bwoc list` · `bwoc status [name]` · `bwoc workspace info` · `bwoc workspace validate` · `bwoc check [path]`.
+Stable shapes; consumer-safe across locale.
+
+### Refactor: shared `crate::livecheck`
+
+After 5 callers accumulated near-identical copies of `signal_zero_alive` + `running_pid` + `query_uptime` + `format_uptime` + `inbox_count`, consolidated into one module. Pure code health, -31 lines net, 6 new unit tests.
+
+### UX polish
+
+- **`install.sh`** — installs BOTH `bwoc` + `bwoc-agent`; `--check`/`--uninstall`/`--help` modes; pre-flight PATH warning; usable quickstart in tail output.
+- **`bwoc help` topics** — 8 total: `getting-started` · `backends` · `workspace` · `manifest` · `arc` · `lifecycle` · `daemon` · `messaging`. Each cross-links the others.
+- **`bwoc completion <shell>`** — bash/zsh/fish/powershell/elvish via `clap_complete`.
+- **`bwoc init` writes `.gitignore`** — excludes daemon ephemerals (`agent.pid`/`sock`/`inbox.cursor`); keeps `inbox.jsonl` tracked by default (with opt-out comment).
+- **`bwoc new` interactive pickers** — `--role` catalog · per-backend model catalog · stack-detected lint/format/test/build defaults · NEW: `--scope` / `--out-of-scope` for persona substitution + `--mindsets` / `--skills` for stub seeding.
+- **`bwoc list` filters** — `--status` · `--backend` (ValueEnum) · `--running`.
+- **README Getting Started** refreshed to match the real install + lifecycle flow.
+
+### Bugs surfaced + fixed
+
+- `default_target` in `bwoc new` placed agents at framework root when template auto-resolved from `modules/agent-template/` AND a workspace existed at root — workspace-aware branch reordered to win.
+- Framework repo's `.gitignore` had drifted (`/.bwoc/`, `.bwoc/cache/`, `.bwoc/local/` redundancy; typo `BEOC`; invalid `---` pattern). Consolidated into one block with policy comment contrasting framework-repo vs `bwoc init` user-workspace defaults.
+- Multiple mid-iter clippy slips caught + fixed in follow-ups: `useless_format` · `doc_lazy_continuation` · `doc_overindented_list_items` · `ptr_arg` · `trim_split_whitespace` · `print_literal` · `dead_code`. `cargo install` doesn't gate on clippy; future workflow could add a `cargo clippy --all-targets -- -D warnings` step pre-commit.
+
+### Adjacent bumps + house-keeping
+
+- `crates/bwoc-cli/src/livecheck.rs` introduced (consolidation); 6 unit tests.
+- Manifest schema gained `scope_description` + `out_of_scope` (optional).
+- `IncarnationReport` exposes `persona_filled` + `mindset_stubs` + `skill_stubs`; `print_report` surfaces them inline.
+- Auto-version hook still firing across `.rs`/`.toml`/`.md` writes; software version reached ~0.1.387 by end of post-DoD arc.
+
+### Currently HELD (unchanged from Phase 1)
+
+- 🔒 `.github/CODEOWNERS` — review assignments.
+- 🔒 `.github/ISSUE_TEMPLATE/config.yml` — Discussions URL + contact routing.
+
+### Next planned (in priority order, post-tmux-iter)
+
+1. TH localization of lifecycle messages (`stop`/`start`/`retire`/`ping`/`send`/`inbox`/`chat`).
+2. `unicode-width` padding fix for Thai column alignment across `list`/`status`/`dashboard`.
+3. Agent → agent SEND (needs Kalyāṇamitta 7 trust model first; spec doc).
+4. Multi-OS release matrix + signed binaries (CI work).
+5. `bwoc help` topic localization (TH).
+
+Cron `d1937f6a` still firing every 5 min on the same dual directive.
 
 ---
 

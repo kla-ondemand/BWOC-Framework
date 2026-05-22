@@ -68,6 +68,10 @@ mod tests {
     // `std::env::set_var` is not thread-safe; serialize the env-mutating tests.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    // These tests stub HOME to a tempdir to exercise the resolver. On
+    // Windows the resolver reads %USERPROFILE% instead — the tempdir
+    // override path doesn't apply, so cfg(unix)-only.
+    #[cfg(unix)]
     #[test]
     fn ensure_initialized_creates_directory_and_config() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -92,6 +96,7 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp);
     }
 
+    #[cfg(unix)]
     #[test]
     fn ensure_initialized_does_not_overwrite_existing_config() {
         let _guard = ENV_LOCK.lock().unwrap();

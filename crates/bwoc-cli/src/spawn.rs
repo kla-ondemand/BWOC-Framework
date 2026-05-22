@@ -153,12 +153,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_non_agent_dir() {
-        // /tmp exists but has no AGENTS.md → NotAnAgent
-        let p = Path::new("/tmp");
-        // Only run if /tmp/AGENTS.md doesn't exist (which is the realistic case).
-        if !p.join("AGENTS.md").exists() {
+        // Use the platform's actual temp dir — exists on every OS, and
+        // is extremely unlikely to contain AGENTS.md. (Hardcoding "/tmp"
+        // broke on Windows where it resolves to the current drive's \tmp.)
+        let tmp = std::env::temp_dir();
+        if !tmp.join("AGENTS.md").exists() {
             assert!(matches!(
-                validate_agent_path(p),
+                validate_agent_path(&tmp),
                 Err(SpawnError::NotAnAgent(_))
             ));
         }

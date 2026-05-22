@@ -177,12 +177,14 @@ mod tests {
         assert_eq!(format_uptime(187200), "2d04h");
     }
 
+    #[cfg(unix)]
     #[test]
     fn signal_zero_on_self_returns_true() {
         let pid = std::process::id();
         assert!(signal_zero_alive(pid));
     }
 
+    #[cfg(unix)]
     #[test]
     fn signal_zero_on_unlikely_pid_returns_false() {
         // PID 1 is init/launchd — alive but not signalable by non-root

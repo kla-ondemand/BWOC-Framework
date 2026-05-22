@@ -39,6 +39,10 @@ pub struct ListArgs {
     /// Accepted: "id" (alphabetical), "inbox" (descending count),
     /// "incarnated" (oldest first), "backend" (alphabetical).
     pub sort: Option<String>,
+    /// Print just the count of matching agents (after filters), one
+    /// integer to stdout. Useful for shell scripts:
+    ///   `if [ $(bwoc list --running --count) -gt 0 ]; then ...`
+    pub count_only: bool,
 }
 
 pub struct PruneArgs {
@@ -228,6 +232,27 @@ pub fn run_list(args: ListArgs) -> i32 {
                 return 2;
             }
         }
+    }
+
+    // --count: short-circuit before any formatting. With --json, emit
+    // `{ "count": N }`; without, just the integer + newline. Filters and
+    // sort already applied, so the count reflects the user's view.
+    if args.count_only {
+        if args.json {
+            let value = serde_json::json!({ "count": filtered.len() });
+            match serde_json::to_string(&value) {
+                Ok(s) => {
+                    println!("{s}");
+                    return 0;
+                }
+                Err(e) => {
+                    eprintln!("bwoc list --count --json: serialize failed: {e}");
+                    return 1;
+                }
+            }
+        }
+        println!("{}", filtered.len());
+        return 0;
     }
 
     // JSON branch — stable machine-readable output, no decorative text,

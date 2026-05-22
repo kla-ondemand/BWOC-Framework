@@ -584,6 +584,10 @@ struct ListArgs {
     /// Sort key. Default: registry insertion order. One of: id, inbox, incarnated, backend.
     #[arg(long)]
     sort: Option<String>,
+    /// Print just the count of matching agents (one integer) instead of the table.
+    /// With `--json`, emits `{"count": N}`.
+    #[arg(long)]
+    count: bool,
 }
 
 impl ListArgs {
@@ -597,6 +601,7 @@ impl ListArgs {
             running_only: self.running,
             inbox_pending_only: self.inbox_pending,
             sort: self.sort,
+            count_only: self.count,
         }
     }
 }

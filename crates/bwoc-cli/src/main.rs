@@ -127,6 +127,20 @@ enum MemoryAction {
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
     },
+    /// Write a memory entry. Reads from `--file` or stdin.
+    Put {
+        /// Entry name (with or without `.md` extension).
+        name: String,
+        /// Source file. If omitted, content is read from stdin until EOF.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Overwrite an existing entry. Refuses without this flag.
+        #[arg(long)]
+        force: bool,
+        /// Workspace root. Resolution chain same as `memory list`.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
 }
 
 impl MemoryAction {
@@ -142,6 +156,26 @@ impl MemoryAction {
                 workspace,
                 json: false,
             },
+            MemoryAction::Put {
+                name,
+                file,
+                force,
+                workspace,
+            } => {
+                let source = match file {
+                    Some(p) => memory::PutSource::FilePath(p),
+                    None => memory::PutSource::Stdin,
+                };
+                memory::MemoryArgs {
+                    action: memory::MemoryAction::Put {
+                        name,
+                        source,
+                        force,
+                    },
+                    workspace,
+                    json: false,
+                }
+            }
         }
     }
 }

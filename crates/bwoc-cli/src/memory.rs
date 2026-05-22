@@ -27,6 +27,20 @@ pub struct MemoryArgs {
 pub enum MemoryAction {
     List,
     Show(String),
+    /// Write an entry. `source` is the content stream; `force` permits overwrite.
+    Put {
+        name: String,
+        source: PutSource,
+        force: bool,
+    },
+}
+
+/// Where `put` reads the new entry's content from.
+pub enum PutSource {
+    /// Read from a file on disk. Useful for `bwoc memory put name --file ./scratch.md`.
+    FilePath(PathBuf),
+    /// Read from stdin until EOF. Useful for here-docs and pipes.
+    Stdin,
 }
 
 pub fn run(args: MemoryArgs) -> i32 {
@@ -50,7 +64,94 @@ pub fn run(args: MemoryArgs) -> i32 {
     match args.action {
         MemoryAction::List => list(&memory_dir, args.json),
         MemoryAction::Show(name) => show(&memory_dir, &name),
+        MemoryAction::Put {
+            name,
+            source,
+            force,
+        } => put(&memory_dir, &name, source, force),
     }
+}
+
+/// Write a memory entry. Refuses traversal patterns + dot-prefix
+/// (same rule as `show`). Refuses overwrite without `--force`. Source
+/// is either a file path or stdin; on EOF the content is written to
+/// `.bwoc/memory/<name>.md` atomically (write to temp + rename, so a
+/// failed write doesn't leave a half-written file).
+fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
+    let filename = if name.ends_with(".md") {
+        name.to_string()
+    } else {
+        format!("{name}.md")
+    };
+    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
+        eprintln!(
+            "bwoc memory put: invalid name '{name}' — must be a flat *.md filename, \
+             no path separators, no dot-prefix."
+        );
+        return 2;
+    }
+    let target = memory_dir.join(&filename);
+    if target.exists() && !force {
+        eprintln!(
+            "bwoc memory put: '{filename}' already exists at {}. \
+             Re-run with --force to overwrite.",
+            target.display()
+        );
+        return 2;
+    }
+
+    // Read the content.
+    let content = match source {
+        PutSource::FilePath(p) => match std::fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "bwoc memory put: failed to read source file {}: {e}",
+                    p.display()
+                );
+                return 1;
+            }
+        },
+        PutSource::Stdin => {
+            use std::io::Read;
+            let mut buf = String::new();
+            if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+                eprintln!("bwoc memory put: failed to read stdin: {e}");
+                return 1;
+            }
+            if buf.is_empty() {
+                eprintln!(
+                    "bwoc memory put: stdin was empty — pipe content in, e.g. \
+                     `echo 'team-style: 2-space indent' | bwoc memory put team-style`."
+                );
+                return 2;
+            }
+            buf
+        }
+    };
+
+    // Atomic write: stage to a sibling .tmp, then rename.
+    let tmp = target.with_extension("md.tmp");
+    if let Err(e) = std::fs::write(&tmp, &content) {
+        eprintln!("bwoc memory put: failed to stage {}: {e}", tmp.display());
+        return 1;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        eprintln!(
+            "bwoc memory put: failed to install {}: {e}",
+            target.display()
+        );
+        let _ = std::fs::remove_file(&tmp);
+        return 1;
+    }
+
+    println!(
+        "Wrote {} ({} byte{}).",
+        target.display(),
+        content.len(),
+        if content.len() == 1 { "" } else { "s" }
+    );
+    0
 }
 
 /// List user-authored memory entries. Skips `README.md` (the slot doc

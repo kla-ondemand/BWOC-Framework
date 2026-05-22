@@ -43,8 +43,9 @@ git push origin v2026.5.22-0
 
 The tag matches the workflow's filter (`v[0-9][0-9][0-9][0-9].*`) and triggers [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
 
-1. **Matrix build** — 4 release-mode targets in parallel:
-   - `x86_64-unknown-linux-gnu`
+1. **Matrix build** — 5 release-mode targets in parallel:
+   - `x86_64-unknown-linux-gnu` (Linux x64)
+   - `aarch64-unknown-linux-gnu` (Linux ARM64, native on `ubuntu-24.04-arm` runner)
    - `aarch64-apple-darwin` (macOS Apple Silicon)
    - `x86_64-apple-darwin` (macOS Intel)
    - `x86_64-pc-windows-msvc`
@@ -74,7 +75,7 @@ In practice you rarely need this — same-day patch bumps cover most "release so
 ## What's NOT in the pipeline yet
 
 - **Code signing** — Apple notarization (macOS) and Windows Authenticode are not configured. Binaries ship unsigned with SHA-256 checksums; users see "untrusted developer" prompts on first launch. Adding signing requires the maintainer to provision certs and store keys in GitHub Actions secrets.
-- **Linux ARM / musl** — only `x86_64-unknown-linux-gnu` builds. `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` can be added when there's user demand.
+- **Linux musl** — `aarch64-unknown-linux-gnu` ships; `x86_64-unknown-linux-musl` (and `aarch64-unknown-linux-musl`) can be added when there's user demand for distros without glibc (Alpine, distroless containers).
 - **Homebrew formula / Scoop manifest / cargo binstall metadata** — distribution-system integrations live in their own ecosystems.
 
 ## Rolling back

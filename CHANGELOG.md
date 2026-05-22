@@ -385,6 +385,45 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
   --count / --names-only / --json / --path-only across all read
   commands)
 
+**Write-command JSON family + dashboard help + memory sort** (most recent)
+
+- **JSON-everywhere completed across write commands**:
+  - `bwoc new --json` — incarnation report `{ agent_id, target,
+    registered_in, symlinks, mindset_stubs, skill_stubs, persona_filled }`
+  - `bwoc start --json` (requires `--yes`) — `{ workspace, agent,
+    daemon_spawned, daemon_pid, already_running, registry_updated }`
+  - `bwoc stop --json` (requires `--yes`) — `{ workspace, agent,
+    daemon_outcome, registry_updated }` (outcome: not_running /
+    socket_ok / sigterm / sigkill / could_not_kill)
+  - `bwoc retire --json` (requires `--yes`) — `{ workspace, agent,
+    path, mode, registry_updated }` (mode: delete / keep_files /
+    keep_memory)
+  - `bwoc workspace prune --json` — `{ workspace, phantoms, orphans,
+    applied, removed }` for CI gating
+  - `bwoc supervise --json` — emits one structured event per action
+    (watch_start / spawn / crash_respawn / clean_exit / rate_limit_hit /
+    signal_stop / spawn_failed)
+  - `bwoc inbox --watch --json` (was rejection, now streams) — one
+    compact JSON envelope per line for log shippers
+  - Safety guard on destructive verbs: --json requires --yes
+    (scripted destructive ops without explicit ack → exit 2)
+
+- **Dashboard `?` overlay** — centered help popup listing every
+  hotkey, dismissed on any key. Footer gains a `?: help` chip.
+
+- **`bwoc memory list --sort name|size|modified`** — mirror of
+  `bwoc list --sort`. Default = name (alphabetical). Unknown field
+  → exit 2 with accepted-values hint. Entry mtime captured via
+  `metadata().modified()`.
+
+- **`bwoc memory list --json` aggregates** — inline `count` +
+  `total_bytes` fields so CI doesn't have to walk entries[] to
+  compute totals.
+
+- **`bwoc help --all`** — concatenated all-topics output with
+  `# === <name> ===` Markdown-safe separators for offline reading
+  or pipe into docs generator.
+
 ### Changed
 
 - `modules/agent-template/README.md` — added badges, table of contents, and footer; trimmed the "Incarnating a New Agent" section to a quickstart that points at `docs/en/INCARNATION.en.md`.

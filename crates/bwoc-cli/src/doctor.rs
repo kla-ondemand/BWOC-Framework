@@ -314,7 +314,8 @@ fn signal_zero_alive(_pid: u32) -> bool {
 /// A socket is considered stale when ANY of:
 ///   - sibling `agent.pid` missing  (orphan socket from a crash)
 ///   - sibling `agent.pid` exists but the pid isn't alive
-/// With --auto, remove the stale socket. Live sockets are left alone.
+///
+/// With `--auto`, remove the stale socket. Live sockets are left alone.
 fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
     let Ok(registry) = AgentsRegistry::load(root) else {
         return vec![];
@@ -341,7 +342,9 @@ fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
             if std::fs::remove_file(&sock_path).is_ok() {
                 out.push(CheckResult {
                     name: format!("agent sock: {}", a.id),
-                    status: Status::Fixed(format!("removed stale socket (no live owning process)")),
+                    status: Status::Fixed(
+                        "removed stale socket (no live owning process)".to_string(),
+                    ),
                 });
             } else {
                 out.push(CheckResult {

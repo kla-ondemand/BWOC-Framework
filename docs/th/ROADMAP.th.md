@@ -77,11 +77,11 @@
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 | Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
 | `bwoc memory list \| show \| put \| search \| rm` | CRUD+search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json` มี `count` / `total_bytes` aggregate inline + `--count` + `--names-only` สำหรับ script iteration), `show <name>` หรือ `show --all` (header `# === <name> ===`; `--json` array), `put <name>` (3 source: inline positional > `--file` > stdin; mode: create / `--force` overwrite / `--append`; ทุก write atomic), `search <query>` (substring case-insensitive + `--json`), `rm <name>` (TTY confirm หรือ `--yes`); ทุก subcommand บังคับ flat-name + ห้าม traversal, refuse README.md |
+| `bwoc supervise <agent>` | Restart-on-crash supervisor สำหรับ `bwoc-agent --serve`: spawn → wait → respawn เมื่อ exit ไม่ใช่ศูนย์; rate-limit 10/นาที (`--max-restarts-per-min N`); clean exit (status 0) หยุด supervisor stderr → `agent.log` เดียวกับ `bwoc start` `bwoc log -f` ใช้ได้ SIGINT/SIGTERM ผ่าน ctrlc exit clean |
 | `bwoc check --all` | Fleet-wide neutrality audit: วน workspace registry, run `audit()` ต่อ agent, รวมผลแบบ per-agent section + fleet summary; `--json` emit shape `{ agents[], summary }` ที่ structured Exit 1 ถ้ามี violations |
 
 ### ที่เหลือก่อน ship
 
-- **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
 - **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
 - **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
 - **Build Linux musl** — `x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` ship แล้ว; musl (Alpine / distroless) เพิ่มได้เมื่อมีความต้องการ

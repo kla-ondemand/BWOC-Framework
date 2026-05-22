@@ -425,6 +425,16 @@ Crashes & cleanup:
       FIXED  agent sock: alpha — removed stale socket
       FIXED  inbox cursor: alpha — removed out-of-bounds cursor
 
+Restart-on-crash supervision:
+  `bwoc start` spawns the daemon and forgets it. For auto-respawn
+  on crash, run `bwoc supervise <agent>` instead — that command
+  blocks waiting on the daemon, restarts it on non-zero exit, and
+  exits 0 when the daemon stops cleanly (e.g. via `bwoc stop`).
+  Rate-limit guard: 10 restarts/min by default (`--max-restarts-per-min N`).
+  Usage pattern:
+    tmux new-window 'bwoc supervise alpha'        # interactive
+    bwoc supervise alpha                          # inside a systemd unit
+
 See: bwoc help messaging  — inbox flow (the daemon's main work)
      bwoc help lifecycle  — when to start/stop/retire
 ";

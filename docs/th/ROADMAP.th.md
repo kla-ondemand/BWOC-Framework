@@ -1,6 +1,6 @@
 # Roadmap
 
-แผนทีละ phase ของ BWOC **Phase** อธิบาย milestone ของการ implement; แต่ละ phase อาจครอบคลุม SemVer release หลายครั้ง ดู [`VERSION.md`](../../VERSION.md) สำหรับการแยก version กับ phase ดู [`VISION.th.md`](../../VISION.th.md) สำหรับ success criteria ที่ ๑ ปีและ ๓ ปี
+แผนทีละ phase ของ BWOC **Phase** อธิบาย milestone ของการ implement; แต่ละ phase อาจครอบคลุม SemVer release หลายครั้ง ดู [`VERSION.md`](../../VERSION.md) สำหรับการแยก version กับ phase ดู [`VISION.th.md`](../../VISION.th.md) สำหรับ success criteria ที่ 1 ปีและ 3 ปี
 
 ---
 
@@ -84,9 +84,9 @@
 
 **นิยามของเสร็จ:** ความเป็นไปได้ของ ecosystem พิสูจน์แล้ว; governance ของ fleet ระดับ production ข้าม vendor ทำได้
 
-- Agent อ้างอิงสามตัวหรือมากกว่าในธรรมชาติ สร้างโดยผู้ดูแลนอกทีมผู้เขียนต้นฉบับ (ตาม [`VISION.th.md`](../../VISION.th.md) success ที่ ๑ ปี)
+- Agent อ้างอิงสามตัวหรือมากกว่าในธรรมชาติ สร้างโดยผู้ดูแลนอกทีมผู้เขียนต้นฉบับ (ตาม [`VISION.th.md`](../../VISION.th.md) success ที่ 1 ปี)
 - Fleet dashboard — Aparihāniya-dhamma 7 governance ใช้กับการติดตั้ง multi-agent จริง
-- ศัพท์ BWOC (Yoniso manasikāra checks, Mattaññutā caps, Sīla baselines, Kalyāṇamitta trust scores) ปรากฏใน codebase ที่ไม่มีความสัมพันธ์กับ project นี้ (success ที่ ๓ ปี)
+- ศัพท์ BWOC (Yoniso manasikāra checks, Mattaññutā caps, Sīla baselines, Kalyāṇamitta trust scores) ปรากฏใน codebase ที่ไม่มีความสัมพันธ์กับ project นี้ (success ที่ 3 ปี)
 - รูปแบบ fleet ระดับ production ข้าม vendor ใช้ในองค์กรมากกว่าหนึ่งแห่ง
 
 ---
@@ -94,7 +94,7 @@
 ## ข้ามทุก Phase
 
 - **Bilingual parity** — เอกสารสเปกทุกฉบับมี EN canonical + TH (และภาษาอื่น ๆ ในอนาคต); hook bilingual-reminder gate สิ่งนี้
-- **Backend neutrality** — feature CLI ทุกตัวทำงานกับ backend ๔ ตัวที่ประกาศ; `/check-neutrality` gate สิ่งนี้สำหรับ `AGENTS.md`
+- **Backend neutrality** — feature CLI ทุกตัวทำงานกับ backend 4 ตัวที่ประกาศ; `/check-neutrality` gate สิ่งนี้สำหรับ `AGENTS.md`
 - **Doc-version + software-version คงสอดคล้อง** — ทั้งคู่ stamped อัตโนมัติทุก edit ของ Claude Code
 - **Open-source readiness** — artifact ทุกตัวที่ contributor สาธารณะต้องการ (CONTRIBUTING, SECURITY, CoC, LICENSE, VERSION, CHANGELOG, VISION, ROADMAP) up to date และถูกต้อง
 
@@ -109,6 +109,6 @@
 ## ดูเพิ่ม
 
 - [`VERSION.md`](../../VERSION.md) — version ปัจจุบันและ SemVer policy
-- [`VISION.th.md`](../../VISION.th.md) — success criteria ที่ ๑ ปีและ ๓ ปี
+- [`VISION.th.md`](../../VISION.th.md) — success criteria ที่ 1 ปีและ 3 ปี
 - [`CHANGELOG.md`](../../CHANGELOG.md) — อะไร ship แล้ว เมื่อไหร่
 - [`ARCHITECTURE.th.md`](ARCHITECTURE.th.md) — ส่วนประกอบทำงานร่วมกันอย่างไร

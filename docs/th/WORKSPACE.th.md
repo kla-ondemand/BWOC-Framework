@@ -138,9 +138,9 @@ cap_lines = 200                  # MEMORY.md index cap
 
 ### `~/.bwoc/memory/` — รูปแบบ Memory
 
-รูปแบบ two-tier เหมือน memory ของ agent (ดู [`modules/agent-template/memories/README.md`](../../modules/agent-template/memories/README.md)) ดัชนี `MEMORY.md` capped ที่ 200 บรรทัด (มัตตัญญุตา) ไฟล์ memory แต่ละไฟล์ใช้ ๔ ประเภท: `user`, `feedback`, `project`, `reference`
+รูปแบบ two-tier เหมือน memory ของ agent (ดู [`modules/agent-template/memories/README.md`](../../modules/agent-template/memories/README.md)) ดัชนี `MEMORY.md` capped ที่ 200 บรรทัด (มัตตัญญุตา) ไฟล์ memory แต่ละไฟล์ใช้ 4 ประเภท: `user`, `feedback`, `project`, `reference`
 
-Agent เข้าถึง central memory ผ่าน `deepMemoryCmd` ของตน หรือใน Phase 2+ ผ่าน `bwoc-agent` runtime ที่ expose API memory แบบรวมครอบคลุมทั้ง ๓ scope
+Agent เข้าถึง central memory ผ่าน `deepMemoryCmd` ของตน หรือใน Phase 2+ ผ่าน `bwoc-agent` runtime ที่ expose API memory แบบรวมครอบคลุมทั้ง 3 scope
 
 ### Scope ของ Memory (อธิบาย)
 

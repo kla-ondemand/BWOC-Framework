@@ -7,7 +7,7 @@
 | **วันที่** | 2026-05-22 |
 | **ภาษาคู่** | OVERVIEW.en.md |
 
-> เอกสารนี้คือ**ประตูเข้า** ใช้เวลาอ่าน ๕ นาที จะรู้ว่าระบบนี้คืออะไร อ่านอะไรต่อ
+> เอกสารนี้คือ**ประตูเข้า** ใช้เวลาอ่าน 5 นาที จะรู้ว่าระบบนี้คืออะไร อ่านอะไรต่อ
 
 ---
 
@@ -28,19 +28,19 @@ Agent Base Profile คือ **template สำหรับสร้าง AI cod
 
 | ปัญหา | กรอบพุทธที่ใช้ |
 |---|---|
-| ออกแบบ requirements | มรรค ๘ |
-| วางสถาปัตยกรรม | ขันธ์ ๕ |
-| แก้ปัญหา | อริยสัจ ๔ |
+| ออกแบบ requirements | มรรค 8 |
+| วางสถาปัตยกรรม | ขันธ์ 5 |
+| แก้ปัญหา | อริยสัจ 4 |
 | จัดการ state | ไตรลักษณ์ |
-| Audit log | กรรม ๓ |
-| Observability | สติปัฏฐาน ๔ |
+| Audit log | กรรม 3 |
+| Observability | สติปัฏฐาน 4 |
 | Failure analysis | ปฏิจจสมุปบาท |
-| Lifecycle | ภาวนา ๔ |
-| Self-improvement | ปัญญา ๓ |
-| Threat model | ตัณหา ๓ |
-| Fleet governance | อปริหานิยธรรม ๗ |
-| Error UX | พรหมวิหาร ๔ |
-| Inter-agent trust | กัลยาณมิตร ๗ |
+| Lifecycle | ภาวนา 4 |
+| Self-improvement | ปัญญา 3 |
+| Threat model | ตัณหา 3 |
+| Fleet governance | อปริหานิยธรรม 7 |
+| Error UX | พรหมวิหาร 4 |
+| Inter-agent trust | กัลยาณมิตร 7 |
 
 ดูรายละเอียดที่ [PHILOSOPHY.th.md](PHILOSOPHY.th.md)
 
@@ -77,18 +77,18 @@ docs/
 ├── OVERVIEW.{th,en}.md            ← ไฟล์นี้
 ├── GLOSSARY.{th,en}.md            ← ศัพท์บาลีและเทคนิค
 │
-├── PRD.{th,en}.md                 ← Product (อริยสัจ ๔)
-├── SRS.{th,en}.md                 ← Requirements (มรรค ๘)
-├── ARCHITECTURE.{th,en}.md        ← Architecture (ขันธ์ ๕)
+├── PRD.{th,en}.md                 ← Product (อริยสัจ 4)
+├── SRS.{th,en}.md                 ← Requirements (มรรค 8)
+├── ARCHITECTURE.{th,en}.md        ← Architecture (ขันธ์ 5)
 │
-├── LIFECYCLE.{th,en}.md           ← Agent lifecycle (ภาวนา ๔)
-├── OBSERVABILITY.{th,en}.md       ← Monitoring (สติปัฏฐาน ๔)
+├── LIFECYCLE.{th,en}.md           ← Agent lifecycle (ภาวนา 4)
+├── OBSERVABILITY.{th,en}.md       ← Monitoring (สติปัฏฐาน 4)
 ├── FAILURE-MODES.{th,en}.md       ← Failures (ปฏิจจสมุปบาท)
-├── SELF-IMPROVEMENT.{th,en}.md    ← Learning (ปัญญา ๓)
+├── SELF-IMPROVEMENT.{th,en}.md    ← Learning (ปัญญา 3)
 │
 ├── COORDINATION-PROTOCOL.{th,en}.md  ← Inter-agent (กัลยาณมิตร)
 ├── FLEET-GOVERNANCE.{th,en}.md       ← Org (อปริหานิยธรรม)
-├── THREAT-MODEL.{th,en}.md           ← Security (ตัณหา ๓)
+├── THREAT-MODEL.{th,en}.md           ← Security (ตัณหา 3)
 │
 └── ANTIPATTERNS.{th,en}.md        ← ทางผิดของแต่ละมรรค
 
@@ -104,12 +104,12 @@ examples/
 
 ## ลำดับการอ่าน (แนะนำ)
 
-### 🟢 Path 1 — เร่งด่วน (๓๐ นาที)
+### 🟢 Path 1 — เร่งด่วน (30 นาที)
 1. OVERVIEW (ที่นี่)
 2. examples/workflow/incarnation.md
 3. examples/workflow/first-task.md
 
-### 🟡 Path 2 — ทำความเข้าใจ (๒ ชั่วโมง)
+### 🟡 Path 2 — ทำความเข้าใจ (2 ชั่วโมง)
 1. OVERVIEW
 2. PHILOSOPHY (skim หมวด A-F)
 3. PRD
@@ -121,23 +121,23 @@ examples/
 
 ---
 
-## หลักการ ๕ ข้อที่ต้องรู้
+## หลักการ 5 ข้อที่ต้องรู้
 
-จากทั้งหมด ๒๒ หลักธรรม นี่คือ ๕ ข้อที่ใช้บ่อยที่สุด
+จากทั้งหมด 22 หลักธรรม นี่คือ 5 ข้อที่ใช้บ่อยที่สุด
 
-### ๑. โยนิโสมนสิการ — Verify Before Act
+### 1. โยนิโสมนสิการ — Verify Before Act
 Memory คือคำกล่าวอ้างในอดีต ตรวจกับสภาพปัจจุบันก่อนเชื่อ
 
-### ๒. มัตตัญญุตา — Right Amount
+### 2. มัตตัญญุตา — Right Amount
 MEMORY.md ไม่เกิน 200 บรรทัด เพื่อบังคับให้เลือกแต่ที่สำคัญ
 
-### ๓. อนัตตา — Non-Clinging
+### 3. อนัตตา — Non-Clinging
 Task เสร็จ → cleanup worktree → ลบ branch ไม่ยึด
 
-### ๔. สมานัตตตา — Equal Treatment
+### 4. สมานัตตตา — Equal Treatment
 ทุก backend เท่าเทียม ผ่าน symlink ชี้ AGENTS.md เดียว
 
-### ๕. สีลสามัญญตา — Communal Convention
+### 5. สีลสามัญญตา — Communal Convention
 ทุก agent ใต้กติกาเดียวกัน ผ่าน conventions.md + neutrality check
 
 ---

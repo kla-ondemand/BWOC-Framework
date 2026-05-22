@@ -1,6 +1,6 @@
 # SRS — Software Requirements Specification
 
-## Agent Base Profile (โครงตามมรรค ๘)
+## Agent Base Profile (โครงตามมรรค 8)
 
 | | |
 |---|---|
@@ -11,29 +11,29 @@
 | **อ้างอิงปรัชญา** | PHILOSOPHY.th.md |
 | **อ้างอิง PRD** | PRD.th.md |
 
-> **โครงเอกสาร** Functional Requirements จัดเป็น ๘ หมวดตามมรรค ๘
+> **โครงเอกสาร** Functional Requirements จัดเป็น 8 หมวดตามมรรค 8
 > โดยมี cross-cutting principles: โยนิโสมนสิการ, ไตรลักษณ์, มัตตัญญุตา
 
 ---
 
-## ๐. บทนำ
+## 0. บทนำ
 
-### ๐.๑ วัตถุประสงค์
+### 0.1 วัตถุประสงค์
 เอกสารนี้กำหนด requirements ทาง software ของ Agent Base Profile ทั้ง functional และ non-functional พร้อม interface และ data contract
 
-### ๐.๒ ขอบเขต
+### 0.2 ขอบเขต
 ระบบที่ spec ครอบคลุมคือ **template repository** — ไม่ใช่ runtime
 
-### ๐.๓ สัญลักษณ์
+### 0.3 สัญลักษณ์
 - **Priority:** M = Must (จำเป็น), S = Should (ควร), C = Could (อาจมี)
 - **Verify:** T = Test, I = Inspection, D = Demo, A = Analysis
-- **Requirement ID:** `FR-{มรรค}.{ลำดับ}` เช่น `FR-7.1` = สัมมาสติ ข้อที่ ๑
+- **Requirement ID:** `FR-{มรรค}.{ลำดับ}` เช่น `FR-7.1` = สัมมาสติ ข้อที่ 1
 
 ---
 
-## ๑. Functional Requirements (จัดตามมรรค ๘)
+## 1. Functional Requirements (จัดตามมรรค 8)
 
-### หมวด ๑ — สัมมาทิฏฐิ (Right View) : Persona & Identity
+### หมวด 1 — สัมมาทิฏฐิ (Right View) : Persona & Identity
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -43,7 +43,7 @@
 | FR-1.4 | S | Persona SHOULD อ้างอิง PHILOSOPHY.md เพื่อแสดงพื้นฐานการคิด | I |
 | FR-1.5 | M | AGENTS.md SHALL เป็น single source of truth | I |
 
-### หมวด ๒ — สัมมาสังกัปปะ (Right Intention) : Goal Setting
+### หมวด 2 — สัมมาสังกัปปะ (Right Intention) : Goal Setting
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -54,7 +54,7 @@
 | FR-2.5 | M | `task-log.jsonl` SHALL append-only | A |
 | FR-2.6 | S | Task SHOULD declare scope boundaries (มัตตัญญุตา) ก่อนเริ่ม | I |
 
-### หมวด ๓ — สัมมาวาจา (Right Speech) : Inter-Agent Communication
+### หมวด 3 — สัมมาวาจา (Right Speech) : Inter-Agent Communication
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -65,7 +65,7 @@
 | FR-3.5 | C | Agent COULD publish capabilities ไปยัง shared registry | D |
 | FR-3.6 | M | เอกสารทุกฉบับ SHALL bilingual (th + en) | I |
 
-### หมวด ๔ — สัมมากัมมันตะ (Right Action) : Worktree & Commit Discipline
+### หมวด 4 — สัมมากัมมันตะ (Right Action) : Worktree & Commit Discipline
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -78,7 +78,7 @@
 | FR-4.7 | M | Branch naming SHALL ตามรูปแบบ: `feature/{{taskId}}`, `fix/{{taskId}}`, `refactor/{{taskId}}`, `agent/{{agentId}}/{{taskId}}`, `release/{{version}}`, `hotfix/{{taskId}}` | T |
 | FR-4.8 | M | หลัง merge SHALL ลบ worktree และ branch (อนัตตา = ไม่ยึด) | A |
 
-### หมวด ๕ — สัมมาอาชีวะ (Right Livelihood) : Trust & Neutrality
+### หมวด 5 — สัมมาอาชีวะ (Right Livelihood) : Trust & Neutrality
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -90,9 +90,9 @@
 | FR-5.6 | M | ห้ามมี secret ใน memory file (สมานัตตตา + วินัย) | T |
 | FR-5.7 | M | ระบบ SHALL รองรับเพิ่ม backend ใหม่ด้วย symlink ใหม่ ไม่ต้องแก้ code | I |
 
-### หมวด ๖ — สัมมาวายามะ (Right Effort) : Verification Gates
+### หมวด 6 — สัมมาวายามะ (Right Effort) : Verification Gates
 
-อิงปธาน ๔ — เพียร ๔ อย่าง
+อิงปธาน 4 — เพียร 4 อย่าง
 
 | ID | P | Requirement | Padhāna | V |
 |---|---|---|---|---|
@@ -104,9 +104,9 @@
 | FR-6.6 | M | UI changes SHALL verify against dev server | ภาวนา | D |
 | FR-6.7 | M | Work SHALL NOT ประกาศ complete จนกว่า gates ผ่านทั้งหมด | (รวม) | A |
 
-### หมวด ๗ — สัมมาสติ (Right Mindfulness) : Memory System
+### หมวด 7 — สัมมาสติ (Right Mindfulness) : Memory System
 
-#### ๗.๑ Tier 1 — File-Based Memory
+#### 7.1 Tier 1 — File-Based Memory
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -121,7 +121,7 @@
 | FR-7.9 | S | Agent SHOULD NOT save อะไรที่ derive ได้จาก code, git history, AGENTS.md (มัตตัญญุตา) | A |
 | FR-7.10 | M | Memory SHALL ถูก prune ตาม policy (อนิจจัง) | A |
 
-#### ๗.๒ Tier 2 — Deep Memory Backend (Optional)
+#### 7.2 Tier 2 — Deep Memory Backend (Optional)
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -131,7 +131,7 @@
 | FR-7.14 | C | Agent COULD invoke `mine` ที่ session end | D |
 | FR-7.15 | M | Tier 2 SHALL optional ; ถ้าไม่มี ระบบ MUST ทำงานได้ปกติ | T |
 
-#### ๗.๓ Session Lifecycle
+#### 7.3 Session Lifecycle
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -141,7 +141,7 @@
 | FR-7.19 | M | Session end SHALL persist new discoveries เป็น Tier 1 memories | A |
 | FR-7.20 | S | Session end SHOULD remove stale memories (อนิจจัง) | A |
 
-### หมวด ๘ — สัมมาสมาธิ (Right Concentration) : Focus & Session Stability
+### หมวด 8 — สัมมาสมาธิ (Right Concentration) : Focus & Session Stability
 
 | ID | P | Requirement | V |
 |---|---|---|---|
@@ -156,12 +156,12 @@
 
 ---
 
-## ๒. Cross-Cutting Principles
+## 2. Cross-Cutting Principles
 
-### ๒.๑ โยนิโสมนสิการ — Verify Before Act
+### 2.1 โยนิโสมนสิการ — Verify Before Act
 ทุก FR ที่อ่านจาก memory ต้องผ่านการ verify กับ current state ก่อนใช้ — ครอบคลุม FR-7.7, FR-7.17
 
-### ๒.๒ ไตรลักษณ์ — State Philosophy
+### 2.2 ไตรลักษณ์ — State Philosophy
 
 | ลักษณะ | ผลกระทบต่อ FR |
 |---|---|
@@ -169,23 +169,23 @@
 | ทุกขัง | FR-4.8 (no stale branch), FR-7.20 (no stale memory) |
 | อนัตตา | FR-4.2 (no shared dir), FR-4.3 (no stash), FR-4.8 (release) |
 
-### ๒.๓ มัตตัญญุตา — Scope Discipline
+### 2.3 มัตตัญญุตา — Scope Discipline
 - ไม่ทำงานนอก scope ของ task (FR-4.5)
 - ไม่เก็บข้อมูลที่ derive ได้ (FR-7.9)
 - ไม่ debug ผลกระทบนอกขอบเขต (FR-1.3)
 
 ---
 
-## ๓. Non-Functional Requirements
+## 3. Non-Functional Requirements
 
-### ๓.๑ Portability (สมานัตตตา)
+### 3.1 Portability (สมานัตตตา)
 
 | ID | Requirement |
 |---|---|
 | NFR-1.1 | ระบบ SHALL ทำงานบน Linux, macOS, Windows (ผ่าน WSL/Git Bash) |
 | NFR-1.2 | LLM-agnostic — พฤติกรรมเหมือนกันทุก backend ตาม FR-5.1 |
 
-### ๓.๒ Performance (มัตตัญญุตา — รู้ประมาณ)
+### 3.2 Performance (มัตตัญญุตา — รู้ประมาณ)
 
 | ID | Requirement |
 |---|---|
@@ -193,7 +193,7 @@
 | NFR-2.2 | `check-agent-neutrality.sh` SHALL complete ≤ 2 วินาที |
 | NFR-2.3 | Session start memory load SHALL complete ≤ 1 วินาทีเมื่อ MEMORY.md ≤ 200 บรรทัด |
 
-### ๓.๓ Reliability (สัมมาสมาธิ — ตั้งมั่น)
+### 3.3 Reliability (สัมมาสมาธิ — ตั้งมั่น)
 
 | ID | Requirement |
 |---|---|
@@ -201,7 +201,7 @@
 | NFR-3.2 | Failed incarnation SHALL ไม่ทิ้ง partial directory |
 | NFR-3.3 | Worktree creation failure SHALL rollback คลีน |
 
-### ๓.๔ Maintainability (สีลสามัญญตา)
+### 3.4 Maintainability (สีลสามัญญตา)
 
 | ID | Requirement |
 |---|---|
@@ -209,7 +209,7 @@
 | NFR-4.2 | Conventions SHALL document ใน `conventions.md` |
 | NFR-4.3 | Requirements ทุกข้อ SHALL traceable ผ่าน matrix ใน Appendix C |
 
-### ๓.๕ Security (สัมมาอาชีวะ)
+### 3.5 Security (สัมมาอาชีวะ)
 
 | ID | Requirement |
 |---|---|
@@ -217,21 +217,21 @@
 | NFR-5.2 | Trust model SHALL document และ enforceable ผ่าน hooks |
 | NFR-5.3 | Hooks SHALL deny `rm -rf` ของ repository root |
 
-### ๓.๖ Usability (สังคหวัตถุ ๔)
+### 3.6 Usability (สังคหวัตถุ 4)
 
 | ID | Requirement |
 |---|---|
 | NFR-6.1 | Agent ใหม่ SHALL ready to commit ภายใน 30 นาที |
 | NFR-6.2 | Error message SHALL ระบุ placeholder/symlink ที่เป็นปัญหาโดยชื่อ |
 
-### ๓.๗ Scalability
+### 3.7 Scalability
 
 | ID | Requirement |
 |---|---|
 | NFR-7.1 | ระบบ SHALL รองรับ `maxConcurrentTasks` ≥ 3 default |
 | NFR-7.2 | Worktree isolation SHALL allow N concurrent tasks bounded only by disk/CPU |
 
-### ๓.๘ Auditability (วิมังสา)
+### 3.8 Auditability (วิมังสา)
 
 | ID | Requirement |
 |---|---|
@@ -240,9 +240,9 @@
 
 ---
 
-## ๔. External Interfaces
+## 4. External Interfaces
 
-### ๔.๑ LLM CLI Interfaces
+### 4.1 LLM CLI Interfaces
 
 | Backend | Entry File | Mechanism |
 |---|---|---|
@@ -252,7 +252,7 @@
 | Kimi | `KIMI.md` → `AGENTS.md` | Symlink |
 | Generic | `AGENTS.md` | Direct |
 
-### ๔.๒ Deep Memory Backend Interface (Tier 2)
+### 4.2 Deep Memory Backend Interface (Tier 2)
 
 ```
 {{deepMemoryCmd}} wake-up                     # emit session-start context to stdout
@@ -262,14 +262,14 @@
 
 Exit codes: 0 success, non-zero failure
 
-### ๔.๓ Project Submodule Interface
+### 4.3 Project Submodule Interface
 Project repos mounted via `git submodule add <url> projects/<name>`
 
 ---
 
-## ๕. Data Schemas
+## 5. Data Schemas
 
-### ๕.๑ Memory File Schema
+### 5.1 Memory File Schema
 
 ```yaml
 ---
@@ -286,7 +286,7 @@ updated: <ISO 8601>                  # required
 **How to apply:** <when/where>       # required for feedback, project
 ```
 
-### ๕.๒ Task Log Record Schema
+### 5.2 Task Log Record Schema
 
 ```json
 {
@@ -302,7 +302,7 @@ updated: <ISO 8601>                  # required
 }
 ```
 
-### ๕.๓ Config Manifest Schema
+### 5.3 Config Manifest Schema
 
 ```json
 {
@@ -321,7 +321,7 @@ updated: <ISO 8601>                  # required
 }
 ```
 
-### ๕.๔ Required Placeholders
+### 5.4 Required Placeholders
 
 | Placeholder | Type | Required | Resolved By |
 |---|---|---|---|
@@ -340,9 +340,9 @@ updated: <ISO 8601>                  # required
 
 ---
 
-## ๖. Verification & Validation
+## 6. Verification & Validation
 
-### ๖.๑ Automated Checks (`check-agent-neutrality.sh`)
+### 6.1 Automated Checks (`check-agent-neutrality.sh`)
 1. `AGENTS.md` มีอยู่และเป็น regular file
 2. `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` เป็น symlink ชี้ `AGENTS.md`
 3. Required placeholders ถูกแทนหมด
@@ -352,7 +352,7 @@ updated: <ISO 8601>                  # required
 7. `MEMORY.md` ≤ 200 บรรทัด
 8. AGENTS.md ไม่มี backend-specific lock-in
 
-### ๖.๒ Acceptance Criteria (per Magga)
+### 6.2 Acceptance Criteria (per Magga)
 
 | Magga | Acceptance |
 |---|---|
@@ -406,26 +406,26 @@ Cleanup --> [*]       : (อนัตตา — release)
 | Part 4 — Magga / สัมมาสมาธิ | FR-8.1–8.8 |
 | Part 7 — Iddhipāda | NFR-1 ถึง NFR-8 |
 | Part 8 — Tilakkhaṇa | Cross-cutting §2.2 |
-| ภาค ๙ Out of scope | Cross-cutting §2.3 (มัตตัญญุตา) |
+| ภาค 9 Out of scope | Cross-cutting §2.3 (มัตตัญญุตา) |
 
 ---
 
 ## ภาคผนวก — บันทึกการเปลี่ยนแปลง (Changelog)
 
 ### v2.0 (2026-05-22)
-- **แก้ไข forced metaphors:** เปลี่ยน `อจินไตย` → `มัตตัญญุตา` ในจุดที่หมายถึง "รู้ประมาณของขอบเขตงาน" (อจินไตย คงไว้เฉพาะ ๔ กรณีต้นฉบับ — Buddha-visaya, Jhāna-visaya, Kamma-vipāka, Loka-cintā)
+- **แก้ไข forced metaphors:** เปลี่ยน `อจินไตย` → `มัตตัญญุตา` ในจุดที่หมายถึง "รู้ประมาณของขอบเขตงาน" (อจินไตย คงไว้เฉพาะ 4 กรณีต้นฉบับ — Buddha-visaya, Jhāna-visaya, Kamma-vipāka, Loka-cintā)
 - **เพิ่มเอกสารคู่ขนาน:**
   - `FAILURE-MODES.md` (ปฏิจจสมุปบาท) — failure analysis
-  - `LIFECYCLE.md` (ภาวนา ๔ + อริยทรัพย์ ๗) — agent lifecycle
-  - `OBSERVABILITY.md` (สติปัฏฐาน ๔ + กรรม ๓) — monitoring + audit
-  - `COORDINATION-PROTOCOL.md` (กัลยาณมิตร ๗ + สาราณียธรรม ๖) — inter-agent
-  - `FLEET-GOVERNANCE.md` (อปริหานิยธรรม ๗) — org-level governance
-  - `SELF-IMPROVEMENT.md` (ปัญญา ๓) — learning loop
-  - `THREAT-MODEL.md` (ตัณหา ๓ + สีล ๕) — security
-  - `ANTIPATTERNS.md` (มิจฉาตามมรรค ๘) — wrong-path catalog
+  - `LIFECYCLE.md` (ภาวนา 4 + อริยทรัพย์ 7) — agent lifecycle
+  - `OBSERVABILITY.md` (สติปัฏฐาน 4 + กรรม 3) — monitoring + audit
+  - `COORDINATION-PROTOCOL.md` (กัลยาณมิตร 7 + สาราณียธรรม 6) — inter-agent
+  - `FLEET-GOVERNANCE.md` (อปริหานิยธรรม 7) — org-level governance
+  - `SELF-IMPROVEMENT.md` (ปัญญา 3) — learning loop
+  - `THREAT-MODEL.md` (ตัณหา 3 + สีล 5) — security
+  - `ANTIPATTERNS.md` (มิจฉาตามมรรค 8) — wrong-path catalog
   - `GLOSSARY.md` — Pali + technical terms reference
   - `OVERVIEW.md` — entry-point document
-- **ขยาย PHILOSOPHY.md** ให้ครอบคลุม ๒๒ หลักธรรม (เดิม ๑๓) ใน ๖ หมวด
+- **ขยาย PHILOSOPHY.md** ให้ครอบคลุม 22 หลักธรรม (เดิม 13) ใน 6 หมวด
 
 ### v1.0 (2026-05-22)
-- เอกสารเริ่มต้น ๔ ฉบับ (PHILOSOPHY, PRD, SRS, ARCHITECTURE) แบบ bilingual
+- เอกสารเริ่มต้น 4 ฉบับ (PHILOSOPHY, PRD, SRS, ARCHITECTURE) แบบ bilingual

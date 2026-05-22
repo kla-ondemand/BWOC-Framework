@@ -10,7 +10,7 @@
 
 ---
 
-## ๐. คำนำ
+## 0. คำนำ
 
 เอกสารนี้เป็น **แกนกลางทางความคิด** ของระบบ Agent Base Profile ทั้งหมด เอกสารอื่นทุกฉบับอ้างอิงและสอดคล้องกับ PHILOSOPHY นี้ ถ้ามีข้อขัดแย้งระหว่างเอกสาร PHILOSOPHY ชี้ขาด
 
@@ -18,9 +18,9 @@
 
 ---
 
-## ๐.๑ วงรอบ — อุปฺปาท · ฐิติ · วยะ
+## 0.1 วงรอบ — อุปฺปาท · ฐิติ · วยะ
 
-ก่อนจะถึงหลักธรรม ๒๒ ประการ มีรูปทรงเดียวกันอยู่เบื้องหลัง — ทุกสิ่งที่เป็นสังขตะ (สิ่งปรุงแต่ง) ย่อมมีวงรอบ **อังคุตตรนิกาย ๓.๔๗ (สังขตสูตร)** กล่าวถึงลักษณะสามประการของสังขตะ —
+ก่อนจะถึงหลักธรรม 22 ประการ มีรูปทรงเดียวกันอยู่เบื้องหลัง — ทุกสิ่งที่เป็นสังขตะ (สิ่งปรุงแต่ง) ย่อมมีวงรอบ **อังคุตตรนิกาย 3.47 (สังขตสูตร)** กล่าวถึงลักษณะสามประการของสังขตะ —
 
 > *อุปฺปาโท ปญฺญายติ* — ความเกิดขึ้น ปรากฏ
 > *ฐิตสฺส อญฺญถตฺตํ ปญฺญายติ* — ความแปรไปในขณะที่ยังตั้งอยู่ ปรากฏ
@@ -31,18 +31,18 @@
 | ระยะ | บาลี | พื้นผิวเชิงวิศวกรรม |
 |---|---|---|
 | เกิดขึ้น | **อุปฺปาท** | Incarnation (`incarnate.sh`), การกำหนดบุคลิก, ประกาศความสามารถ (Attanutata), การ resolve manifest |
-| ตั้งอยู่ (พร้อมแปรไป) | **ฐิติ** | การทำงาน: วางแผนด้วยอริยสัจ ๔, ลงมือด้วยมรรค ๘, ความทรงจำด้วยสัมมาสติ, การสื่อสารด้วยพรหมวิหาร ๔ การเปลี่ยนแปลง *ภายใน* การคงอยู่ ไม่ใช่ความนิ่งเฉย |
+| ตั้งอยู่ (พร้อมแปรไป) | **ฐิติ** | การทำงาน: วางแผนด้วยอริยสัจ 4, ลงมือด้วยมรรค 8, ความทรงจำด้วยสัมมาสติ, การสื่อสารด้วยพรหมวิหาร 4 การเปลี่ยนแปลง *ภายใน* การคงอยู่ ไม่ใช่ความนิ่งเฉย |
 | ดับไป | **วยะ** | การจบ: ล้าง worktree (อนัตตา), ปลดปล่อย branch, ตัดความจำ (มัตตัญญุตา), ปิด task ด้วยการบันทึก |
 
-หลักธรรม ๒๒ ประการในข้อ ๑ ทั้งหมดเป็นองค์ประกอบย่อยของวงรอบนี้ ระบุว่าการเกิดขึ้นจะมีหลักการอย่างไร, การคงอยู่พร้อมแปรไปจะมีวินัยอย่างไร, และการดับจะปล่อยวางอย่างสะอาดอย่างไร
+หลักธรรม 22 ประการในข้อ 1 ทั้งหมดเป็นองค์ประกอบย่อยของวงรอบนี้ ระบุว่าการเกิดขึ้นจะมีหลักการอย่างไร, การคงอยู่พร้อมแปรไปจะมีวินัยอย่างไร, และการดับจะปล่อยวางอย่างสะอาดอย่างไร
 
 ---
 
-## ๑. หลักธรรมหลัก ๒๒ ประการ
+## 1. หลักธรรมหลัก 22 ประการ
 
 ### หมวด A — กรอบกระบวนการ (Process Frameworks)
 
-#### ๑. อริยสัจ ๔ — โครงคิดแก้ปัญหา
+#### 1. อริยสัจ 4 — โครงคิดแก้ปัญหา
 ใช้เป็นโครงของ PRD และ task planning
 
 | ข้อ | ใช้ใน |
@@ -52,8 +52,8 @@
 | นิโรธ | กำหนดเป้าหมายวัดได้ |
 | มรรค | วางแผนเป็นขั้นตอน |
 
-#### ๒. มรรค ๘ — โครงของ Functional Requirements
-ใช้เป็น ๘ pillars ใน SRS
+#### 2. มรรค 8 — โครงของ Functional Requirements
+ใช้เป็น 8 pillars ใน SRS
 
 | มรรค | ในระบบ |
 |---|---|
@@ -66,7 +66,7 @@
 | สัมมาสติ | Memory system |
 | สัมมาสมาธิ | Focus, session |
 
-#### ๓. ขันธ์ ๕ — โครงสถาปัตยกรรม
+#### 3. ขันธ์ 5 — โครงสถาปัตยกรรม
 ใช้ใน ARCHITECTURE document
 
 | ขันธ์ | ในระบบ |
@@ -81,8 +81,8 @@
 
 ### หมวด B — กรอบสภาวะ (State Frameworks)
 
-#### ๔. ไตรลักษณ์ — ฐานคิดเรื่อง state
-ทุกสิ่งในระบบมี ๓ ลักษณะ การออกแบบต้องสอดคล้อง
+#### 4. ไตรลักษณ์ — ฐานคิดเรื่อง state
+ทุกสิ่งในระบบมี 3 ลักษณะ การออกแบบต้องสอดคล้อง
 
 | ลักษณะ | ผลกระทบ |
 |---|---|
@@ -90,7 +90,7 @@
 | ทุกขัง | Branch ค้าง = ทุกข์ → cleanup |
 | อนัตตา | ไม่ยึด branch, worktree |
 
-#### ๕. ปฏิจจสมุปบาท — เหตุปัจจัยต่อเนื่อง (ใหม่)
+#### 5. ปฏิจจสมุปบาท — เหตุปัจจัยต่อเนื่อง (ใหม่)
 หลักการ "เพราะสิ่งนี้มี สิ่งนี้จึงมี" — ใช้ในการวิเคราะห์ failure modes และ error chains
 
 หลักสำคัญ: **ปัญหาที่เห็น มักไม่ใช่ปัญหาที่ต้องแก้** ต้องสืบเหตุปัจจัยถอยกลับ
@@ -101,8 +101,8 @@
 - Cascading failure prevention
 - Post-mortem analysis
 
-#### ๖. กรรม ๓ (กายกรรม วจีกรรม มโนกรรม) — Audit Trail
-การกระทำ ๓ ทาง — ใช้เป็นโครงของ logging
+#### 6. กรรม 3 (กายกรรม วจีกรรม มโนกรรม) — Audit Trail
+การกระทำ 3 ทาง — ใช้เป็นโครงของ logging
 
 | กรรม | ในระบบ |
 |---|---|
@@ -114,7 +114,7 @@
 
 ### หมวด C — กรอบการเติบโต (Growth Frameworks)
 
-#### ๗. อิทธิบาท ๔ — เครื่องยนต์ทำงาน
+#### 7. อิทธิบาท 4 — เครื่องยนต์ทำงาน
 ใช้เป็น success metrics
 
 | ธรรม | KPI |
@@ -124,8 +124,8 @@
 | จิตตะ | Gate compliance |
 | วิมังสา | Self-improvement metrics |
 
-#### ๘. ภาวนา ๔ — Agent Lifecycle (ใหม่)
-การเติบโต ๔ ขั้น ใช้กับ agent lifecycle management
+#### 8. ภาวนา 4 — Agent Lifecycle (ใหม่)
+การเติบโต 4 ขั้น ใช้กับ agent lifecycle management
 
 | ภาวนา | ระยะ | ตัวบ่งชี้ |
 |---|---|---|
@@ -134,8 +134,8 @@
 | จิตภาวนา | Operational — ทำงานคล่อง | Stable task completion, low retry |
 | ปัญญาภาวนา | Mentorship — สอนผู้อื่น | Patterns extracted, knowledge shared |
 
-#### ๙. ปัญญา ๓ — Self-Improvement Loop (ใหม่)
-ปัญญาเกิดจาก ๓ ทาง ใช้เป็นโครงของ self-improvement system
+#### 9. ปัญญา 3 — Self-Improvement Loop (ใหม่)
+ปัญญาเกิดจาก 3 ทาง ใช้เป็นโครงของ self-improvement system
 
 | ปัญญา | ในระบบ |
 |---|---|
@@ -143,8 +143,8 @@
 | จินตามยปัญญา | คิดต่อ — synthesis, planning, pattern extraction |
 | ภาวนามยปัญญา | เรียนจากปฏิบัติ — feedback loop, retrospectives |
 
-#### ๑๐. อริยทรัพย์ ๗ — Capability Maturity (ใหม่)
-ทรัพย์ ๗ ของผู้ประเสริฐ ใช้เป็น maturity model
+#### 10. อริยทรัพย์ 7 — Capability Maturity (ใหม่)
+ทรัพย์ 7 ของผู้ประเสริฐ ใช้เป็น maturity model
 
 | ทรัพย์ | ในระบบ | ระดับ |
 |---|---|---|
@@ -159,7 +159,7 @@
 
 ### หมวด D — กรอบความสัมพันธ์ (Relational Frameworks)
 
-#### ๑๑. สัปปุริสธรรม ๗ — รู้บริบท ๗ มิติ
+#### 11. สัปปุริสธรรม 7 — รู้บริบท 7 มิติ
 ใช้ใน PRD stakeholder analysis และก่อนทำงาน
 
 | ธรรม | รู้ |
@@ -172,7 +172,7 @@
 | ปริสัญญุตา | ชุมชน, บริบท |
 | ปุคคลัญญุตา | บุคคล, ผู้ใช้ |
 
-#### ๑๒. สังคหวัตถุ ๔ — UX Principles
+#### 12. สังคหวัตถุ 4 — UX Principles
 | ธรรม | ในระบบ |
 |---|---|
 | ทาน | Generous defaults, scaffolds |
@@ -180,14 +180,14 @@
 | อัตถจริยา | Beneficial action, not just done |
 | สมานัตตตา | Equal treatment across backends |
 
-#### ๑๓. สาราณียธรรม ๖ — Inter-Agent Harmony
-- เมตตา ๓ ทาง (กาย วาจา ใจ) ต่อ agent อื่น
+#### 13. สาราณียธรรม 6 — Inter-Agent Harmony
+- เมตตา 3 ทาง (กาย วาจา ใจ) ต่อ agent อื่น
 - สาธารณโภคี — แบ่ง resource ยุติธรรม
 - สีลสามัญญตา — กติกาเดียวกัน
 - ทิฏฐิสามัญญตา — เป้าหมายตรงกัน
 
-#### ๑๔. พรหมวิหาร ๔ — Error UX (ใหม่)
-หลัก ๔ ประการของผู้ประเสริฐ ใช้กับการตอบสนองผู้ใช้และจัดการ error
+#### 14. พรหมวิหาร 4 — Error UX (ใหม่)
+หลัก 4 ประการของผู้ประเสริฐ ใช้กับการตอบสนองผู้ใช้และจัดการ error
 
 | วิหาร | ในระบบ |
 |---|---|
@@ -196,7 +196,7 @@
 | มุทิตา | Celebrate user wins, learn from them |
 | อุเบกขา | **Stay even when user frustrated** — ไม่ react แรง |
 
-#### ๑๕. กัลยาณมิตร ๗ — Inter-Agent Trust (ใหม่)
+#### 15. กัลยาณมิตร 7 — Inter-Agent Trust (ใหม่)
 คุณสมบัติของ "เพื่อนดี" ใช้กำหนดว่า agent ไหนเป็น trusted peer
 
 | คุณสมบัติ | ในระบบ |
@@ -213,10 +213,10 @@
 
 ### หมวด E — กรอบความระมัดระวัง (Discipline Frameworks)
 
-#### ๑๖. โยนิโสมนสิการ — Verify Before Act
+#### 16. โยนิโสมนสิการ — Verify Before Act
 คิดแยบคาย สืบเหตุปัจจัย ก่อนกระทำ
 
-#### ๑๗. อจินไตย ๔ — Scope Discipline
+#### 17. อจินไตย 4 — Scope Discipline
 เรื่องที่ไม่ควรเก็บมาคิด (จำกัดที่ scope งานจริง ๆ ไม่ใช่ scope ทั่วไป)
 
 | อจินไตย | ในระบบ (เฉพาะกรณีที่ตรง) |
@@ -228,7 +228,7 @@
 
 > *Note: ใน v1 เคยใช้อจินไตยกับเรื่อง task scope — เปลี่ยนมาใช้ มัตตัญญุตา (รู้ประมาณ) จะตรงกว่า*
 
-#### ๑๘. สติปัฏฐาน ๔ — Observability (ใหม่ - ขยายเต็ม)
+#### 18. สติปัฏฐาน 4 — Observability (ใหม่ - ขยายเต็ม)
 ใช้เป็นโครงของ observability system
 
 | ฐาน | สังเกตอะไร | ในระบบ |
@@ -238,7 +238,7 @@
 | จิตตานุปัสสนา | สภาพจิต | Agent mode (planning/acting/verifying) |
 | ธัมมานุปัสสนา | ธรรม/ปรากฏการณ์ | Rules applying, patterns matching |
 
-#### ๑๙. ปธาน ๔ — Right Effort Directions
+#### 19. ปธาน 4 — Right Effort Directions
 - สังวร — กันไม่ให้เกิดสิ่งไม่ดีใหม่ (lint)
 - ปหาน — ละสิ่งไม่ดีที่มี (format, refactor)
 - ภาวนา — สร้างสิ่งดีใหม่ (test new feature)
@@ -248,20 +248,20 @@
 
 ### หมวด F — กรอบ Governance (Governance Frameworks)
 
-#### ๒๐. อปริหานิยธรรม ๗ — Fleet Governance (ใหม่)
-หลัก ๗ ของการไม่เสื่อม (พระพุทธเจ้าสอนวัชชี) ใช้กับ governance ของ agent fleet
+#### 20. อปริหานิยธรรม 7 — Fleet Governance (ใหม่)
+หลัก 7 ของการไม่เสื่อม (พระพุทธเจ้าสอนวัชชี) ใช้กับ governance ของ agent fleet
 
 | ธรรม | ในระบบ |
 |---|---|
-| ๑. ประชุมเนืองนิตย์ | Regular agent sync points |
-| ๒. พร้อมเพรียงประชุม / เลิก | Coordinated session start/end |
-| ๓. ไม่บัญญัติ/ล้มเลิกตามใจ | Convention change ผ่าน process |
-| ๔. เคารพผู้ใหญ่ | Honor template version hierarchy |
-| ๕. ไม่ข่มเหงสตรี | (เชิงสัญลักษณ์) protect vulnerable agents/users |
-| ๖. เคารพเจดีย์ | Honor shared resources (registry, schemas) |
-| ๗. คุ้มครองพระอรหันต์ | Protect senior/trusted agents from interference |
+| 1. ประชุมเนืองนิตย์ | Regular agent sync points |
+| 2. พร้อมเพรียงประชุม / เลิก | Coordinated session start/end |
+| 3. ไม่บัญญัติ/ล้มเลิกตามใจ | Convention change ผ่าน process |
+| 4. เคารพผู้ใหญ่ | Honor template version hierarchy |
+| 5. ไม่ข่มเหงสตรี | (เชิงสัญลักษณ์) protect vulnerable agents/users |
+| 6. เคารพเจดีย์ | Honor shared resources (registry, schemas) |
+| 7. คุ้มครองพระอรหันต์ | Protect senior/trusted agents from interference |
 
-#### ๒๑. ตัณหา ๓ — Threat Model (ใหม่)
+#### 21. ตัณหา 3 — Threat Model (ใหม่)
 ตัณหาเป็นเหตุของความเสื่อม ใช้เป็นกรอบ threat model
 
 | ตัณหา | ความหมาย | Threat |
@@ -270,7 +270,7 @@
 | ภวตัณหา | อยากเป็น/คง | Privilege escalation, persistence |
 | วิภวตัณหา | อยากไม่เป็น/ทำลาย | Destructive actions, data deletion |
 
-#### ๒๒. สีล ๕ — Baseline Security Rules
+#### 22. สีล 5 — Baseline Security Rules
 - ห้าม `rm -rf` repo root (ปาณาติบาต — เชิงสัญลักษณ์)
 - ห้าม commit secrets (อทินนาทาน)
 - ห้าม spoof identity (มุสาวาท)
@@ -279,7 +279,7 @@
 
 ---
 
-## ๒. Design Principles (จาก ๒๒ หลักธรรม)
+## 2. Design Principles (จาก 22 หลักธรรม)
 
 | DP | หลักธรรม | Principle |
 |---|---|---|
@@ -291,82 +291,82 @@
 | DP-6 | มัตตัญญุตา + อจินไตย | Scope discipline |
 | DP-7 | อัตตัญญุตา | Self-declaration of capabilities |
 | DP-8 | สีลสามัญญตา | Communal convention |
-| DP-9 | ปธาน ๔ | Right effort in four directions |
+| DP-9 | ปธาน 4 | Right effort in four directions |
 | DP-10 | อริยสัจ | Decisions through Four Noble Truths |
 | DP-11 | ปฏิจจสมุปบาท | Trace conditions backward in failures |
-| DP-12 | ภาวนา ๔ | Lifecycle progression |
-| DP-13 | ปัญญา ๓ | Learn from study, thought, practice |
+| DP-12 | ภาวนา 4 | Lifecycle progression |
+| DP-13 | ปัญญา 3 | Learn from study, thought, practice |
 | DP-14 | พรหมวิหาร | Equanimous error handling |
-| DP-15 | สติปัฏฐาน ๔ | Four-foundation observability |
+| DP-15 | สติปัฏฐาน 4 | Four-foundation observability |
 | DP-16 | อปริหานิยธรรม | Governance for non-decline |
-| DP-17 | ตัณหา ๓ | Threat model by three cravings |
-| DP-18 | สีล ๕ | Five baseline security rules |
+| DP-17 | ตัณหา 3 | Threat model by three cravings |
+| DP-18 | สีล 5 | Five baseline security rules |
 | DP-19 | กัลยาณมิตร | Trust based on dhamma criteria |
-| DP-20 | กรรม ๓ | Audit body/speech/mind separately |
+| DP-20 | กรรม 3 | Audit body/speech/mind separately |
 
 ---
 
-## ๓. การประยุกต์ใน Stack
+## 3. การประยุกต์ใน Stack
 
 ```
 ┌──────────────────────────────────────────────────────┐
 │  อปริหานิยธรรม (Fleet Governance)                     │ ← Org level
 ├──────────────────────────────────────────────────────┤
-│  ตัณหา ๓ (Threat Model) + สีล ๕ (Baseline)            │ ← Security
+│  ตัณหา 3 (Threat Model) + สีล 5 (Baseline)            │ ← Security
 ├──────────────────────────────────────────────────────┤
-│  ภาวนา ๔ (Lifecycle) + ปัญญา ๓ (Improvement)         │ ← Agent growth
+│  ภาวนา 4 (Lifecycle) + ปัญญา 3 (Improvement)         │ ← Agent growth
 ├──────────────────────────────────────────────────────┤
 │  สาราณียธรรม + กัลยาณมิตร (Inter-agent)              │ ← Interconnect
 ├──────────────────────────────────────────────────────┤
 │  สังคหวัตถุ + พรหมวิหาร (UX)                          │ ← User layer
 ├──────────────────────────────────────────────────────┤
-│  มรรค ๘ (Functional reqs)                            │ ← SRS
+│  มรรค 8 (Functional reqs)                            │ ← SRS
 ├──────────────────────────────────────────────────────┤
-│  ขันธ์ ๕ (Architecture)                              │ ← Components
+│  ขันธ์ 5 (Architecture)                              │ ← Components
 ├──────────────────────────────────────────────────────┤
-│  สติปัฏฐาน ๔ (Observability)                          │ ← Cross-cutting
+│  สติปัฏฐาน 4 (Observability)                          │ ← Cross-cutting
 ├──────────────────────────────────────────────────────┤
-│  อิทธิบาท ๔ (Engine of work)                          │ ← Runtime
+│  อิทธิบาท 4 (Engine of work)                          │ ← Runtime
 ├──────────────────────────────────────────────────────┤
-│  ไตรลักษณ์ + กรรม ๓ (State & Audit)                   │ ← Foundation
+│  ไตรลักษณ์ + กรรม 3 (State & Audit)                   │ ← Foundation
 ├──────────────────────────────────────────────────────┤
 │  ปฏิจจสมุปบาท (Failure analysis)                      │ ← When broken
 ├──────────────────────────────────────────────────────┤
 │  โยนิโสมนสิการ + อจินไตย (Thinking discipline)         │ ← Method
 └──────────────────────────────────────────────────────┘
-       อริยสัจ ๔ (Problem-solving cycle, end-to-end)
-       สัปปุริสธรรม ๗ (Context sensing, end-to-end)
+       อริยสัจ 4 (Problem-solving cycle, end-to-end)
+       สัปปุริสธรรม 7 (Context sensing, end-to-end)
 ```
 
 ---
 
-## ๔. การแก้ไขจาก v1.0
+## 4. การแก้ไขจาก v1.0
 
-### ๔.๑ ตัด forced metaphors
+### 4.1 ตัด forced metaphors
 - v1 ใช้ อจินไตย กับ "ไม่ debug ผลกระทบนอกขอบเขต task" — ฝืน
 - v2 เปลี่ยนเป็น มัตตัญญุตา (รู้ประมาณ) ตรงกว่า
-- อจินไตย ใช้เฉพาะ ๔ กรณีที่ตรงกับความหมายเดิม
+- อจินไตย ใช้เฉพาะ 4 กรณีที่ตรงกับความหมายเดิม
 
-### ๔.๒ แก้การซ้ำของ cross-cutting principles
-- v1 ระบุโยนิโสมนสิการใน FR, NFR, DP — ซ้ำ ๓-๔ ที่
+### 4.2 แก้การซ้ำของ cross-cutting principles
+- v1 ระบุโยนิโสมนสิการใน FR, NFR, DP — ซ้ำ 3-4 ที่
 - v2 ระบุ live ที่ FR-7.7 และ FR-7.17 เท่านั้น ที่อื่นเป็นการอ้างอิง
 
-### ๔.๓ เพิ่ม ๖ หลักธรรมใหม่
+### 4.3 เพิ่ม 6 หลักธรรมใหม่
 - ปฏิจจสมุปบาท → docs/FAILURE-MODES.md
-- ภาวนา ๔ → docs/LIFECYCLE.md
-- ปัญญา ๓ → docs/SELF-IMPROVEMENT.md
-- พรหมวิหาร ๔ → docs/PRD (Error UX section)
+- ภาวนา 4 → docs/LIFECYCLE.md
+- ปัญญา 3 → docs/SELF-IMPROVEMENT.md
+- พรหมวิหาร 4 → docs/PRD (Error UX section)
 - อปริหานิยธรรม → docs/FLEET-GOVERNANCE.md
-- ตัณหา ๓ → docs/THREAT-MODEL.md
+- ตัณหา 3 → docs/THREAT-MODEL.md
 - กัลยาณมิตร → docs/COORDINATION-PROTOCOL.md
 - สติปัฏฐาน → docs/OBSERVABILITY.md (ขยายเต็ม)
-- อริยทรัพย์ ๗ → docs/LIFECYCLE.md (maturity model)
-- กรรม ๓ → docs/OBSERVABILITY.md (audit trail)
-- สีล ๕ → docs/THREAT-MODEL.md (baseline)
+- อริยทรัพย์ 7 → docs/LIFECYCLE.md (maturity model)
+- กรรม 3 → docs/OBSERVABILITY.md (audit trail)
+- สีล 5 → docs/THREAT-MODEL.md (baseline)
 
 ---
 
-## ๕. คำหมายเหตุ
+## 5. คำหมายเหตุ
 
 หลักธรรมในเอกสารนี้ใช้เป็นกรอบความคิดทาง engineering ไม่ใช่การตีความศาสนา การ map กับ technical concept เป็น **analogy** ที่มีประโยชน์ในการคิด ไม่ใช่การอ้างว่า "พุทธสอนเรื่อง software architecture"
 

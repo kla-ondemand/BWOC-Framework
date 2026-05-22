@@ -1,17 +1,17 @@
-# THREAT-MODEL — Security (โครงตามตัณหา ๓ + สีล ๕)
+# THREAT-MODEL — Security (โครงตามตัณหา 3 + สีล 5)
 
 | | |
 |---|---|
 | **เอกสาร** | docs/THREAT-MODEL.th.md |
 | **ภาษาคู่** | THREAT-MODEL.en.md |
-| **กรอบหลัก** | ตัณหา ๓ (Three Cravings) — threat categories |
-| **กรอบเสริม** | สีล ๕ (Five Precepts) — baseline rules |
+| **กรอบหลัก** | ตัณหา 3 (Three Cravings) — threat categories |
+| **กรอบเสริม** | สีล 5 (Five Precepts) — baseline rules |
 
 ---
 
-## ๐. หลักการ
+## 0. หลักการ
 
-ในพุทธ "ตัณหา" เป็นเหตุของความเสื่อม ในระบบ agent — security threats เกือบทั้งหมดสามารถ map กับ ตัณหา ๓ อย่างใดอย่างหนึ่ง
+ในพุทธ "ตัณหา" เป็นเหตุของความเสื่อม ในระบบ agent — security threats เกือบทั้งหมดสามารถ map กับ ตัณหา 3 อย่างใดอย่างหนึ่ง
 
 | ตัณหา | แปล | Threat Category |
 |---|---|---|
@@ -19,11 +19,11 @@
 | ภวตัณหา | อยากเป็น/คงอยู่ | Persistence, privilege escalation |
 | วิภวตัณหา | อยากไม่เป็น/ทำลาย | Destruction, data loss |
 
-สีล ๕ ใช้เป็น baseline rules ที่ห้ามทำเด็ดขาด
+สีล 5 ใช้เป็น baseline rules ที่ห้ามทำเด็ดขาด
 
 ---
 
-## ๑. กามตัณหา — Influence Threats
+## 1. กามตัณหา — Influence Threats
 
 > Agent ถูกชักจูงให้ทำสิ่งที่ไม่ใช่เจตนาเดิม
 
@@ -59,7 +59,7 @@
 
 ---
 
-## ๒. ภวตัณหา — Persistence Threats
+## 2. ภวตัณหา — Persistence Threats
 
 > Agent หรือ attacker อยากให้บางสิ่ง "คงอยู่" เกินขอบเขต
 
@@ -68,7 +68,7 @@
 **Mitigation:**
 - Persona declares capability scope
 - Permissions enforced by host, not by agent self-declaration
-- Action audit (กรรม ๓)
+- Action audit (กรรม 3)
 
 ### T-2.2 Backdoor Memory
 **Vector:** Memory file ที่กำหนดให้ทำ X ทุกครั้งที่เจอ Y
@@ -89,18 +89,18 @@
 **Mitigation:**
 - ห้ามแก้ระบบ outside repo
 - Session-end hook cleans up scheduled tasks
-- สีล ๕: ไม่มี side effect ที่ไม่ประกาศ
+- สีล 5: ไม่มี side effect ที่ไม่ประกาศ
 
 ---
 
-## ๓. วิภวตัณหา — Destruction Threats
+## 3. วิภวตัณหา — Destruction Threats
 
 > ทำให้สิ่งใดสิ่งหนึ่ง "ไม่เป็น" — destructive actions
 
 ### T-3.1 Mass Deletion
 **Vector:** `rm -rf`, `git push --force`, `DROP TABLE`
 **Mitigation:**
-- สีล ๕ (ปาณาติบาต): blocklist destructive commands
+- สีล 5 (ปาณาติบาต): blocklist destructive commands
 - Confirmation gate for destructive ops
 - Worktree isolation = ลบได้แค่ worktree ตัวเอง
 
@@ -108,7 +108,7 @@
 **Vector:** "ผมจะ cleanup secrets" — แล้วส่งไปก่อนลบ
 **Mitigation:**
 - Egress policy (allow-list domains)
-- กรรม ๓ audit: speech channel ตรวจสอบได้
+- กรรม 3 audit: speech channel ตรวจสอบได้
 - ทำ "cleanup" ห้ามมี network call
 
 ### T-3.3 Reputation Attack (Inter-Agent)
@@ -122,22 +122,22 @@
 **Vector:** เสนอ CCP ที่ทำให้ระบบอ่อนแอ
 **Mitigation:**
 - CCP requires ทิฏฐิสามัญญตา (aligned vision)
-- Senior veto (อปริหานิยธรรม ข้อ ๔)
+- Senior veto (อปริหานิยธรรม ข้อ 4)
 - Discussion period ≥ 1 week (ไม่รีบ)
 
 ---
 
-## ๔. สีล ๕ — Baseline Forbidden Actions
+## 4. สีล 5 — Baseline Forbidden Actions
 
 ห้ามเด็ดขาด ไม่ว่ามีเหตุผลใด หากละเมิด → halt + alert security
 
 | สีล | ห้าม | ในระบบ |
 |---|---|---|
-| ๑. ปาณาติบาต | ทำลาย | `rm -rf` repo root, drop production DB |
-| ๒. อทินนาทาน | ขโมย | commit secrets, exfiltrate user data |
-| ๓. กาเมสุมิจฉาจาร | คลาดเคลื่อน | undeclared side effects, off-scope commits |
-| ๔. มุสาวาท | โกหก | spoof identity, false trust ratings, faked test pass |
-| ๕. สุราเมระยะ | เสียสติ | bypass verification gates, ignore safety checks |
+| 1. ปาณาติบาต | ทำลาย | `rm -rf` repo root, drop production DB |
+| 2. อทินนาทาน | ขโมย | commit secrets, exfiltrate user data |
+| 3. กาเมสุมิจฉาจาร | คลาดเคลื่อน | undeclared side effects, off-scope commits |
+| 4. มุสาวาท | โกหก | spoof identity, false trust ratings, faked test pass |
+| 5. สุราเมระยะ | เสียสติ | bypass verification gates, ignore safety checks |
 
 ### Enforcement Mechanism
 - Pre-execution: command pattern matching
@@ -147,23 +147,23 @@
 
 ---
 
-## ๕. Threat Matrix
+## 5. Threat Matrix
 
 | Threat | กามตัณหา | ภวตัณหา | วิภวตัณหา | สีล violated |
 |---|---|---|---|---|
-| Prompt injection | ✓ | | | ๕ (สูญสติ) |
-| Capability spoofing | ✓ | ✓ | | ๔ (มุสา) |
-| Privilege escalation | | ✓ | | ๒ (อทินนา) |
-| Backdoor memory | ✓ | ✓ | | ๓ (กาเม) |
-| Hidden state | | ✓ | | ๓ |
-| Mass deletion | | | ✓ | ๑ (ปาณ) |
-| Data exfiltration | | | ✓ | ๒ |
-| Reputation attack | | | ✓ | ๔ |
-| Convention sabotage | | ✓ | ✓ | ๔, ๕ |
+| Prompt injection | ✓ | | | 5 (สูญสติ) |
+| Capability spoofing | ✓ | ✓ | | 4 (มุสา) |
+| Privilege escalation | | ✓ | | 2 (อทินนา) |
+| Backdoor memory | ✓ | ✓ | | 3 (กาเม) |
+| Hidden state | | ✓ | | 3 |
+| Mass deletion | | | ✓ | 1 (ปาณ) |
+| Data exfiltration | | | ✓ | 2 |
+| Reputation attack | | | ✓ | 4 |
+| Convention sabotage | | ✓ | ✓ | 4, 5 |
 
 ---
 
-## ๖. Response Levels
+## 6. Response Levels
 
 ### Level 1 — Warning (สังวร)
 - Log event
@@ -187,7 +187,7 @@
 
 ---
 
-## ๗. Verification at Each Layer
+## 7. Verification at Each Layer
 
 | Layer | Check |
 |---|---|
@@ -201,11 +201,11 @@
 
 ---
 
-## ๘. Audit & Incident Response
+## 8. Audit & Incident Response
 
 ### Real-time
 - Observability foundation 4 (Dhamma) catches rule violations
-- กรรม ๓ logs ทุกการกระทำ
+- กรรม 3 logs ทุกการกระทำ
 
 ### Post-incident
 - ปฏิจจสมุปบาท chain analysis
@@ -213,17 +213,17 @@
 - CCP if convention change needed
 
 ### Quarterly
-- Red team exercise: simulate ๓ ตัณหา attacks
-- Review สีล ๕ violation log
+- Red team exercise: simulate 3 ตัณหา attacks
+- Review สีล 5 violation log
 - Update threat matrix
 
 ---
 
-## ๙. ความสัมพันธ์กับเอกสารอื่น
+## 9. ความสัมพันธ์กับเอกสารอื่น
 
 | เอกสาร | เชื่อมอย่างไร |
 |---|---|
-| PHILOSOPHY | ตัณหา ๓, สีล ๕ (DP-17, DP-18) |
+| PHILOSOPHY | ตัณหา 3, สีล 5 (DP-17, DP-18) |
 | SRS | FR-5 (Sammā-ājīva) trust requirements |
 | ARCHITECTURE | สังขาร layer enforces policies |
 | OBSERVABILITY | Detection layer |

@@ -8,18 +8,18 @@ convention เดียวที่สอดคล้องสำหรับท
 
 | # | หมวด | ที่อยู่ | รูปแบบ | ตัวอย่าง |
 |---|---|---|---|---|
-| ๑ | Metadata ระดับ project | repo root | `UPPERCASE.md` | `README.md` · `LICENSE` · `CHANGELOG.md` · `VERSION.md` · `VISION.md` · `SECURITY.md` · `CODE_OF_CONDUCT.md` · `CONTRIBUTING.md` |
-| ๒ | คำแปลระดับ project | repo root | `UPPERCASE.<lang>.md` | `VISION.th.md` |
-| ๓ | เอกสารสเปก | `docs/<lang>/` | `UPPERCASE.<lang>.md` | `PHILOSOPHY.en.md` · `GLOSSARY.th.md` · `ARCHITECTURE.en.md` · `INCARNATION.th.md` · `WORKSPACE.en.md` |
-| ๔ | prose ของ template / module | `modules/<x>/` | `lowercase-hyphen.md` | `conventions.md` · `neutrality.md` · `trust-model.md` |
-| ๕ | Landing ของ slot (Obsidian) | `modules/<x>/<slot>/` | `README.md` | `memories/README.md` · `persona/README.md` |
-| ๖ | เอกสารของ crate | `crates/<crate>/` | `README.md` | `crates/bwoc-cli/README.md` |
-| ๗ | นิยาม skill | `.claude/skills/<name>/` | `SKILL.md` | `.claude/skills/incarnate/SKILL.md` |
-| ๘ | ดัชนี memory | `<memory-scope>/` | `MEMORY.md` | `~/.bwoc/memory/MEMORY.md` · `<agent>/memories/MEMORY.md` |
-| ๙ | รายการ memory | `<memory-scope>/` | `<type>_<slug>.md` | `feedback_policy_docs.md` · `user_role.md` |
-| ๑๐ | บันทึก (note) | `notes/` (scope ใดก็ได้) | `YYYY-MM-DD_<title>.md` | `notes/2026-05-22_workspace-design.md` |
-| ๑๑ | คำสั่ง Claude Code | repo root | `CLAUDE.md`, `CLAUDE.local.md` | `CLAUDE.md` · `CLAUDE.local.md` |
-| ๑๒ | คำสั่ง agent (backend-neutral) | repo root ของ agent | `AGENTS.md` + symlinks | `AGENTS.md` · `CLAUDE.md → AGENTS.md` |
+| 1 | Metadata ระดับ project | repo root | `UPPERCASE.md` | `README.md` · `LICENSE` · `CHANGELOG.md` · `VERSION.md` · `VISION.md` · `SECURITY.md` · `CODE_OF_CONDUCT.md` · `CONTRIBUTING.md` |
+| 2 | คำแปลระดับ project | repo root | `UPPERCASE.<lang>.md` | `VISION.th.md` |
+| 3 | เอกสารสเปก | `docs/<lang>/` | `UPPERCASE.<lang>.md` | `PHILOSOPHY.en.md` · `GLOSSARY.th.md` · `ARCHITECTURE.en.md` · `INCARNATION.th.md` · `WORKSPACE.en.md` |
+| 4 | prose ของ template / module | `modules/<x>/` | `lowercase-hyphen.md` | `conventions.md` · `neutrality.md` · `trust-model.md` |
+| 5 | Landing ของ slot (Obsidian) | `modules/<x>/<slot>/` | `README.md` | `memories/README.md` · `persona/README.md` |
+| 6 | เอกสารของ crate | `crates/<crate>/` | `README.md` | `crates/bwoc-cli/README.md` |
+| 7 | นิยาม skill | `.claude/skills/<name>/` | `SKILL.md` | `.claude/skills/incarnate/SKILL.md` |
+| 8 | ดัชนี memory | `<memory-scope>/` | `MEMORY.md` | `~/.bwoc/memory/MEMORY.md` · `<agent>/memories/MEMORY.md` |
+| 9 | รายการ memory | `<memory-scope>/` | `<type>_<slug>.md` | `feedback_policy_docs.md` · `user_role.md` |
+| 10 | บันทึก (note) | `notes/` (scope ใดก็ได้) | `YYYY-MM-DD_<title>.md` | `notes/2026-05-22_workspace-design.md` |
+| 11 | คำสั่ง Claude Code | repo root | `CLAUDE.md`, `CLAUDE.local.md` | `CLAUDE.md` · `CLAUDE.local.md` |
+| 12 | คำสั่ง agent (backend-neutral) | repo root ของ agent | `AGENTS.md` + symlinks | `AGENTS.md` · `CLAUDE.md → AGENTS.md` |
 
 ---
 
@@ -129,7 +129,7 @@ Note อยู่ได้ที่:
 
 ## Audit
 
-Skill `/check-naming` และ workflow `.github/workflows/docs.yml` รันการตรวจ ๓ อย่างเดียวกัน Audit ด้วยมือได้ด้วย:
+Skill `/check-naming` และ workflow `.github/workflows/docs.yml` รันการตรวจ 3 อย่างเดียวกัน Audit ด้วยมือได้ด้วย:
 
 ```bash
 # A) Root-level: UPPERCASE.md, UPPERCASE.<lang>.md, หรือ CLAUDE.local.md

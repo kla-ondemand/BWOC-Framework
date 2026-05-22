@@ -111,20 +111,34 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
         }
     }
 
-    // If the agent is `--serve`'d (socket file present), signal it to
-    // shut down via the STOP command BEFORE mutating the registry —
-    // that way the running process actually exits, not just the status
-    // bit. Best-effort: a failed signal still proceeds with the registry
-    // mutation so the user's intent is recorded.
-    let sock_signaled = try_signal_stop(&workspace.join(&entry.path));
+    // Signal-escalation shutdown — STOP → wait → SIGTERM → wait → SIGKILL.
+    // Each step is bounded; the chain only escalates if the previous step
+    // didn't kill the process. Best-effort throughout: even total failure
+    // still flips the registry so the user's intent is recorded.
+    let agent_path = workspace.join(&entry.path);
+    let stop_outcome = escalating_shutdown(&agent_path);
 
     registry.agents[idx].status = "stopped".to_string();
     registry.save(&workspace)?;
 
     println!();
     println!("Stopped: {}", entry.id);
-    if sock_signaled {
-        println!("  Signalled via socket: agent process will exit cleanly");
+    match stop_outcome {
+        StopOutcome::NotRunning => {
+            println!("  Daemon:   was not running (no signal sent)");
+        }
+        StopOutcome::SocketOk => {
+            println!("  Daemon:   STOP via socket → exited cleanly");
+        }
+        StopOutcome::Sigterm => {
+            println!("  Daemon:   socket unresponsive → SIGTERM → exited");
+        }
+        StopOutcome::Sigkill => {
+            println!("  Daemon:   socket + SIGTERM ignored → SIGKILL");
+        }
+        StopOutcome::CouldNotKill => {
+            println!("  Daemon:   WARNING — could not stop process (still alive)");
+        }
     }
     println!(
         "  Registry updated: {}/.bwoc/agents.toml",
@@ -136,6 +150,87 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
     );
     println!();
     Ok(())
+}
+
+/// Outcome of the shutdown ladder, used for the per-step output line.
+#[derive(Debug, PartialEq, Eq)]
+enum StopOutcome {
+    /// No PID file or signal-0 said the pid is dead — nothing to do.
+    NotRunning,
+    /// Socket `STOP` worked: daemon ack'd and exited within the wait window.
+    SocketOk,
+    /// Socket was unresponsive but `SIGTERM` made the daemon exit.
+    Sigterm,
+    /// Both socket + `SIGTERM` ignored; `SIGKILL` ended it.
+    Sigkill,
+    /// All three failed — process still alive. Caller should warn the user.
+    CouldNotKill,
+}
+
+/// STOP → SIGTERM → SIGKILL escalation. Each step waits up to ~3s for
+/// the daemon to actually exit (poll pid + signal-0 every 100ms).
+#[cfg(unix)]
+fn escalating_shutdown(agent_path: &std::path::Path) -> StopOutcome {
+    use std::time::Duration;
+
+    let pid_path = agent_path.join(".bwoc/agent.pid");
+    let Ok(raw) = std::fs::read_to_string(&pid_path) else {
+        return StopOutcome::NotRunning;
+    };
+    let Ok(pid) = raw.trim().parse::<u32>() else {
+        return StopOutcome::NotRunning;
+    };
+    if !crate::livecheck::signal_zero_alive(pid) {
+        return StopOutcome::NotRunning;
+    }
+
+    // Step 1 — socket STOP. Daemon's preferred shutdown path; cleanly
+    // removes its own PID + socket files.
+    let sock_ok = try_signal_stop(agent_path);
+    if sock_ok && wait_for_exit(pid, Duration::from_secs(3)) {
+        return StopOutcome::SocketOk;
+    }
+
+    // Step 2 — SIGTERM. Daemon ignored STOP or socket was missing. The
+    // ctrlc handler in bwoc-agent --serve catches SIGTERM and runs the
+    // same cleanup the STOP handler would, so this is "polite escalation."
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    if wait_for_exit(pid, Duration::from_secs(3)) {
+        return StopOutcome::Sigterm;
+    }
+
+    // Step 3 — SIGKILL. No handler runs; daemon leaves debris (stale
+    // PID + sock). Doctor's stale-sweep cleans up later.
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    // SIGKILL is supposed to be unstoppable; give it 1s to actually
+    // reap then check. If still alive, something is very wrong (zombie
+    // parent / kernel issue) — surface clearly rather than silently
+    // continue.
+    if wait_for_exit(pid, Duration::from_secs(1)) {
+        return StopOutcome::Sigkill;
+    }
+    StopOutcome::CouldNotKill
+}
+
+#[cfg(not(unix))]
+fn escalating_shutdown(_agent_path: &std::path::Path) -> StopOutcome {
+    // Windows path is the cfg-not-unix stub — daemon never runs on Windows yet.
+    StopOutcome::NotRunning
+}
+
+/// Poll signal-0 every 100ms for up to `deadline`. Returns true once
+/// the process is gone, false if it's still alive past the window.
+#[cfg(unix)]
+fn wait_for_exit(pid: u32, deadline: std::time::Duration) -> bool {
+    use std::time::{Duration, Instant};
+    let until = Instant::now() + deadline;
+    while Instant::now() < until {
+        if !crate::livecheck::signal_zero_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !crate::livecheck::signal_zero_alive(pid)
 }
 
 /// Try to send `STOP\n` over the agent's Unix socket. Returns true if

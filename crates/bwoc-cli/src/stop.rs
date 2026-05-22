@@ -111,11 +111,21 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
         }
     }
 
+    // If the agent is `--serve`'d (socket file present), signal it to
+    // shut down via the STOP command BEFORE mutating the registry —
+    // that way the running process actually exits, not just the status
+    // bit. Best-effort: a failed signal still proceeds with the registry
+    // mutation so the user's intent is recorded.
+    let sock_signaled = try_signal_stop(&workspace.join(&entry.path));
+
     registry.agents[idx].status = "stopped".to_string();
     registry.save(&workspace)?;
 
     println!();
     println!("Stopped: {}", entry.id);
+    if sock_signaled {
+        println!("  Signalled via socket: agent process will exit cleanly");
+    }
     println!(
         "  Registry updated: {}/.bwoc/agents.toml",
         workspace.display()
@@ -126,6 +136,40 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
     );
     println!();
     Ok(())
+}
+
+/// Try to send `STOP\n` over the agent's Unix socket. Returns true if
+/// the agent acknowledged. Silent on missing socket / connection errors
+/// — `bwoc stop` is allowed to update the registry even when no live
+/// process exists to signal.
+#[cfg(unix)]
+fn try_signal_stop(agent_path: &std::path::Path) -> bool {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let sock_path = agent_path.join(".bwoc/agent.sock");
+    if !sock_path.exists() {
+        return false;
+    }
+    let Ok(mut stream) = UnixStream::connect(&sock_path) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    if stream.write_all(b"STOP\n").is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if BufReader::new(&stream).read_line(&mut response).is_err() {
+        return false;
+    }
+    response.trim().starts_with("OK")
+}
+
+#[cfg(not(unix))]
+fn try_signal_stop(_agent_path: &std::path::Path) -> bool {
+    false
 }
 
 fn resolve_workspace(explicit: Option<PathBuf>) -> Option<PathBuf> {

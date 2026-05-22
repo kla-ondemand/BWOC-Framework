@@ -127,7 +127,7 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
-            Ok((stream, _addr)) => handle_client(stream),
+            Ok((stream, _addr)) => handle_client(stream, &running),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -156,7 +156,7 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn handle_client(mut stream: std::os::unix::net::UnixStream) {
+fn handle_client(mut stream: std::os::unix::net::UnixStream, running: &Arc<AtomicBool>) {
     use std::io::{BufRead, BufReader, Write};
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
@@ -166,6 +166,15 @@ fn handle_client(mut stream: std::os::unix::net::UnixStream) {
     let cmd = line.trim();
     let response: &[u8] = match cmd {
         "PING" => b"PONG\n",
+        "STOP" => {
+            // Mark for shutdown; the accept loop will see this on its
+            // next iteration (within ~100ms) and exit cleanly. Reply
+            // BEFORE flipping the flag so the client always reads our
+            // response — otherwise the loop might race-clean the socket
+            // before write_all returns.
+            running.store(false, Ordering::SeqCst);
+            b"OK shutting down\n"
+        }
         _ => b"ERR unknown command\n",
     };
     let _ = stream.write_all(response);

@@ -327,6 +327,64 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
 
 - **`bwoc help` topics 10 → 11**: + `doctor` (status taxonomy + auto-fix policy)
 
+**Process supervision + remaining UX polish** (most recent batch)
+
+- **`bwoc supervise <agent>`** — restart-on-crash supervisor closes a
+  Phase 2 "Remaining for ship" item. Spawns `bwoc-agent --serve`,
+  waits, respawns on non-zero exit; rate-limited (default 10/min,
+  `--max-restarts-per-min N`). Clean exit (status 0) stops the
+  supervisor. SIGINT/SIGTERM via ctrlc → exit 0. Stderr → same
+  `agent.log` as `bwoc start`, so `bwoc log -f` works against
+  supervised daemons. Usage: `tmux new-window 'bwoc supervise alpha'`
+  or inside the user's own systemd unit. New `ctrlc` dep on bwoc-cli
+  (already a workspace dep for bwoc-agent).
+
+- **`bwoc retire --keep-memory`** — third file mode between default
+  (delete) and `--keep-files` (retain all). Removes everything under
+  the agent dir EXCEPT `memories/`, preserving accumulated knowledge
+  for future agents. clap mutex with `--keep-files`.
+
+- **`bwoc inbox --all`** — print every agent's inbox concatenated,
+  each preceded by a `=== <agent-id> (N message(s)) ===` header.
+  Empty inboxes still get a header. `--clear` and `--watch` are
+  refused with `--all` (mass-clear too destructive; mass-watch
+  interleaves confusingly). JSON shape: `{ agents: [{ agent, total,
+  shown, messages }] }`.
+
+- **UPTIME column on every overview surface** — `bwoc list` (table)
+  and `bwoc status` (table) gained UPTIME between BACKEND and INBOX/
+  MODEL. `bwoc list --json` and `bwoc status --json` gained
+  `running` + `uptime_seconds` (nullable). All four surfaces share
+  the same `livecheck::query_uptime` + `format_uptime` data path.
+
+- **`bwoc check --all`** — fleet-wide neutrality audit. Iterates the
+  workspace registry, runs `audit()` per agent, prints per-agent
+  sections + fleet summary. JSON shape: `{ workspace, agents[],
+  summary }`. Exit 1 iff any agent has violations.
+
+- **`bwoc ping --all`** — mass liveness probe across the workspace.
+  Agents with no live socket get "not running" label (not a
+  failure; they're just stopped). Protocol drift / connection errors
+  → exit 1.
+
+- **Memory write/sort ergonomics**:
+  - `bwoc memory put <name> "inline"` — third source mode (precedence:
+    inline > --file > stdin); trailing newline appended automatically
+  - `bwoc memory put <name> --append` — accumulate to existing entry
+    (read-modify-write staged atomically; clap mutex with `--force`)
+  - `bwoc memory list --json` adds inline `count` + `total_bytes`
+    aggregates
+  - `bwoc memory list --sort name|size|modified` — mirror of
+    `bwoc list --sort` for memory entries
+
+- **`bwoc send <agent> --file <path>`** — second message source
+  (clap mutex with inline `<msg>`); trailing newlines trimmed so
+  vim/EOF newline doesn't bloat the envelope.
+
+- **`bwoc help` topic 11 → 12**: + `script` (shell idioms for
+  --count / --names-only / --json / --path-only across all read
+  commands)
+
 ### Changed
 
 - `modules/agent-template/README.md` — added badges, table of contents, and footer; trimmed the "Incarnating a New Agent" section to a quickstart that points at `docs/en/INCARNATION.en.md`.

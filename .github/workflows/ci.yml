@@ -7,12 +7,39 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  # Quality gates — fmt + clippy. Run once on Linux because the rules
+  # are platform-independent and there's no value in repeating them
+  # three times.
+  quality:
+    name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Build + test on every platform the toolkit advertises support for
+  # (macOS · Linux · Windows). The Status badge in README.md claims
+  # all three; this matrix backs the claim.
+  #
+  # Two known limitations:
+  #   - `bwoc-agent --serve` uses Unix domain sockets and signal-0 for
+  #     liveness checks; Windows builds compile but the `--serve` path
+  #     is a no-op there. Tests stay platform-agnostic (cfg-gated).
+  #   - Some unit tests touch tempdirs under /tmp; cargo's TMPDIR
+  #     handling is portable, so no platform-specific harness needed.
+  build-and-test:
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --verbose
       - run: cargo test --workspace --verbose

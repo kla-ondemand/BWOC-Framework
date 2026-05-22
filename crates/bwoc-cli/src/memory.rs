@@ -30,6 +30,10 @@ pub struct MemoryArgs {
     /// Only used by `list`: emit bare entry filenames, one per line
     /// (or `{"names": [...]}` with --json).
     pub names_only: bool,
+    /// Only used by `list`: optional sort key. None = name (alphabetical).
+    /// Accepted: "name" (alphabetical, default), "size" (descending bytes),
+    /// "modified" (newest first by file mtime).
+    pub sort: Option<String>,
 }
 
 pub enum MemoryAction {
@@ -85,7 +89,13 @@ pub fn run(args: MemoryArgs) -> i32 {
     }
 
     match args.action {
-        MemoryAction::List => list(&memory_dir, args.json, args.count_only, args.names_only),
+        MemoryAction::List => list(
+            &memory_dir,
+            args.json,
+            args.count_only,
+            args.names_only,
+            args.sort.as_deref(),
+        ),
         MemoryAction::Show(name) => show(&memory_dir, &name),
         MemoryAction::ShowAll => show_all(&memory_dir, args.json),
         MemoryAction::Put {
@@ -469,8 +479,20 @@ fn capitalize_first(s: &str) -> String {
 ///   1. `count_only` → single integer or `{"count": N}` (wins if both)
 ///   2. `names_only` → bare names per line or `{"names": [...]}`
 ///   3. default → human table or full `{ workspace_memory_dir, entries }`
-fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i32 {
-    let mut entries: Vec<(String, u64)> = Vec::new();
+///
+/// Optional `sort` key: "name" (default — alphabetical), "size" (desc),
+/// "modified" (newest first by mtime). Unknown key → exit 2.
+fn list(
+    memory_dir: &Path,
+    json: bool,
+    count_only: bool,
+    names_only: bool,
+    sort: Option<&str>,
+) -> i32 {
+    // Triple of (name, size_bytes, mtime). mtime is best-effort — when
+    // the platform doesn't report it, falls back to UNIX_EPOCH (sorts last
+    // in "modified" descending order; harmless on other sort modes).
+    let mut entries: Vec<(String, u64, std::time::SystemTime)> = Vec::new();
     let Ok(read) = std::fs::read_dir(memory_dir) else {
         eprintln!("bwoc memory: failed to read {}", memory_dir.display());
         return 1;
@@ -480,10 +502,26 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
         if !name.ends_with(".md") || name == "README.md" {
             continue;
         }
-        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        entries.push((name, size));
+        let meta = entry.metadata().ok();
+        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let mtime = meta
+            .and_then(|m| m.modified().ok())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        entries.push((name, size, mtime));
     }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    // Apply sort. Default = "name" (alphabetical, stable).
+    match sort.unwrap_or("name") {
+        "name" => entries.sort_by(|a, b| a.0.cmp(&b.0)),
+        "size" => entries.sort_by(|a, b| b.1.cmp(&a.1)), // desc
+        "modified" => entries.sort_by(|a, b| b.2.cmp(&a.2)), // newest first
+        other => {
+            eprintln!(
+                "bwoc memory list --sort: unknown field '{other}'. \
+                 Accepted: name | size | modified"
+            );
+            return 2;
+        }
+    }
 
     // --count: short-circuit before any other formatting. Same precedence
     // as `bwoc list` (count wins over names_only).
@@ -509,7 +547,7 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
     if names_only {
         if json {
             let value = serde_json::json!({
-                "names": entries.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                "names": entries.iter().map(|(n, _, _)| n.as_str()).collect::<Vec<_>>(),
             });
             match serde_json::to_string(&value) {
                 Ok(s) => {
@@ -522,7 +560,7 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
                 }
             }
         }
-        for (name, _) in &entries {
+        for (name, _, _) in &entries {
             println!("{name}");
         }
         return 0;
@@ -531,14 +569,14 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
     if json {
         // Aggregate stats: useful for CI/monitoring ("is memory bloated?")
         // without re-walking the entries client-side.
-        let total_bytes: u64 = entries.iter().map(|(_, s)| *s).sum();
+        let total_bytes: u64 = entries.iter().map(|(_, s, _)| *s).sum();
         let value = serde_json::json!({
             "workspace_memory_dir": memory_dir.display().to_string(),
             "count": entries.len(),
             "total_bytes": total_bytes,
             "entries": entries
                 .iter()
-                .map(|(n, s)| serde_json::json!({ "name": n, "size_bytes": s }))
+                .map(|(n, s, _)| serde_json::json!({ "name": n, "size_bytes": s }))
                 .collect::<Vec<_>>(),
         });
         match serde_json::to_string_pretty(&value) {
@@ -564,7 +602,7 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
     }
     println!("{:<40} SIZE", "NAME");
     println!("{} {}", "─".repeat(40), "─".repeat(10));
-    for (name, size) in &entries {
+    for (name, size, _) in &entries {
         println!("{name:<40} {size} bytes");
     }
     println!();

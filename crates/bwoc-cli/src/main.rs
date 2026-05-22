@@ -137,6 +137,9 @@ enum MemoryAction {
         /// Print bare entry filenames, one per line (or `{"names": [...]}` with --json).
         #[arg(long = "names-only")]
         names_only: bool,
+        /// Sort key. Default: name (alphabetical). One of: name, size, modified.
+        #[arg(long)]
+        sort: Option<String>,
     },
     /// Print one memory entry's contents to stdout, or `--all` for every entry concatenated.
     Show {
@@ -206,12 +209,14 @@ impl MemoryAction {
                 json,
                 count,
                 names_only,
+                sort,
             } => memory::MemoryArgs {
                 action: memory::MemoryAction::List,
                 workspace,
                 json,
                 count_only: count,
                 names_only,
+                sort,
             },
             MemoryAction::Show {
                 name,
@@ -234,6 +239,7 @@ impl MemoryAction {
                     json,
                     count_only: false,
                     names_only: false,
+                    sort: None,
                 }
             }
             MemoryAction::Put {
@@ -262,6 +268,7 @@ impl MemoryAction {
                     json: false,
                     count_only: false,
                     names_only: false,
+                    sort: None,
                 }
             }
             MemoryAction::Search {
@@ -274,6 +281,7 @@ impl MemoryAction {
                 json,
                 count_only: false,
                 names_only: false,
+                sort: None,
             },
             MemoryAction::Rm {
                 name,
@@ -285,6 +293,7 @@ impl MemoryAction {
                 json: false,
                 count_only: false,
                 names_only: false,
+                sort: None,
             },
         }
     }

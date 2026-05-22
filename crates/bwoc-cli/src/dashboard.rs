@@ -185,6 +185,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                 (KeyCode::Char('r'), _) => app.refresh(),
                 (KeyCode::Char('t'), _) => open_in_tmux(app),
                 (KeyCode::Char('l'), _) => open_log_in_tmux(app),
+                (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
                 (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                 (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
                 _ => {}
@@ -310,6 +311,61 @@ fn open_log_in_tmux(app: &mut App) {
     match result {
         Ok(s) if s.success() => {
             app.last_action = Some(format!("→ tmux window '{window_name}' tailing log -f"));
+        }
+        Ok(s) => {
+            app.last_action = Some(format!("tmux new-window exited {s}"));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("tmux exec failed: {e}"));
+        }
+    }
+}
+
+/// `i` hotkey — open `bwoc inbox <agent> --watch` in a new tmux window
+/// for the selected agent. Live tail of pending + new envelopes.
+/// Third of the t/l/i triad (chat / log / inbox), all sharing the same
+/// guards + feedback shape.
+fn open_inbox_in_tmux(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — no inbox to watch)".to_string());
+        return;
+    };
+
+    if std::env::var_os("TMUX").is_none() {
+        app.last_action = Some(
+            "(not inside tmux — run `tmux new-session` first, then re-launch dashboard)"
+                .to_string(),
+        );
+        return;
+    }
+
+    let root_str = root.to_string_lossy().to_string();
+    let bare = entry.id.strip_prefix("agent-").unwrap_or(&entry.id);
+    let window_name = format!("{}-inbox", entry.id);
+    let result = std::process::Command::new("tmux")
+        .args([
+            "new-window",
+            "-n",
+            window_name.as_str(),
+            "--",
+            "bwoc",
+            "inbox",
+            bare,
+            "--workspace",
+            root_str.as_str(),
+            "--watch",
+        ])
+        .status();
+    match result {
+        Ok(s) if s.success() => {
+            app.last_action = Some(format!("→ tmux window '{window_name}' watching inbox"));
         }
         Ok(s) => {
             app.last_action = Some(format!("tmux new-window exited {s}"));
@@ -806,6 +862,8 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::raw(" talk    "),
         Span::styled("l", bold),
         Span::raw(" log    "),
+        Span::styled("i", bold),
+        Span::raw(" inbox    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
         Span::styled("q/Esc", bold),

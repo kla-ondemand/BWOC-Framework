@@ -576,7 +576,29 @@ fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
     let workspace_line = match &app.workspace {
-        Some(p) => format!("Workspace: {}", p.display()),
+        Some(p) => {
+            // Workspace-level counts surfacing the scaffolded dirs
+            // (`projects/` subdirs, `notes/` user .md files). 0 renders
+            // as "—" for visual quiet.
+            let projects = crate::livecheck::count_subdirs(&p.join("projects"));
+            let notes = crate::livecheck::count_user_md_files(&p.join("notes"));
+            let p_str = if projects == 0 {
+                "—".to_string()
+            } else {
+                projects.to_string()
+            };
+            let n_str = if notes == 0 {
+                "—".to_string()
+            } else {
+                notes.to_string()
+            };
+            format!(
+                "Workspace: {}  ·  projects: {}  ·  notes: {}",
+                p.display(),
+                p_str,
+                n_str
+            )
+        }
         None => "Workspace: (none — pass --workspace, set BWOC_WORKSPACE, or run `bwoc init`)"
             .to_string(),
     };

@@ -17,6 +17,7 @@ mod init;
 mod new;
 mod retire;
 mod spawn;
+mod status;
 mod user_home;
 mod util;
 mod workspace;
@@ -62,6 +63,26 @@ enum Commands {
     Doctor(DoctorArgs),
     /// Retire an agent — remove it from the workspace's registry (vaya).
     Retire(RetireArgs),
+    /// Show per-agent health + identity snapshot (read-only).
+    Status(StatusArgs),
+}
+
+#[derive(Args, Debug)]
+struct StatusArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo"). If omitted, shows all agents.
+    name: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<StatusArgs> for status::StatusArgs {
+    fn from(a: StatusArgs) -> Self {
+        Self {
+            name: a.name,
+            workspace: a.workspace,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -319,6 +340,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Retire(args)) => {
             let code = retire::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Status(args)) => {
+            let code = status::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

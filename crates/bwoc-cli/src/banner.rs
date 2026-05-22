@@ -41,6 +41,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "Diagnose environment + workspace, --auto to fix safe issues",
     ),
     ("retire", "Retire an agent — remove from registry (vaya)"),
+    ("status", "Per-agent health + identity snapshot (read-only)"),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

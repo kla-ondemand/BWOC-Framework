@@ -219,10 +219,7 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
 
 ### Known Issues
 
-- `PHILOSOPHY.en.md` §1 says "22 Frameworks"; `PHILOSOPHY.th.md` §๑ says "๑๔ ประการ" (14). Pre-existing EN/TH count mismatch — one number is stale; reconciliation pending.
-- Repository is not yet `git init`'d. No git history, no remote.
-- Several files referenced by `CONTRIBUTING.md` are not yet present: `.github/CODEOWNERS`, `.github/ISSUE_TEMPLATE/*`, `.github/PULL_REQUEST_TEMPLATE.md`. Policy-bearing items are HELD pending user direction (see `.claude/loop-roadmap.md`).
-- `bilingual-reminder.sh` hook currently scans `*/docs/en/*.en.md` only; the newly established root-level `FILENAME.md` ↔ `FILENAME.th.md` pattern is not covered yet.
+- Two `CONTRIBUTING.md`-referenced policy files are HELD pending user direction: `.github/CODEOWNERS` (review-duty assignments) and `.github/ISSUE_TEMPLATE/config.yml` (Discussions URL + contact routing). The non-policy issue/PR templates (`bug_report.md`, `feature_request.md`, `PULL_REQUEST_TEMPLATE.md`) shipped earlier. See `.claude/loop-roadmap.md` for the HELD status detail.
 
 ---
 

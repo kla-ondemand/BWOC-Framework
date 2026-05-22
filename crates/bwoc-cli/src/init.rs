@@ -166,7 +166,11 @@ agents/*/.bwoc/inbox.cursor
 /// Standard sub-directories scaffolded by `bwoc init` (paired with the
 /// README content written into each). The configured `agents_dir`
 /// (from `ws.defaults`) is handled separately above.
-const WORKSPACE_EXTRAS: &[(&str, &str)] = &[("projects", PROJECTS_README), ("notes", NOTES_README)];
+const WORKSPACE_EXTRAS: &[(&str, &str)] = &[
+    ("projects", PROJECTS_README),
+    ("notes", NOTES_README),
+    (".bwoc/memory", MEMORY_README),
+];
 
 const AGENTS_README: &str = "# agents/
 
@@ -197,6 +201,44 @@ project per sub-directory is the obvious pattern).
 
 Agents access projects via their `worktreeBase` setting or by being
 spawned from a project directory: `bwoc spawn --path <project-dir>`.
+";
+
+const MEMORY_README: &str = "# .bwoc/memory/
+
+Workspace-level memory — knowledge shared across all agents in this
+workspace. Per the WORKSPACE.en.md spec §\"Central Memory\".
+
+## Scope hierarchy
+
+Memory in BWOC is layered:
+
+1. **Per-agent**       — `agents/<name>/memories/` (one agent's recall)
+2. **Per-workspace**   — `.bwoc/memory/` ← *this directory*
+3. **Per-user**        — `~/.bwoc/memory/` (cross-workspace personal)
+4. **Tier 2 backend**  — pluggable (vector store, etc.) — Phase 2+
+
+Files in this directory are accessible by any agent in the workspace
+and should encode shared context — coding standards, project glossary,
+deployment recipes, common gotchas.
+
+## Naming convention
+
+Plain Markdown files. Use kebab-case filenames per
+[`docs/en/NAMING.en.md`](../../docs/en/NAMING.en.md) categories 5–7
+(slot-level READMEs, reference docs).
+
+## What goes here
+
+- Cross-agent conventions (\"all agents in this workspace use 2-space indent\")
+- Shared glossary terms
+- Deployment recipes, release procedures
+- Cross-cutting gotchas surfaced by one agent that others should know
+
+## What does NOT go here
+
+- Per-agent specific knowledge → use `agents/<name>/memories/` instead
+- Personal preferences → use `~/.bwoc/memory/` instead
+- Secrets → never commit
 ";
 
 const NOTES_README: &str = "# notes/

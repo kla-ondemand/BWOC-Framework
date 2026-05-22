@@ -21,6 +21,11 @@ pub struct StatusArgs {
     pub name: Option<String>,
     pub workspace: Option<PathBuf>,
     pub json: bool,
+    /// Print the full detail block for every agent (loops `print_one`).
+    /// Without this, no-name + non-JSON gives the compact table view;
+    /// with `--all`, you get the same output as iterating `status <each>`.
+    /// Mutually exclusive with `name` (clap-enforced).
+    pub all: bool,
 }
 
 const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
@@ -45,6 +50,19 @@ pub fn run(args: StatusArgs) -> i32 {
     // JSON branch — single shape for both "all" and "one" cases.
     if args.json {
         return emit_json(&root, &registry, args.name.as_deref());
+    }
+
+    if args.all {
+        // Full detail block per agent. Returns 2 if any fails the
+        // health probe (matches `print_one`'s exit semantics).
+        let mut worst = 0;
+        for entry in &registry.agents {
+            let code = print_one(&root, &registry, &entry.id);
+            if code > worst {
+                worst = code;
+            }
+        }
+        return worst;
     }
 
     match args.name {

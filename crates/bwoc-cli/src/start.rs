@@ -394,6 +394,7 @@ mod tests {
         assert!(
             start(StartArgs {
                 all: false,
+                json: false,
                 name: "alpha".into(),
                 workspace: Some(root.clone()),
                 yes: true,

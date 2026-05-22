@@ -374,9 +374,15 @@ impl From<PingArgs> for ping::PingArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
 struct StartArgs {
     /// Name of the agent. Matches by id ("agent-foo") or bare name ("foo").
-    name: String,
+    /// Mutually exclusive with `--all` (clap group enforces).
+    name: Option<String>,
+    /// Start every stopped agent in the workspace. Honors `--yes` + `--no-daemon`.
+    /// Mutually exclusive with `name`.
+    #[arg(long)]
+    all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -391,10 +397,11 @@ struct StartArgs {
 impl From<StartArgs> for start::StartArgs {
     fn from(a: StartArgs) -> Self {
         Self {
-            name: a.name,
+            name: a.name.unwrap_or_default(), // clap group ensures one of (name, all)
             workspace: a.workspace,
             yes: a.yes,
             no_daemon: a.no_daemon,
+            all: a.all,
         }
     }
 }

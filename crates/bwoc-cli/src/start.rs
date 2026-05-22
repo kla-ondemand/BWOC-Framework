@@ -19,11 +19,15 @@ use std::process::{Command, Stdio};
 use bwoc_core::workspace::AgentsRegistry;
 
 pub struct StartArgs {
+    /// Empty when `--all`. The CLI shim enforces "exactly one of name | all".
     pub name: String,
     pub workspace: Option<PathBuf>,
     pub yes: bool,
     /// Skip spawning `bwoc-agent --serve`; only flip registry status.
     pub no_daemon: bool,
+    /// Start every stopped agent in the workspace. Mutually exclusive
+    /// with `name`. Honors `--yes` and `--no-daemon`.
+    pub all: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -44,7 +48,12 @@ pub enum StartError {
 }
 
 pub fn run(args: StartArgs) -> i32 {
-    match start(args) {
+    let result = if args.all {
+        start_all(args)
+    } else {
+        start(args)
+    };
+    match result {
         Ok(()) => 0,
         Err(StartError::Aborted) => {
             eprintln!("bwoc start: aborted — nothing changed");
@@ -58,6 +67,107 @@ pub fn run(args: StartArgs) -> i32 {
             }
         }
     }
+}
+
+/// Start every stopped agent in the workspace. Mirror of `stop_all`:
+/// loads registry, filters candidates, shows the list, single confirm,
+/// then iterates. Already-active and already-running agents are skipped
+/// (mass-start should target what NEEDS starting; that's what "stopped"
+/// means).
+fn start_all(args: StartArgs) -> Result<(), StartError> {
+    let workspace = resolve_workspace(args.workspace).ok_or(StartError::NoWorkspace)?;
+    let mut registry = AgentsRegistry::load(&workspace)?;
+
+    // Candidates: status == "stopped". (Active agents need no action;
+    // mass-start's job is to bring stopped agents back up.)
+    let candidate_idxs: Vec<usize> = registry
+        .agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.status == "stopped")
+        .map(|(i, _)| i)
+        .collect();
+
+    if candidate_idxs.is_empty() {
+        println!();
+        println!("bwoc start --all: no stopped agents in this workspace.");
+        println!();
+        return Ok(());
+    }
+
+    println!();
+    println!(
+        "About to start {} agent(s) in {}:",
+        candidate_idxs.len(),
+        workspace.display()
+    );
+    for &i in &candidate_idxs {
+        let a = &registry.agents[i];
+        println!("  - {} (stopped → active, backend: {})", a.id, a.backend);
+    }
+    if args.no_daemon {
+        println!();
+        println!("(--no-daemon: daemons will NOT be spawned; registry-only)");
+    }
+    println!();
+
+    if !args.yes {
+        if !io::stdin().is_terminal() {
+            return Err(StartError::Aborted);
+        }
+        let mut stdout = io::stdout();
+        write!(stdout, "Proceed with mass start? [y/N]: ")?;
+        stdout.flush()?;
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        let answer = line.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            return Err(StartError::Aborted);
+        }
+    }
+
+    let mut spawned = 0u32;
+    let mut already_running = 0u32;
+    let mut skipped_no_daemon = 0u32;
+    let mut spawn_errors = 0u32;
+    for &i in &candidate_idxs {
+        let entry = registry.agents[i].clone();
+        let agent_path = workspace.join(&entry.path);
+        registry.agents[i].status = "active".to_string();
+        let running = daemon_is_alive(&agent_path);
+        let label = if args.no_daemon {
+            skipped_no_daemon += 1;
+            "registry → active (no daemon)".to_string()
+        } else if running {
+            already_running += 1;
+            "registry → active (daemon already running)".to_string()
+        } else {
+            match spawn_daemon(&agent_path) {
+                Ok(pid) => {
+                    spawned += 1;
+                    format!("registry → active, daemon spawned (pid {pid})")
+                }
+                Err(e) => {
+                    spawn_errors += 1;
+                    format!("registry → active, daemon spawn FAILED: {e}")
+                }
+            }
+        };
+        println!("  {}: {}", entry.id, label);
+    }
+    registry.save(&workspace)?;
+
+    println!();
+    println!(
+        "{} started. (spawned: {}, already-running: {}, skipped --no-daemon: {}, spawn-errors: {})",
+        candidate_idxs.len(),
+        spawned,
+        already_running,
+        skipped_no_daemon,
+        spawn_errors,
+    );
+    println!();
+    Ok(())
 }
 
 fn start(args: StartArgs) -> Result<(), StartError> {
@@ -259,6 +369,7 @@ mod tests {
         let root = setup_workspace("ok", "stopped");
         assert!(
             start(StartArgs {
+                all: false,
                 name: "alpha".into(),
                 workspace: Some(root.clone()),
                 yes: true,
@@ -278,6 +389,7 @@ mod tests {
         // daemon spawn).
         let root = setup_workspace("already", "active");
         let result = start(StartArgs {
+            all: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -291,6 +403,7 @@ mod tests {
     fn start_fails_for_unknown_name() {
         let root = setup_workspace("missing", "stopped");
         let err = start(StartArgs {
+            all: false,
             name: "zzz".into(),
             workspace: Some(root.clone()),
             yes: true,

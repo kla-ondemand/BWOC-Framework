@@ -318,9 +318,16 @@ impl From<LogArgs> for log::LogArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["agent", "all"])))]
 struct InboxArgs {
     /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
-    agent: String,
+    /// Mutually exclusive with `--all`.
+    agent: Option<String>,
+    /// Print every agent's inbox concatenated (each with a header).
+    /// Mutually exclusive with `<agent>`. `--clear` and `--watch` are
+    /// refused with `--all`.
+    #[arg(long)]
+    all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -348,7 +355,7 @@ struct InboxArgs {
 impl From<InboxArgs> for inbox::InboxArgs {
     fn from(a: InboxArgs) -> Self {
         Self {
-            agent: a.agent,
+            agent: a.agent.unwrap_or_default(), // clap group ensures one of (agent, all)
             workspace: a.workspace,
             json: a.json,
             limit: a.limit,
@@ -356,6 +363,7 @@ impl From<InboxArgs> for inbox::InboxArgs {
             clear: a.clear,
             yes: a.yes,
             count: a.count,
+            all: a.all,
         }
     }
 }

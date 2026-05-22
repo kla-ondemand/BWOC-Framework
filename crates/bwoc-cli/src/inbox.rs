@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use bwoc_core::workspace::AgentsRegistry;
 
 pub struct InboxArgs {
+    /// Empty when `--all`. The CLI shim enforces "exactly one of agent | all".
     pub agent: String,
     pub workspace: Option<PathBuf>,
     pub json: bool,
@@ -28,6 +29,12 @@ pub struct InboxArgs {
     ///   `if [ $(bwoc inbox alpha --count) -gt 0 ]; then ...`
     /// With `--json`, emits `{"count": N}`.
     pub count: bool,
+    /// Print every agent's inbox concatenated, each preceded by a
+    /// `=== <agent-id> (N message(s)) ===` header. Mutually exclusive
+    /// with `agent`. `--clear` and `--watch` are refused with `--all`
+    /// (no plausible safe semantics: mass-clear is too destructive;
+    /// mass-watch would interleave updates from many agents).
+    pub all: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +70,19 @@ pub fn run(args: InboxArgs) -> i32 {
 fn inbox(args: InboxArgs) -> Result<(), InboxError> {
     let workspace = resolve_workspace(args.workspace).ok_or(InboxError::NoWorkspace)?;
     let registry = AgentsRegistry::load(&workspace)?;
+
+    if args.all {
+        if args.clear || args.watch {
+            eprintln!(
+                "bwoc inbox --all: --clear and --watch are not supported with --all \
+                 (use `bwoc inbox <name> --clear` per agent, or `bwoc list --inbox-pending` \
+                 to find candidates)."
+            );
+            return Ok(());
+        }
+        return inbox_all(&workspace, &registry, args.json, args.limit);
+    }
+
     let lookup_id = if args.agent.starts_with("agent-") {
         args.agent.clone()
     } else {
@@ -212,6 +232,93 @@ fn print_envelope(idx: usize, m: &serde_json::Value) {
 /// Tail mode — block reading new envelopes from `inbox_path` past the
 /// last known count. Exit with Ctrl-C (default SIGINT terminates the
 /// process; no graceful state to flush since this is read-only).
+/// Print every agent's inbox concatenated. Per-agent header is
+/// `=== <agent-id> (N message(s)) ===`. Empty inboxes still get a
+/// header (so the user knows the agent was inspected — silent skipping
+/// is more confusing than a "0 message(s)" line).
+///
+/// `--json` shape:
+///   {
+///     "workspace": "<path>",
+///     "agents": [
+///       { "agent": "agent-foo", "inbox": "<path>", "total": N,
+///         "shown": M, "messages": [...] },
+///       ...
+///     ]
+///   }
+fn inbox_all(
+    workspace: &std::path::Path,
+    registry: &AgentsRegistry,
+    json: bool,
+    limit: Option<usize>,
+) -> Result<(), InboxError> {
+    if registry.agents.is_empty() {
+        if json {
+            let value = serde_json::json!({
+                "workspace": workspace.display().to_string(),
+                "agents": [],
+            });
+            println!("{}", serde_json::to_string_pretty(&value)?);
+        } else {
+            println!(
+                "bwoc inbox --all: no agents registered in {}.",
+                workspace.display()
+            );
+        }
+        return Ok(());
+    }
+
+    if json {
+        let mut per_agent: Vec<serde_json::Value> = Vec::with_capacity(registry.agents.len());
+        for entry in &registry.agents {
+            let inbox_path = workspace.join(&entry.path).join(".bwoc/inbox.jsonl");
+            let messages = read_messages(&inbox_path)?;
+            let view: Vec<&serde_json::Value> = if let Some(n) = limit {
+                messages.iter().rev().take(n).rev().collect()
+            } else {
+                messages.iter().collect()
+            };
+            per_agent.push(serde_json::json!({
+                "agent": entry.id,
+                "inbox": inbox_path.display().to_string(),
+                "total": messages.len(),
+                "shown": view.len(),
+                "messages": view,
+            }));
+        }
+        let value = serde_json::json!({
+            "workspace": workspace.display().to_string(),
+            "agents": per_agent,
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
+    // Human mode. One section per agent.
+    for entry in &registry.agents {
+        let inbox_path = workspace.join(&entry.path).join(".bwoc/inbox.jsonl");
+        let messages = read_messages(&inbox_path)?;
+        let view: Vec<&serde_json::Value> = if let Some(n) = limit {
+            messages.iter().rev().take(n).rev().collect()
+        } else {
+            messages.iter().collect()
+        };
+        println!();
+        println!("=== {} ({} message(s)) ===", entry.id, messages.len());
+        if messages.is_empty() {
+            continue;
+        }
+        for v in &view {
+            let ts = v.get("ts").and_then(|x| x.as_str()).unwrap_or("?");
+            let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");
+            let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("?");
+            println!("[{ts}] {from}: {msg}");
+        }
+    }
+    println!();
+    Ok(())
+}
+
 fn watch_inbox(inbox_path: &std::path::Path, mut idx: usize) -> Result<(), InboxError> {
     use std::time::Duration;
 

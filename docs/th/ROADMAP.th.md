@@ -75,12 +75,11 @@
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 | Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show` | อ่าน workspace memory จาก CLI: `list` (table + `--json`), `show <name>` (พร้อม refuse traversal); write/search CLI ยังค้างอยู่ |
+| `bwoc memory list \| show \| put \| search` | CLI read/write/search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json`), `show <name>`, `put <name>` (จาก stdin หรือ `--file`, atomic + `--force`), `search <query>` (substring แบบ case-insensitive); ทุก subcommand บังคับ flat-name + ห้าม traversal |
 
 ### ที่เหลือก่อน ship
 
 - **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
-- **CLI write + search ของ memory** — `bwoc memory list / show` ship แล้ว; `bwoc memory put <name>` (เขียนจาก stdin หรือ `--file`) และ `bwoc memory search <query>` (substring ทั่วทุก entry) ยังค้างอยู่
 - **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
 - **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
 - **Build Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` ใน release matrix

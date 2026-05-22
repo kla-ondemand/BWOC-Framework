@@ -75,12 +75,11 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc-agent --serve` Windows stub | Compiles + runs default mode; `--serve` returns exit 2 with "Unix-only" message |
 | `bwoc log <agent>` | Tails daemon stderr from `<agent>/.bwoc/agent.log`; `-f`/`--follow` for live streaming; `-n N` for last-N lines; `--clear` truncates in place |
 | Per-workspace memory scaffold | `bwoc init` creates `.bwoc/memory/` with a README documenting the 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show` | Read workspace memory entries from the CLI: `list` (table + `--json`), `show <name>` (with traversal refusal); write/search CLI still queued |
+| `bwoc memory list \| show \| put \| search` | Full read/write/search CLI for `.bwoc/memory/`: `list` (table + `--json`), `show <name>`, `put <name>` (from stdin or `--file`, atomic + `--force`), `search <query>` (case-insensitive substring); all enforce flat-name + no-traversal |
 
 ### Remaining for ship
 
 - **Restart-on-crash supervision** — the daemon currently exits on signal; auto-respawn / health-check loop not implemented.
-- **Memory write + search CLI** — `bwoc memory list / show` shipped; `bwoc memory put <name>` (write from stdin or `--file`) and `bwoc memory search <query>` (substring across entries) still pending.
 - **Cross-backend validation** — full uppāda + ṭhiti against all 4 backend CLIs in CI (proves Samānattatā).
 - **Code signing** — Apple notarization + Windows Authenticode for release artifacts (user-cert authorization required).
 - **Linux ARM / musl builds** — only `x86_64-unknown-linux-gnu` in the release matrix.

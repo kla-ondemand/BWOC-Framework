@@ -82,6 +82,12 @@ pub fn run(args: DoctorArgs) -> i32 {
                 for r in check_oversize_logs(&root, args.auto) {
                     results.push(r);
                 }
+                // Per-agent inbox size — WARN only. Inbox content is user
+                // data, not diagnostic chatter; --auto must NOT discard it
+                // silently. The user clears it manually via `bwoc inbox --clear`.
+                for r in check_oversize_inboxes(&root) {
+                    results.push(r);
+                }
             }
         }
         None => results.push(CheckResult {
@@ -554,6 +560,42 @@ fn check_oversize_logs(root: &Path, auto: bool) -> Vec<CheckResult> {
                 )),
             });
         }
+    }
+    out
+}
+
+/// Detect `<agent>/.bwoc/inbox.jsonl` files that have grown past
+/// `INBOX_BLOAT_BYTES`. Unlike `agent.log` (diagnostic chatter,
+/// truncatable by --auto), the inbox is **user data** — silently
+/// discarding it would lose messages. So this check is WARN-only;
+/// the fix is the user-driven `bwoc inbox <agent> --clear`.
+const INBOX_BLOAT_BYTES: u64 = 5 * 1024 * 1024; // 5 MiB
+
+fn check_oversize_inboxes(root: &Path) -> Vec<CheckResult> {
+    let Ok(registry) = AgentsRegistry::load(root) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for a in &registry.agents {
+        let inbox_path = root.join(&a.path).join(".bwoc/inbox.jsonl");
+        let Ok(meta) = std::fs::metadata(&inbox_path) else {
+            continue;
+        };
+        let size = meta.len();
+        if size <= INBOX_BLOAT_BYTES {
+            continue;
+        }
+        let size_mib = size as f64 / (1024.0 * 1024.0);
+        let bare = a.id.strip_prefix("agent-").unwrap_or(&a.id);
+        out.push(CheckResult {
+            name: format!("agent inbox: {}", a.id),
+            // Inbox is user data — do NOT offer --auto. Point at the
+            // user-driven `bwoc inbox --clear` instead.
+            status: Status::Warn(format!(
+                "{size_mib:.1} MiB at {} — `bwoc inbox {bare} --clear` to drain (user data; doctor will not auto-discard)",
+                inbox_path.display(),
+            )),
+        });
     }
     out
 }

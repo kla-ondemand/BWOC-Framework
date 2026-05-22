@@ -16,6 +16,7 @@ mod dashboard;
 mod doctor;
 mod help;
 mod i18n;
+mod inbox;
 mod init;
 mod new;
 mod ping;
@@ -92,6 +93,34 @@ enum Commands {
     Ping(PingArgs),
     /// Append a message to an agent's inbox (`.bwoc/inbox.jsonl`).
     Send(SendArgs),
+    /// Read messages from an agent's inbox (`.bwoc/inbox.jsonl`).
+    Inbox(InboxArgs),
+}
+
+#[derive(Args, Debug)]
+struct InboxArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human-readable layout.
+    #[arg(long)]
+    json: bool,
+    /// Show only the last N messages.
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+impl From<InboxArgs> for inbox::InboxArgs {
+    fn from(a: InboxArgs) -> Self {
+        Self {
+            agent: a.agent,
+            workspace: a.workspace,
+            json: a.json,
+            limit: a.limit,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -547,6 +576,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Send(args)) => {
             let code = send::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Inbox(args)) => {
+            let code = inbox::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

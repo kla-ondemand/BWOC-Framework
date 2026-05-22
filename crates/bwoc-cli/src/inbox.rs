@@ -1,0 +1,251 @@
+//! `bwoc inbox <agent>` — read companion to `bwoc send`.
+//!
+//! Reads `<agent>/.bwoc/inbox.jsonl` (JSON-lines format spec'd by
+//! `send.rs`), parses each line as one envelope, and prints them in
+//! send order. Malformed lines emit a warning to stderr but don't
+//! abort — the rest of the inbox is still readable.
+
+use std::io::BufRead;
+use std::path::PathBuf;
+
+use bwoc_core::workspace::AgentsRegistry;
+
+pub struct InboxArgs {
+    pub agent: String,
+    pub workspace: Option<PathBuf>,
+    pub json: bool,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InboxError {
+    #[error(
+        "no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+         Pass --workspace, set BWOC_WORKSPACE, or run `bwoc init` first."
+    )]
+    NoWorkspace,
+    #[error("no agent named '{name}' in workspace {workspace}")]
+    NotFound { name: String, workspace: PathBuf },
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("workspace error: {0}")]
+    Workspace(#[from] bwoc_core::workspace::WorkspaceError),
+    #[error("json error: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn run(args: InboxArgs) -> i32 {
+    match inbox(args) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("bwoc inbox: {e}");
+            match e {
+                InboxError::NoWorkspace | InboxError::NotFound { .. } => 2,
+                _ => 1,
+            }
+        }
+    }
+}
+
+fn inbox(args: InboxArgs) -> Result<(), InboxError> {
+    let workspace = resolve_workspace(args.workspace).ok_or(InboxError::NoWorkspace)?;
+    let registry = AgentsRegistry::load(&workspace)?;
+    let lookup_id = if args.agent.starts_with("agent-") {
+        args.agent.clone()
+    } else {
+        format!("agent-{}", args.agent)
+    };
+    let entry = registry
+        .agents
+        .iter()
+        .find(|a| a.id == lookup_id)
+        .ok_or_else(|| InboxError::NotFound {
+            name: args.agent.clone(),
+            workspace: workspace.clone(),
+        })?;
+
+    let inbox_path = workspace.join(&entry.path).join(".bwoc/inbox.jsonl");
+    let messages = read_messages(&inbox_path)?;
+
+    // Apply --limit (last N).
+    let view: Vec<&serde_json::Value> = if let Some(n) = args.limit {
+        messages.iter().rev().take(n).rev().collect()
+    } else {
+        messages.iter().collect()
+    };
+
+    if args.json {
+        let value = serde_json::json!({
+            "agent": entry.id,
+            "inbox": inbox_path.display().to_string(),
+            "total": messages.len(),
+            "shown": view.len(),
+            "messages": view,
+        });
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
+    println!();
+    println!("Inbox for {}: {} message(s)", entry.id, messages.len());
+    if let Some(n) = args.limit {
+        if view.len() < messages.len() {
+            println!("(showing last {} of {})", view.len(), messages.len());
+        } else {
+            let _ = n; // limit larger than count; suppress redundant note
+        }
+    }
+    println!("Source: {}", inbox_path.display());
+    println!();
+    if view.is_empty() {
+        println!("(no messages)");
+        println!();
+        return Ok(());
+    }
+    for (i, m) in view.iter().enumerate() {
+        let ts = m.get("ts").and_then(|v| v.as_str()).unwrap_or("—");
+        let from = m.get("from").and_then(|v| v.as_str()).unwrap_or("—");
+        let msg = m
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no message)");
+        println!("  [{}]  {ts}  ←  {from}", i + 1);
+        for line in msg.lines() {
+            println!("        {line}");
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// Read the inbox file line-by-line. Malformed lines warn-and-skip;
+/// missing file is treated as an empty inbox.
+fn read_messages(path: &std::path::Path) -> Result<Vec<serde_json::Value>, InboxError> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut out = Vec::new();
+    for (lineno, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(&line) {
+            Ok(v) => out.push(v),
+            Err(e) => {
+                eprintln!(
+                    "bwoc inbox: warning — line {} is malformed JSON, skipped ({e})",
+                    lineno + 1
+                );
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn resolve_workspace(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p);
+    }
+    if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+        if !env_path.is_empty() {
+            return Some(PathBuf::from(env_path));
+        }
+    }
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bwoc_core::workspace::{
+        AgentEntry, AgentsRegistry, Workspace, WorkspaceDefaults, WorkspaceMeta,
+    };
+    use std::fs;
+    use std::io::Write;
+
+    fn setup(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("bwoc-inbox-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".bwoc")).unwrap();
+        fs::create_dir_all(root.join("agents/agent-alpha/.bwoc")).unwrap();
+        Workspace {
+            workspace: WorkspaceMeta {
+                name: label.into(),
+                version: "0.1.0".into(),
+                created: "2026-05-22T00:00:00Z".into(),
+            },
+            defaults: WorkspaceDefaults::default(),
+        }
+        .save(&root)
+        .unwrap();
+        let mut reg = AgentsRegistry::default();
+        reg.agents.push(AgentEntry {
+            id: "agent-alpha".into(),
+            path: "agents/agent-alpha".into(),
+            backend: "claude".into(),
+            incarnated: "2026-05-22T00:00:00Z".into(),
+            status: "active".into(),
+        });
+        reg.save(&root).unwrap();
+        root
+    }
+
+    fn write_inbox(root: &PathBuf, lines: &[&str]) {
+        let p = root.join("agents/agent-alpha/.bwoc/inbox.jsonl");
+        let mut f = fs::File::create(p).unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+    }
+
+    #[test]
+    fn read_skips_malformed_lines_but_keeps_valid_ones() {
+        let root = setup("malformed");
+        write_inbox(
+            &root,
+            &[
+                r#"{"ts":"t1","from":"user","to":"agent-alpha","message":"hello"}"#,
+                "this is not json",
+                r#"{"ts":"t2","from":"user","to":"agent-alpha","message":"world"}"#,
+            ],
+        );
+        let msgs = read_messages(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0]["message"], "hello");
+        assert_eq!(msgs[1]["message"], "world");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_inbox_is_empty_not_error() {
+        let root = setup("missing");
+        let msgs = read_messages(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        assert!(msgs.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn limit_returns_last_n() {
+        // Direct slice-test of the limit logic (the run loop does it
+        // identically). 5 messages, limit 2 → last 2.
+        let msgs: Vec<serde_json::Value> = (0..5)
+            .map(|i| serde_json::json!({ "message": format!("m{i}") }))
+            .collect();
+        let view: Vec<&serde_json::Value> = msgs.iter().rev().take(2).rev().collect();
+        assert_eq!(view.len(), 2);
+        assert_eq!(view[0]["message"], "m3");
+        assert_eq!(view[1]["message"], "m4");
+    }
+}

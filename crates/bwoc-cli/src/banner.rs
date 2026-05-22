@@ -67,6 +67,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "send",
         "Append a message to an agent's inbox (.bwoc/inbox.jsonl)",
     ),
+    (
+        "inbox",
+        "Read messages from an agent's inbox (--limit N, --json supported)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

@@ -578,10 +578,11 @@ fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let workspace_line = match &app.workspace {
         Some(p) => {
             // Workspace-level counts surfacing the scaffolded dirs
-            // (`projects/` subdirs, `notes/` user .md files). 0 renders
-            // as "—" for visual quiet.
+            // (`projects/` subdirs, `notes/` user .md files, `.bwoc/memory/`
+            // entries). 0 renders as "—" for visual quiet.
             let projects = crate::livecheck::count_subdirs(&p.join("projects"));
             let notes = crate::livecheck::count_user_md_files(&p.join("notes"));
+            let memory = crate::livecheck::count_user_md_files(&p.join(".bwoc/memory"));
             let p_str = if projects == 0 {
                 "—".to_string()
             } else {
@@ -592,11 +593,17 @@ fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 notes.to_string()
             };
+            let m_str = if memory == 0 {
+                "—".to_string()
+            } else {
+                memory.to_string()
+            };
             format!(
-                "Workspace: {}  ·  projects: {}  ·  notes: {}",
+                "Workspace: {}  ·  projects: {}  ·  notes: {}  ·  memory: {}",
                 p.display(),
                 p_str,
-                n_str
+                n_str,
+                m_str
             )
         }
         None => "Workspace: (none — pass --workspace, set BWOC_WORKSPACE, or run `bwoc init`)"

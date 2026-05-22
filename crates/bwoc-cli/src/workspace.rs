@@ -92,6 +92,11 @@ fn info_json(root: &Path) -> i32 {
             "lang": ws.defaults.lang,
         },
         "agents_count": registry.agents.len(),
+        "resources": {
+            "projects": crate::livecheck::count_subdirs(&root.join("projects")),
+            "notes": crate::livecheck::count_user_md_files(&root.join("notes")),
+            "memory": crate::livecheck::count_user_md_files(&root.join(".bwoc/memory")),
+        },
         "agents": registry.agents.iter().map(|a| serde_json::json!({
             "id": a.id,
             "path": a.path,
@@ -519,6 +524,25 @@ fn info(
                 &[("id", &a.id), ("status", &a.status), ("path", &a.path)],
             )
         );
+    }
+    // Workspace-level resource counts (matching the dashboard banner).
+    // Only print when there's something to show — silent on empty so
+    // the human output stays uncluttered for fresh `bwoc init` workspaces.
+    let projects = crate::livecheck::count_subdirs(&root.join("projects"));
+    let notes = crate::livecheck::count_user_md_files(&root.join("notes"));
+    let memory = crate::livecheck::count_user_md_files(&root.join(".bwoc/memory"));
+    if projects > 0 || notes > 0 || memory > 0 {
+        println!();
+        println!("  Resources:");
+        if projects > 0 {
+            println!("    projects:    {projects}");
+        }
+        if notes > 0 {
+            println!("    notes:       {notes}");
+        }
+        if memory > 0 {
+            println!("    memory:      {memory}");
+        }
     }
     println!();
     Ok(())

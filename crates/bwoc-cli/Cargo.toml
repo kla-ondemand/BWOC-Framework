@@ -24,3 +24,8 @@ fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }
 include_dir = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# Integration smoke test (crates/bwoc-cli/tests/smoke.rs) — isolates the
+# end-to-end init/new/list path against a real tempdir.
+tempfile = "3"

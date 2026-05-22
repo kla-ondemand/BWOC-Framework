@@ -184,6 +184,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
                 (KeyCode::Char('r'), _) => app.refresh(),
                 (KeyCode::Char('t'), _) => open_in_tmux(app),
+                (KeyCode::Char('l'), _) => open_log_in_tmux(app),
                 (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                 (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
                 _ => {}
@@ -255,6 +256,60 @@ fn open_in_tmux(app: &mut App) {
                 "→ tmux window '{}' opened (backend: {})",
                 entry.id, entry.backend
             ));
+        }
+        Ok(s) => {
+            app.last_action = Some(format!("tmux new-window exited {s}"));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("tmux exec failed: {e}"));
+        }
+    }
+}
+
+/// `l` hotkey — open `bwoc log -f <agent>` in a new tmux window for the
+/// selected agent. Live tail of daemon stderr. Mirrors `open_in_tmux`
+/// (chat) — same workspace/tmux/selection guards, same feedback shape.
+fn open_log_in_tmux(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — nothing to tail)".to_string());
+        return;
+    };
+
+    if std::env::var_os("TMUX").is_none() {
+        app.last_action = Some(
+            "(not inside tmux — run `tmux new-session` first, then re-launch dashboard)"
+                .to_string(),
+        );
+        return;
+    }
+
+    let root_str = root.to_string_lossy().to_string();
+    let bare = entry.id.strip_prefix("agent-").unwrap_or(&entry.id);
+    let window_name = format!("{}-log", entry.id);
+    let result = std::process::Command::new("tmux")
+        .args([
+            "new-window",
+            "-n",
+            window_name.as_str(),
+            "--",
+            "bwoc",
+            "log",
+            bare,
+            "--workspace",
+            root_str.as_str(),
+            "--follow",
+        ])
+        .status();
+    match result {
+        Ok(s) if s.success() => {
+            app.last_action = Some(format!("→ tmux window '{window_name}' tailing log -f"));
         }
         Ok(s) => {
             app.last_action = Some(format!("tmux new-window exited {s}"));
@@ -748,7 +803,9 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::styled("↑↓/jk", bold),
         Span::raw(format!(" {nav}    ")),
         Span::styled("t", bold),
-        Span::raw(" talk (tmux)    "),
+        Span::raw(" talk    "),
+        Span::styled("l", bold),
+        Span::raw(" log    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
         Span::styled("q/Esc", bold),

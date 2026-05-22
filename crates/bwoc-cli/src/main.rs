@@ -513,6 +513,10 @@ struct StartArgs {
     /// Only flip registry status; do not spawn `bwoc-agent --serve`.
     #[arg(long = "no-daemon")]
     no_daemon: bool,
+    /// Emit JSON `{ workspace, agent, daemon_spawned, daemon_pid, ... }`
+    /// instead of the human report. Requires `--yes`. Single-agent only.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<StartArgs> for start::StartArgs {
@@ -523,6 +527,7 @@ impl From<StartArgs> for start::StartArgs {
             yes: a.yes,
             no_daemon: a.no_daemon,
             all: a.all,
+            json: a.json,
         }
     }
 }
@@ -543,6 +548,10 @@ struct StopArgs {
     /// Skip the interactive confirmation. Required for non-TTY (scripted) use.
     #[arg(long)]
     yes: bool,
+    /// Emit JSON `{ workspace, agent, daemon_outcome, registry_updated }`
+    /// instead of the human report. Requires `--yes`. Single-agent only.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<StopArgs> for stop::StopArgs {
@@ -552,6 +561,7 @@ impl From<StopArgs> for stop::StopArgs {
             workspace: a.workspace,
             yes: a.yes,
             all: a.all,
+            json: a.json,
         }
     }
 }

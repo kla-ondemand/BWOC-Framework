@@ -28,6 +28,9 @@ pub struct StartArgs {
     /// Start every stopped agent in the workspace. Mutually exclusive
     /// with `name`. Honors `--yes` and `--no-daemon`.
     pub all: bool,
+    /// Emit JSON `{ workspace, agent, daemon_spawned, daemon_pid, registry_updated }`
+    /// instead of the human report. Requires `--yes`. Single-agent only.
+    pub json: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -193,26 +196,31 @@ fn start(args: StartArgs) -> Result<(), StartError> {
     let already_active = entry.status == "active";
     let already_running = daemon_is_alive(&agent_path);
 
-    println!();
-    println!("About to start agent:");
-    println!("  id:       {}", entry.id);
-    println!("  path:     {}", entry.path);
-    println!("  backend:  {}", entry.backend);
-    if already_active {
-        println!("  status:   active (no change)");
-    } else {
-        println!("  status:   {} → active", entry.status);
+    if !args.json {
+        println!();
+        println!("About to start agent:");
+        println!("  id:       {}", entry.id);
+        println!("  path:     {}", entry.path);
+        println!("  backend:  {}", entry.backend);
+        if already_active {
+            println!("  status:   active (no change)");
+        } else {
+            println!("  status:   {} → active", entry.status);
+        }
+        if already_running {
+            println!("  daemon:   already running");
+        } else if args.no_daemon {
+            println!("  daemon:   --no-daemon (will NOT spawn)");
+        } else {
+            println!("  daemon:   will spawn `bwoc-agent --serve`");
+        }
+        println!();
     }
-    if already_running {
-        println!("  daemon:   already running");
-    } else if args.no_daemon {
-        println!("  daemon:   --no-daemon (will NOT spawn)");
-    } else {
-        println!("  daemon:   will spawn `bwoc-agent --serve`");
-    }
-    println!();
 
     if !args.yes {
+        if args.json {
+            return Err(StartError::Aborted);
+        }
         if !io::stdin().is_terminal() {
             return Err(StartError::Aborted);
         }
@@ -239,6 +247,22 @@ fn start(args: StartArgs) -> Result<(), StartError> {
     } else {
         Some(spawn_daemon(&agent_path)?)
     };
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": workspace.display().to_string(),
+            "agent": entry.id,
+            "daemon_spawned": daemon_spawned.is_some(),
+            "daemon_pid": daemon_spawned,
+            "already_running": already_running,
+            "registry_updated": !already_active,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+        );
+        return Ok(());
+    }
 
     println!();
     println!("Started: {}", entry.id);
@@ -390,6 +414,7 @@ mod tests {
         let root = setup_workspace("already", "active");
         let result = start(StartArgs {
             all: false,
+            json: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -404,6 +429,7 @@ mod tests {
         let root = setup_workspace("missing", "stopped");
         let err = start(StartArgs {
             all: false,
+            json: false,
             name: "zzz".into(),
             workspace: Some(root.clone()),
             yes: true,

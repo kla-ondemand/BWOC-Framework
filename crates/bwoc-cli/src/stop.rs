@@ -25,6 +25,11 @@ pub struct StopArgs {
     /// Stop every non-stopped agent in the workspace. Mutually exclusive
     /// with `name`. Still honors `--yes` for the mass-action confirm.
     pub all: bool,
+    /// Emit JSON `{ workspace, agent, daemon_outcome, registry_updated }`
+    /// instead of the human report. Requires `--yes` (scripted destructive
+    /// ops without explicit ack → exit 2). Single-agent only — `--all` +
+    /// `--json` falls back to the human report.
+    pub json: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -195,17 +200,24 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
     }
 
     let entry = registry.agents[idx].clone();
-    println!();
-    println!("About to stop agent:");
-    println!("  id:       {}", entry.id);
-    println!("  path:     {}", entry.path);
-    println!("  backend:  {}", entry.backend);
-    println!("  status:   {} → stopped", entry.status);
-    println!();
-    println!("Files stay on disk. Use `bwoc retire` to remove entirely.");
-    println!();
+    if !args.json {
+        println!();
+        println!("About to stop agent:");
+        println!("  id:       {}", entry.id);
+        println!("  path:     {}", entry.path);
+        println!("  backend:  {}", entry.backend);
+        println!("  status:   {} → stopped", entry.status);
+        println!();
+        println!("Files stay on disk. Use `bwoc retire` to remove entirely.");
+        println!();
+    }
 
     if !args.yes {
+        // --json mode requires --yes (no TTY prompt path is meaningful
+        // when JSON consumers script this).
+        if args.json {
+            return Err(StopError::Aborted);
+        }
         if !io::stdin().is_terminal() {
             return Err(StopError::Aborted);
         }
@@ -229,6 +241,28 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
 
     registry.agents[idx].status = "stopped".to_string();
     registry.save(&workspace)?;
+
+    let outcome_str = match stop_outcome {
+        StopOutcome::NotRunning => "not_running",
+        StopOutcome::SocketOk => "socket_ok",
+        StopOutcome::Sigterm => "sigterm",
+        StopOutcome::Sigkill => "sigkill",
+        StopOutcome::CouldNotKill => "could_not_kill",
+    };
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": workspace.display().to_string(),
+            "agent": entry.id,
+            "daemon_outcome": outcome_str,
+            "registry_updated": true,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+        );
+        return Ok(());
+    }
 
     println!();
     println!("Stopped: {}", entry.id);
@@ -440,6 +474,7 @@ mod tests {
                 workspace: Some(root.clone()),
                 yes: true,
                 all: false,
+                json: false,
             })
             .is_ok()
         );
@@ -456,6 +491,7 @@ mod tests {
             workspace: Some(root.clone()),
             yes: true,
             all: false,
+            json: false,
         })
         .unwrap();
         let err = stop(StopArgs {
@@ -463,6 +499,7 @@ mod tests {
             workspace: Some(root.clone()),
             yes: true,
             all: false,
+            json: false,
         });
         assert!(matches!(err, Err(StopError::AlreadyStopped { .. })));
         let _ = fs::remove_dir_all(&root);
@@ -476,6 +513,7 @@ mod tests {
             workspace: Some(root.clone()),
             yes: true,
             all: false,
+            json: false,
         });
         assert!(matches!(err, Err(StopError::NotFound { .. })));
         let _ = fs::remove_dir_all(&root);

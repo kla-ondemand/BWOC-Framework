@@ -36,6 +36,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("list", "List agents registered in the workspace"),
     ("workspace", "Inspect the workspace (info, validate)"),
+    (
+        "doctor",
+        "Diagnose environment + workspace, --auto to fix safe issues",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 mod banner;
 mod check;
+mod doctor;
 mod i18n;
 mod init;
 mod new;
@@ -56,6 +57,27 @@ enum Commands {
     },
     /// List agents registered in the enclosing workspace's agents.toml.
     List(ListArgs),
+    /// Diagnose environment + workspace; with `--auto`, fix safe issues in place.
+    Doctor(DoctorArgs),
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    /// Workspace root to diagnose. Defaults: BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    path: Option<PathBuf>,
+    /// Attempt to fix safe issues automatically (missing dirs, missing symlinks).
+    #[arg(long)]
+    auto: bool,
+}
+
+impl From<DoctorArgs> for doctor::DoctorArgs {
+    fn from(a: DoctorArgs) -> Self {
+        Self {
+            path: a.path,
+            auto: a.auto,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -249,6 +271,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::List(args)) => {
             let code = workspace::run_list(args.into_runtime(lang.clone()));
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Doctor(args)) => {
+            let code = doctor::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

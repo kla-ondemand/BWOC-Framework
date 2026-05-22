@@ -57,7 +57,7 @@
 | IPC control socket — protocol แบบ line-text | `PING`/`STATUS`/`STOP` ผ่าน Unix domain socket; debug ได้ด้วย `nc -U` |
 | `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query; `--all` พิมพ์ detail block ของทุก agent (loop ของ single-agent view; `[name]` กับ `--all` เป็น clap-mutex) |
 | `bwoc list` | registry view + runtime indicator + UPTIME column (5m12s เมื่อ alive) + INBOX count; filter `--running` / `--status` / `--backend` / `--inbox-pending` (รวมกันได้); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (เฉพาะจำนวนแถว) / `--names-only` (bare ids สำหรับ shell loop); JSON มี `uptime_seconds` ต่อ agent (nullable); ใช้ทั้ง human + `--json` |
-| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl` `send` body: inline `<msg>` หรือ `--file <path>` (clap mutex) `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count สำหรับ shell script) |
+| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl` `send` body: inline `<msg>` หรือ `--file <path>` (clap mutex) `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count สำหรับ shell script); `--all` พิมพ์ inbox ของทุก agent ต่อกัน พร้อม header (ปฏิเสธ `--clear` / `--watch`) |
 | `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale; WARN กรณี `agent.log` ใหญ่ (10 MiB, `--auto` truncate) + `inbox.jsonl` ใหญ่ (5 MiB, WARN-only — user data); `--json` สำหรับ shape stable ใช้ CI gating |
 | `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn; `--all` mass-start agent ที่ stopped ทั้งหมด |
 | `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon; `--all` mass-ping ทุก agent (not-running label แต่ไม่นับเป็น fail; protocol drift / connection error → exit 1) |
@@ -67,7 +67,7 @@
 | `--json` ครอบคลุม read-only commands | `list`, `status`, `workspace info`, `workspace validate`, `check` |
 | CI matrix | `ubuntu-latest` · `macos-latest` · `windows-latest` เขียวทุก push |
 | Release pipeline (CalVer) | `release.yml` trigger เมื่อ push tag `v<YYYY>.<M>.<D>-<patch>`; 4 binary cross-platform + `.sha256` → GitHub Release ที่สร้างอัตโนมัติ |
-| Help system (ใน binary) | 9 topic: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona` |
+| Help system (ใน binary) | 12 topic: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona`, `memory`, `doctor`, `script` |
 | Shell completion | `bwoc completion <bash\|zsh\|fish\|powershell\|elvish>` ผ่าน clap_complete |
 | `bwoc init` เขียน `.gitignore` | exclude daemon ephemerals (PID/socket/cursor) สำหรับ user workspace |
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | persona substitution + mindset/skill stub seeding ตอน incarnate |

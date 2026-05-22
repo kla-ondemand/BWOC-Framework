@@ -57,7 +57,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | IPC control socket — line-text protocol | `PING`/`STATUS`/`STOP` over Unix domain socket; debuggable with `nc -U` |
 | `bwoc status [name]` | Per-agent health + runtime indicator (●/○) + uptime via socket query; `--all` prints full detail block per agent (loop of single-agent view; `[name]` and `--all` are clap-mutex) |
 | `bwoc list` | Registry view with runtime indicator + UPTIME column (5m12s when alive) + INBOX count; filters `--running` / `--status` / `--backend` / `--inbox-pending` (combinable); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (row count) / `--names-only` (bare ids for shell iteration); JSON gains `uptime_seconds` per agent (nullable); honored by both human + `--json` |
-| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`. `send` body: inline `<msg>` OR `--file <path>` (clap mutex). `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count for shell scripts) |
+| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`. `send` body: inline `<msg>` OR `--file <path>` (clap mutex). `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count for shell scripts); `--all` prints every agent's inbox concatenated with per-agent headers (refuses `--clear` / `--watch`). |
 | `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
 | `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out; `--all` to mass-start every stopped agent |
 | `bwoc ping <name>` | CLI client for the daemon's PING command; `--all` mass-pings every agent (not-running labeled but not failed; protocol drift / connection errors → exit 1) |
@@ -67,7 +67,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `--json` across read-only commands | `list`, `status`, `workspace info`, `workspace validate`, `check` |
 | CI matrix | `ubuntu-latest` · `macos-latest` · `windows-latest` green on every push |
 | Release pipeline (CalVer) | `release.yml` triggers on `v<YYYY>.<M>.<D>-<patch>` tag; 4 cross-platform binaries + `.sha256` to auto-created GitHub Release |
-| Help system (in-binary) | 9 topics: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona` |
+| Help system (in-binary) | 12 topics: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona`, `memory`, `doctor`, `script` |
 | Shell completion | `bwoc completion <bash\|zsh\|fish\|powershell\|elvish>` via clap_complete |
 | `bwoc init` writes `.gitignore` | Excludes daemon ephemerals (PID/socket/cursor) for user workspaces |
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | Persona substitution + mindset/skill stub seeding at incarnation |

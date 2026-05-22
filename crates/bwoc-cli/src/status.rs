@@ -98,6 +98,12 @@ fn emit_json(root: &Path, registry: &AgentsRegistry, name: Option<&str>) -> i32 
             // whether `--scope` was set without re-parsing the manifest.
             let agent_path = root.join(&a.path);
             let manifest = Manifest::load_from_path(&agent_path.join("config.manifest.json")).ok();
+            let running = crate::livecheck::running_pid(root, a).is_some();
+            let uptime_seconds = if running {
+                crate::livecheck::query_uptime(root, a)
+            } else {
+                None
+            };
             let scope = manifest.as_ref().and_then(|m| m.scope_description.clone());
             let out_of_scope = manifest.as_ref().and_then(|m| m.out_of_scope.clone());
             serde_json::json!({
@@ -109,6 +115,8 @@ fn emit_json(root: &Path, registry: &AgentsRegistry, name: Option<&str>) -> i32 
                 "primary_model": primary_model,
                 "scope": scope,
                 "out_of_scope": out_of_scope,
+                "running": running,
+                "uptime_seconds": uptime_seconds,
                 "health": health_str,
                 "health_detail": health_detail,
                 "resources": {
@@ -156,14 +164,15 @@ fn print_all(root: &Path, registry: &AgentsRegistry) -> i32 {
     }
 
     println!(
-        "{:<24} {:<8} {:<10} {:<24} PATH",
-        "ID", "HEALTH", "BACKEND", "MODEL"
+        "{:<24} {:<8} {:<10} {:<9} {:<24} PATH",
+        "ID", "HEALTH", "BACKEND", "UPTIME", "MODEL"
     );
     println!(
-        "{:<24} {:<8} {:<10} {:<24} {}",
+        "{:<24} {:<8} {:<10} {:<9} {:<24} {}",
         "─".repeat(24),
         "─".repeat(8),
         "─".repeat(10),
+        "─".repeat(9),
         "─".repeat(24),
         "─".repeat(20),
     );
@@ -179,14 +188,18 @@ fn print_all(root: &Path, registry: &AgentsRegistry) -> i32 {
         if !matches!(health, Health::Ok) {
             unhealthy += 1;
         }
-        let live_mark = if crate::livecheck::running_pid(root, a).is_some() {
-            "●"
-        } else {
-            "○"
+        // Daemon liveness + uptime — same data path as `bwoc list` and
+        // the dashboard, keeping the 3 surfaces aligned.
+        let (live_mark, uptime) = match crate::livecheck::running_pid(root, a) {
+            Some(_) => match crate::livecheck::query_uptime(root, a) {
+                Some(secs) => ("●", crate::livecheck::format_uptime(secs)),
+                None => ("●", "?".to_string()),
+            },
+            None => ("○", "—".to_string()),
         };
         println!(
-            "{live_mark} {:<22} {:<8} {:<10} {:<24} {}",
-            a.id, mark, a.backend, model, a.path
+            "{live_mark} {:<22} {:<8} {:<10} {:<9} {:<24} {}",
+            a.id, mark, a.backend, uptime, model, a.path
         );
     }
     println!();

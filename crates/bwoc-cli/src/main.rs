@@ -654,6 +654,11 @@ struct RetireArgs {
     /// Mutually exclusive with `--keep-files`.
     #[arg(long = "keep-memory")]
     keep_memory: bool,
+    /// Emit JSON `{ workspace, agent, path, mode, registry_updated }`
+    /// instead of the human report. Requires `--yes` (scripted destructive
+    /// ops without explicit ack → exit 2).
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<RetireArgs> for retire::RetireArgs {
@@ -664,6 +669,7 @@ impl From<RetireArgs> for retire::RetireArgs {
             yes: a.yes,
             keep_files: a.keep_files,
             keep_memory: a.keep_memory,
+            json: a.json,
         }
     }
 }

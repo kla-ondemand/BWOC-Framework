@@ -28,6 +28,11 @@ pub struct RetireArgs {
     /// everything else. Lets users retire an agent while keeping the
     /// knowledge it accumulated. Mutually exclusive with `keep_files`.
     pub keep_memory: bool,
+    /// Emit JSON `{ workspace, agent, path, mode, registry_updated }`
+    /// instead of human output. With `--json`, the confirmation prompt
+    /// is bypassed only if `yes` is also set (refusing destructive
+    /// scripted use without `--yes` is a deliberate guard).
+    pub json: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,30 +91,43 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
 
     let entry = registry.agents[idx].clone();
     let agent_path = workspace.join(&entry.path);
-
-    // Confirmation.
-    println!();
-    println!("About to retire agent:");
-    println!("  id:       {}", entry.id);
-    println!("  path:     {} (relative to workspace)", entry.path);
-    println!("  backend:  {}", entry.backend);
-    println!("  status:   {}", entry.status);
-    println!();
-    if args.keep_files {
-        println!("Keeping files on disk; removing only the registry entry.");
+    let mode = if args.keep_files {
+        "keep_files"
     } else if args.keep_memory {
-        println!(
-            "Keeping just memories/; removing everything else under: {}",
-            agent_path.display()
-        );
+        "keep_memory"
     } else {
-        println!("This will DELETE the directory: {}", agent_path.display());
+        "delete"
+    };
+
+    // Confirmation (skipped in --json mode, which always requires --yes).
+    if !args.json {
+        println!();
+        println!("About to retire agent:");
+        println!("  id:       {}", entry.id);
+        println!("  path:     {} (relative to workspace)", entry.path);
+        println!("  backend:  {}", entry.backend);
+        println!("  status:   {}", entry.status);
+        println!();
+        if args.keep_files {
+            println!("Keeping files on disk; removing only the registry entry.");
+        } else if args.keep_memory {
+            println!(
+                "Keeping just memories/; removing everything else under: {}",
+                agent_path.display()
+            );
+        } else {
+            println!("This will DELETE the directory: {}", agent_path.display());
+        }
+        println!();
     }
-    println!();
 
     if !args.yes {
+        // --json mode requires --yes (destructive scripted use needs the
+        // explicit ack; refusing silently is safer than emitting "ok").
+        if args.json {
+            return Err(RetireError::Aborted);
+        }
         if !io::stdin().is_terminal() {
-            // Non-TTY without --yes: refuse to delete silently.
             return Err(RetireError::Aborted);
         }
         let mut stdout = io::stdout();
@@ -123,10 +141,7 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
         }
     }
 
-    // 1. File handling:
-    //    --keep-files   → leave dir intact
-    //    --keep-memory  → remove all top-level entries EXCEPT memories/
-    //    (default)      → remove the whole agent dir
+    // 1. File handling.
     if !args.keep_files && agent_path.exists() {
         if args.keep_memory {
             remove_all_except_memories(&agent_path)?;
@@ -138,6 +153,21 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
     // 2. Remove from registry.
     registry.agents.remove(idx);
     registry.save(&workspace)?;
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": workspace.display().to_string(),
+            "agent": entry.id,
+            "path": entry.path,
+            "mode": mode,
+            "registry_updated": true,
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+        );
+        return Ok(());
+    }
 
     println!();
     println!("Retired: {}", entry.id);
@@ -242,6 +272,7 @@ mod tests {
         let root = setup_workspace("removes");
         let args = RetireArgs {
             keep_memory: false,
+            json: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -263,6 +294,7 @@ mod tests {
         let root = setup_workspace("keep");
         let args = RetireArgs {
             keep_memory: false,
+            json: false,
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -284,6 +316,7 @@ mod tests {
         let root = setup_workspace("unknown");
         let args = RetireArgs {
             keep_memory: false,
+            json: false,
             name: "nonexistent".into(),
             workspace: Some(root.clone()),
             yes: true,
@@ -306,6 +339,7 @@ mod tests {
             let r = setup_workspace("idmatch");
             let args = RetireArgs {
                 keep_memory: false,
+                json: false,
                 name: name.into(),
                 workspace: Some(r.clone()),
                 yes: true,

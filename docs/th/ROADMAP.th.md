@@ -60,7 +60,7 @@
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl` `send` body: inline `<msg>` หรือ `--file <path>` (clap mutex) `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count สำหรับ shell script) |
 | `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale; WARN กรณี `agent.log` ใหญ่ (10 MiB, `--auto` truncate) + `inbox.jsonl` ใหญ่ (5 MiB, WARN-only — user data); `--json` สำหรับ shape stable ใช้ CI gating |
 | `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn; `--all` mass-start agent ที่ stopped ทั้งหมด |
-| `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
+| `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon; `--all` mass-ping ทุก agent (not-running label แต่ไม่นับเป็น fail; protocol drift / connection error → exit 1) |
 | `bwoc chat <name>` (+ `--tmux`) | resolve backend จาก registry; exec `bwoc spawn` |
 | `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + auto-refresh 2s + hotkey tmux `t/l/i` (chat / log -f / inbox --watch); transient `last_action` feedback ใน footer; banner แสดง attention pending count เมื่อมี agent ที่มีข้อความค้าง |
 | Daemon-side inbox watch + cursor | ประกาศ envelope ใหม่ไปยัง stderr; `.bwoc/inbox.cursor` รอด restart |
@@ -77,6 +77,7 @@
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 | Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
 | `bwoc memory list \| show \| put \| search \| rm` | CRUD+search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json` + `--count` + `--names-only` สำหรับ script iteration), `show <name>` หรือ `show --all` (header `# === <name> ===`; `--json` array), `put <name>` (3 source: inline positional > `--file` > stdin; mode: create / `--force` overwrite / `--append`; ทุก write atomic), `search <query>` (substring case-insensitive + `--json`), `rm <name>` (TTY confirm หรือ `--yes`); ทุก subcommand บังคับ flat-name + ห้าม traversal, refuse README.md |
+| `bwoc check --all` | Fleet-wide neutrality audit: วน workspace registry, run `audit()` ต่อ agent, รวมผลแบบ per-agent section + fleet summary; `--json` emit shape `{ agents[], summary }` ที่ structured Exit 1 ถ้ามี violations |
 
 ### ที่เหลือก่อน ship
 

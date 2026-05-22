@@ -60,7 +60,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`. `send` body: inline `<msg>` OR `--file <path>` (clap mutex). `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count for shell scripts) |
 | `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
 | `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out; `--all` to mass-start every stopped agent |
-| `bwoc ping <name>` | CLI client for the daemon's PING command |
+| `bwoc ping <name>` | CLI client for the daemon's PING command; `--all` mass-pings every agent (not-running labeled but not failed; protocol drift / connection errors → exit 1) |
 | `bwoc chat <name>` (+ `--tmux`) | Auto-resolves backend from registry; exec's `bwoc spawn` |
 | `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + 2s auto-refresh + `t/l/i` tmux hotkeys (chat / log -f / inbox --watch); transient `last_action` feedback in footer; banner shows attention pending count when any agent has unread messages |
 | Daemon-side inbox watch + cursor | Announces new envelopes to stderr; `.bwoc/inbox.cursor` survives restart |
@@ -77,6 +77,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc log <agent>` | Tails daemon stderr from `<agent>/.bwoc/agent.log`; `-f`/`--follow` for live streaming; `-n N` for last-N lines; `--clear` truncates in place |
 | Per-workspace memory scaffold | `bwoc init` creates `.bwoc/memory/` with a README documenting the 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
 | `bwoc memory list \| show \| put \| search \| rm` | Full CRUD+search CLI for `.bwoc/memory/`: `list` (table + `--json` + `--count` + `--names-only` for script iteration), `show <name>` or `show --all` (`# === <name> ===` headers; `--json` array), `put <name>` (3 sources: inline positional > `--file` > stdin; modes: create / `--force` overwrite / `--append`; all writes atomic), `search <query>` (case-insensitive substring + `--json`), `rm <name>` (TTY confirm or `--yes`); all enforce flat-name + no-traversal, refuse README.md |
+| `bwoc check --all` | Fleet-wide neutrality audit: iterates the workspace registry, runs `audit()` per agent, aggregates findings with per-agent sections + fleet summary; `--json` emits structured shape `{ agents[], summary }`. Exit 1 if any violations. |
 
 ### Remaining for ship
 

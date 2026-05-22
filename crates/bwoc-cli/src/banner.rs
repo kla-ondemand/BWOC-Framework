@@ -54,6 +54,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "dashboard",
         "Interactive TUI — agents list with navigation + refresh",
     ),
+    (
+        "stop",
+        "Pause an agent — set status = stopped without removing files",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

@@ -1,0 +1,17 @@
+[package]
+name = "bwoc-agent"
+description = "Minimal runtime that ships with each incarnated BWOC agent. Phase 1 v2.0 DoD: prints liveness from config.manifest.json."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bwoc-agent"
+path = "src/main.rs"
+
+[dependencies]
+bwoc-core = { workspace = true }
+fluent-bundle = { workspace = true }
+unic-langid = { workspace = true }

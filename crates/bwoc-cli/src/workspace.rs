@@ -1,0 +1,484 @@
+//! `bwoc workspace info` and `bwoc workspace validate`.
+//!
+//! Read-only inspection of a BWOC workspace. `info` dumps the resolved
+//! workspace path, config, and agent count. `validate` runs the five rules
+//! from `docs/en/WORKSPACE.en.md` §"Validation Rules" and exits 0 / 2.
+
+use std::path::{Path, PathBuf};
+
+use bwoc_core::workspace::{AgentsRegistry, Workspace};
+
+use crate::i18n;
+
+pub struct InfoArgs {
+    pub path: Option<PathBuf>,
+    pub lang: String,
+}
+
+pub struct ValidateArgs {
+    pub path: Option<PathBuf>,
+    pub lang: String,
+}
+
+pub struct ListArgs {
+    pub path: Option<PathBuf>,
+    pub lang: String,
+}
+
+pub fn run_info(args: InfoArgs) -> i32 {
+    let bundle = i18n::bundle_for(&args.lang);
+    let Some(root) = find_workspace_root(args.path) else {
+        // Error path stays English (thiserror localization deferred).
+        eprintln!(
+            "bwoc workspace info: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+             Pass a path, set BWOC_WORKSPACE, or run `bwoc init` first."
+        );
+        return 2;
+    };
+    match info(&root, &bundle) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("bwoc workspace info: {e}");
+            1
+        }
+    }
+}
+
+pub fn run_validate(args: ValidateArgs) -> i32 {
+    let bundle = i18n::bundle_for(&args.lang);
+    let Some(root) = find_workspace_root(args.path) else {
+        // Error path stays English (thiserror localization deferred).
+        eprintln!(
+            "bwoc workspace validate: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+             Pass a path, set BWOC_WORKSPACE, or run `bwoc init` first."
+        );
+        return 2;
+    };
+    let report = validate(&root);
+    print_validation_report(&root, &report, &bundle);
+    if report.violations.is_empty() { 0 } else { 2 }
+}
+
+pub fn run_list(args: ListArgs) -> i32 {
+    let bundle = i18n::bundle_for(&args.lang);
+
+    let Some(root) = find_workspace_root(args.path) else {
+        // Error path stays English (thiserror localization deferred).
+        eprintln!(
+            "bwoc list: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+             Pass --workspace <path>, set BWOC_WORKSPACE, or run `bwoc init` first."
+        );
+        return 2;
+    };
+
+    let registry = match AgentsRegistry::load(&root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "bwoc list: failed to read agents.toml at {}: {e}",
+                root.display()
+            );
+            return 1;
+        }
+    };
+
+    let root_display = root.display().to_string();
+    if registry.agents.is_empty() {
+        println!(
+            "{}",
+            i18n::t_with(&bundle, "list-empty", &[("path", &root_display)])
+        );
+        return 0;
+    }
+
+    println!(
+        "{:<32} {:<10} {:<10} {}",
+        i18n::t(&bundle, "list-col-id"),
+        i18n::t(&bundle, "list-col-status"),
+        i18n::t(&bundle, "list-col-backend"),
+        i18n::t(&bundle, "list-col-path"),
+    );
+    println!(
+        "{:<32} {:<10} {:<10} {}",
+        "─".repeat(32),
+        "─".repeat(10),
+        "─".repeat(10),
+        "─".repeat(20),
+    );
+    for a in &registry.agents {
+        println!("{:<32} {:<10} {:<10} {}", a.id, a.status, a.backend, a.path);
+    }
+    0
+}
+
+/// Resolve the workspace per `WORKSPACE.en.md` §"Workspace Resolution":
+/// explicit path → BWOC_WORKSPACE env → ancestor walk → cwd-self → None.
+fn find_workspace_root(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p);
+    }
+    if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+        let p = PathBuf::from(env_path);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InfoError {
+    #[error("path does not exist or is not a directory: {0}")]
+    PathMissing(PathBuf),
+    #[error("not a BWOC workspace (no .bwoc/workspace.toml): {0}")]
+    NotAWorkspace(PathBuf),
+    #[error("workspace error: {0}")]
+    Workspace(#[from] bwoc_core::workspace::WorkspaceError),
+}
+
+fn info(
+    root: &Path,
+    bundle: &fluent_bundle::FluentBundle<fluent_bundle::FluentResource>,
+) -> Result<(), InfoError> {
+    if !root.is_dir() {
+        return Err(InfoError::PathMissing(root.to_path_buf()));
+    }
+    if !root.join(".bwoc/workspace.toml").exists() {
+        return Err(InfoError::NotAWorkspace(root.to_path_buf()));
+    }
+    let ws = Workspace::load(root)?;
+    let registry = AgentsRegistry::load(root)?;
+
+    let root_display = root.display().to_string();
+    let agents_count = registry.agents.len().to_string();
+
+    println!();
+    println!(
+        "{}",
+        i18n::t_with(bundle, "info-header", &[("path", &root_display)])
+    );
+    let lbl = |key: &str| i18n::t(bundle, key);
+    println!("  {}:        {}", lbl("info-label-name"), ws.workspace.name);
+    println!(
+        "  {}:        {}",
+        lbl("info-label-version"),
+        ws.workspace.version
+    );
+    println!(
+        "  {}:        {}",
+        lbl("info-label-created"),
+        ws.workspace.created
+    );
+    if let Some(ref b) = ws.defaults.backend {
+        println!("  {}:        {b}", lbl("info-label-backend"));
+    }
+    if let Some(ref l) = ws.defaults.lang {
+        println!("  {}:        {l}", lbl("info-label-lang"));
+    }
+    println!(
+        "  {}:  {}",
+        lbl("info-label-agents-dir"),
+        ws.defaults.agents_dir
+    );
+    println!("  {}:      {}", lbl("info-label-agents"), agents_count);
+    for a in &registry.agents {
+        println!(
+            "    - {}",
+            i18n::t_with(
+                bundle,
+                "info-agent-row",
+                &[("id", &a.id), ("status", &a.status), ("path", &a.path)],
+            )
+        );
+    }
+    println!();
+    Ok(())
+}
+
+/// Structured validation findings.
+pub struct ValidationReport {
+    pub passes: Vec<String>,
+    pub violations: Vec<String>,
+}
+
+/// Run the 5 rules from `WORKSPACE.en.md` §Validation Rules.
+pub fn validate(root: &Path) -> ValidationReport {
+    let mut report = ValidationReport {
+        passes: Vec::new(),
+        violations: Vec::new(),
+    };
+
+    // Rule 1: .bwoc/ directory exists
+    let dot_bwoc = root.join(".bwoc");
+    if dot_bwoc.is_dir() {
+        report.passes.push(".bwoc/ exists".into());
+    } else {
+        report.violations.push(".bwoc/ directory missing".into());
+        return report; // Can't continue — short-circuit.
+    }
+
+    // Rule 2: .bwoc/workspace.toml exists, parses, has required fields
+    let ws_path = dot_bwoc.join("workspace.toml");
+    if !ws_path.is_file() {
+        report
+            .violations
+            .push(".bwoc/workspace.toml missing".into());
+        return report;
+    }
+    let ws = match Workspace::load(root) {
+        Ok(w) => {
+            report.passes.push(".bwoc/workspace.toml parses".into());
+            w
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!(".bwoc/workspace.toml invalid: {e}"));
+            return report;
+        }
+    };
+
+    if ws.workspace.name.is_empty() {
+        report.violations.push("workspace.name is empty".into());
+    } else {
+        report
+            .passes
+            .push(format!("workspace.name = {:?}", ws.workspace.name));
+    }
+    if ws.workspace.created.is_empty() {
+        report.violations.push("workspace.created is empty".into());
+    } else {
+        report
+            .passes
+            .push(format!("workspace.created = {:?}", ws.workspace.created));
+    }
+
+    // Rule 5: version is parseable SemVer (checked here since we have `ws` in hand)
+    if is_semver(&ws.workspace.version) {
+        report.passes.push(format!(
+            "workspace.version {} is valid SemVer",
+            ws.workspace.version
+        ));
+    } else {
+        report.violations.push(format!(
+            "workspace.version {:?} is not parseable SemVer (expect X.Y.Z)",
+            ws.workspace.version
+        ));
+    }
+
+    // Rule 3: .bwoc/agents.toml exists and parses
+    let agents_path = dot_bwoc.join("agents.toml");
+    if !agents_path.is_file() {
+        report.violations.push(".bwoc/agents.toml missing".into());
+    } else {
+        match AgentsRegistry::load(root) {
+            Ok(reg) => {
+                report.passes.push(format!(
+                    ".bwoc/agents.toml parses ({} agent(s))",
+                    reg.agents.len()
+                ));
+            }
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!(".bwoc/agents.toml invalid: {e}"));
+            }
+        }
+    }
+
+    // Rule 4: agents_dir exists (relative to root)
+    let agents_dir = root.join(&ws.defaults.agents_dir);
+    if agents_dir.is_dir() {
+        report
+            .passes
+            .push(format!("agents_dir {:?} exists", ws.defaults.agents_dir));
+    } else {
+        report.violations.push(format!(
+            "agents_dir {:?} (from workspace.toml [defaults]) does not exist",
+            ws.defaults.agents_dir
+        ));
+    }
+
+    report
+}
+
+fn is_semver(v: &str) -> bool {
+    let parts: Vec<&str> = v.splitn(3, '.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    // Each part must be a non-empty run of ASCII digits with no leading zero
+    // except "0" itself. SemVer also allows pre-release / build metadata after
+    // X.Y.Z, but for workspace versions we keep it strict.
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn print_validation_report(
+    root: &Path,
+    report: &ValidationReport,
+    bundle: &fluent_bundle::FluentBundle<fluent_bundle::FluentResource>,
+) {
+    let root_display = root.display().to_string();
+    let pass_label = i18n::t(bundle, "validate-label-pass");
+    let fail_label = i18n::t(bundle, "validate-label-fail");
+    let passes_count = report.passes.len().to_string();
+    let violations_count = report.violations.len().to_string();
+
+    println!();
+    println!(
+        "{}",
+        i18n::t_with(bundle, "validate-header", &[("path", &root_display)])
+    );
+    println!("===========================================");
+    for p in &report.passes {
+        println!("{pass_label}  {p}");
+    }
+    for v in &report.violations {
+        println!("{fail_label}  {v}");
+    }
+    println!("===========================================");
+    if report.violations.is_empty() {
+        println!(
+            "{}",
+            i18n::t_with(
+                bundle,
+                "validate-summary-success",
+                &[("passes", &passes_count)],
+            )
+        );
+    } else {
+        println!(
+            "{}",
+            i18n::t_with(
+                bundle,
+                "validate-summary-failure",
+                &[("passes", &passes_count), ("violations", &violations_count)],
+            )
+        );
+    }
+    println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::fs;
+
+    fn fresh_dir(label: &str) -> PathBuf {
+        let mut p = env::temp_dir();
+        p.push(format!("bwoc-ws-test-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn semver_validation() {
+        assert!(is_semver("0.1.0"));
+        assert!(is_semver("1.2.3"));
+        assert!(is_semver("0.0.0"));
+        assert!(!is_semver(""));
+        assert!(!is_semver("1.2"));
+        assert!(!is_semver("1.2.3.4"));
+        assert!(!is_semver("v1.2.3"));
+        assert!(!is_semver("1.2.x"));
+    }
+
+    #[test]
+    fn validate_missing_dot_bwoc() {
+        let dir = fresh_dir("missing");
+        let report = validate(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains(".bwoc/ directory missing"))
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_clean_workspace_passes() {
+        let dir = fresh_dir("clean");
+        // Set up a minimal valid workspace by hand.
+        let dot = dir.join(".bwoc");
+        fs::create_dir_all(&dot).unwrap();
+        fs::write(
+            dot.join("workspace.toml"),
+            r#"[workspace]
+name = "demo"
+version = "0.1.0"
+created = "2026-05-22T06:00:00Z"
+
+[defaults]
+agents_dir = "agents"
+"#,
+        )
+        .unwrap();
+        fs::write(dot.join("agents.toml"), "").unwrap();
+        fs::create_dir_all(dir.join("agents")).unwrap();
+        let report = validate(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "violations: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_workspace_root_walks_ancestors() {
+        let root = fresh_dir("walk");
+        let dot = root.join(".bwoc");
+        fs::create_dir_all(&dot).unwrap();
+        fs::write(
+            dot.join("workspace.toml"),
+            "[workspace]\nname=\"x\"\nversion=\"0.1.0\"\ncreated=\"x\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("nested/sub/dir")).unwrap();
+
+        // Explicit path takes precedence.
+        let explicit = find_workspace_root(Some(root.join("explicit")));
+        assert_eq!(explicit, Some(root.join("explicit")));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn validate_bad_semver_fails() {
+        let dir = fresh_dir("bad-semver");
+        let dot = dir.join(".bwoc");
+        fs::create_dir_all(&dot).unwrap();
+        fs::write(
+            dot.join("workspace.toml"),
+            r#"[workspace]
+name = "demo"
+version = "0.1"
+created = "2026-05-22T06:00:00Z"
+"#,
+        )
+        .unwrap();
+        fs::write(dot.join("agents.toml"), "").unwrap();
+        fs::create_dir_all(dir.join("agents")).unwrap();
+        let report = validate(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("not parseable SemVer"))
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

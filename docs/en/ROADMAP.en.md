@@ -57,7 +57,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | IPC control socket — line-text protocol | `PING`/`STATUS`/`STOP` over Unix domain socket; debuggable with `nc -U` |
 | `bwoc status [name]` | Per-agent health + runtime indicator (●/○) + uptime via socket query; `--all` prints full detail block per agent (loop of single-agent view; `[name]` and `--all` are clap-mutex) |
 | `bwoc list` | Registry view with runtime indicator + INBOX count; filters `--running` / `--status` / `--backend` / `--inbox-pending` (combinable); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (just the row count) / `--names-only` (bare ids for shell iteration); honored by both human + `--json` |
-| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` / `--count` (just the envelope count for shell scripts) |
+| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`. `send` body: inline `<msg>` OR `--file <path>` (clap mutex). `inbox`: `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count for shell scripts) |
 | `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
 | `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out; `--all` to mass-start every stopped agent |
 | `bwoc ping <name>` | CLI client for the daemon's PING command |
@@ -73,9 +73,10 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc new --scope / --out-of-scope / --mindsets / --skills` | Persona substitution + mindset/skill stub seeding at incarnation |
 | Shared `livecheck` module | Consolidated 5 copies of `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
 | `bwoc-agent --serve` Windows stub | Compiles + runs default mode; `--serve` returns exit 2 with "Unix-only" message |
+| `bwoc workspace info --path-only` | Emit just the resolved workspace root (one line, no decoration) — pairs with `cd "$(bwoc workspace info --path-only)"` shell idiom |
 | `bwoc log <agent>` | Tails daemon stderr from `<agent>/.bwoc/agent.log`; `-f`/`--follow` for live streaming; `-n N` for last-N lines; `--clear` truncates in place |
 | Per-workspace memory scaffold | `bwoc init` creates `.bwoc/memory/` with a README documenting the 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show \| put \| search \| rm` | Full CRUD+search CLI for `.bwoc/memory/`: `list` (table + `--json` + `--count` + `--names-only` for script iteration), `show <name>` or `show --all` (`# === <name> ===` headers; `--json` array), `put <name>` (stdin or `--file`, atomic + `--force`), `search <query>` (case-insensitive substring + `--json`), `rm <name>` (TTY confirm or `--yes`); all enforce flat-name + no-traversal, refuse README.md |
+| `bwoc memory list \| show \| put \| search \| rm` | Full CRUD+search CLI for `.bwoc/memory/`: `list` (table + `--json` + `--count` + `--names-only` for script iteration), `show <name>` or `show --all` (`# === <name> ===` headers; `--json` array), `put <name>` (3 sources: inline positional > `--file` > stdin; modes: create / `--force` overwrite / `--append`; all writes atomic), `search <query>` (case-insensitive substring + `--json`), `rm <name>` (TTY confirm or `--yes`); all enforce flat-name + no-traversal, refuse README.md |
 
 ### Remaining for ship
 

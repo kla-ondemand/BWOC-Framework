@@ -345,6 +345,20 @@ enum ProjectKind {
     Unknown,
 }
 
+impl ProjectKind {
+    /// User-facing name for the detected stack. Stays English (terms are
+    /// the stack's own brand names — "Rust", "Node", etc.).
+    fn display_name(self) -> &'static str {
+        match self {
+            ProjectKind::Rust => "Rust",
+            ProjectKind::Node => "Node",
+            ProjectKind::Python => "Python",
+            ProjectKind::Go => "Go",
+            ProjectKind::Unknown => "Unknown",
+        }
+    }
+}
+
 /// Detect the project kind from `start`, walking up to either a manifest
 /// hit or the enclosing workspace root (we don't escape the workspace).
 fn detect_project_kind(start: &Path) -> ProjectKind {
@@ -452,6 +466,18 @@ fn resolve(
     // four cmd prompts so the user can press Enter to accept them.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let kind = detect_project_kind(&cwd);
+    // Surface what we detected so the user knows *why* the defaults look
+    // the way they do (or why there aren't any). TTY-only — scripts don't
+    // need the line.
+    if tty {
+        let stack_name = kind.display_name();
+        let msg = if matches!(kind, ProjectKind::Unknown) {
+            i18n::t(bundle, "new-detect-unknown")
+        } else {
+            i18n::t_with(bundle, "new-detect-stack", &[("stack", stack_name)])
+        };
+        println!("{msg}");
+    }
     let lint_cmd = resolve_one(
         args.lint_cmd,
         "lintCmd",

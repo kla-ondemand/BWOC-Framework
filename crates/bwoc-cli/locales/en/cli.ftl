@@ -18,6 +18,8 @@ new-report-step-edit-persona = 3. Edit persona/README.md — define identity, do
 new-report-step-git = 4. git init && git add -A && git commit -m 'feat(agent): incarnate'
 new-prompt-format = { $key } ({ $desc }):{" "}
 new-prompt-format-with-default = { $key } ({ $desc }) [default: { $default }]:{" "}
+new-detect-stack = Detected project: { $stack } — defaults will be filled for lintCmd / formatCmd / testCmd / buildCmd (press Enter to accept each).
+new-detect-unknown = No project stack detected — please type each of lintCmd / formatCmd / testCmd / buildCmd manually.
 new-model-picker-header = Common { $backend } models (pick a number, or type a custom model name):
 new-model-picker-default-hint = (default: 1)
 

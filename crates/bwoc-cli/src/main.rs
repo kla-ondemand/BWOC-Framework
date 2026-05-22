@@ -798,6 +798,10 @@ struct InitArgs {
     /// Overwrite an existing workspace.toml.
     #[arg(long)]
     force: bool,
+    /// Emit JSON `{ workspace, name, version, defaults, files_created }`
+    /// instead of the human-readable creation report.
+    #[arg(long)]
+    json: bool,
 }
 
 impl InitArgs {
@@ -806,6 +810,7 @@ impl InitArgs {
             path: self.path,
             force: self.force,
             lang,
+            json: self.json,
         }
     }
 }

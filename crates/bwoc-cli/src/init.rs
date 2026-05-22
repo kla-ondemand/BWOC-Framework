@@ -17,6 +17,10 @@ pub struct InitArgs {
     pub path: Option<PathBuf>,
     pub force: bool,
     pub lang: String,
+    /// Emit JSON `{ workspace, name, version, defaults, files_created }`
+    /// instead of the human-readable creation report. Lets scripts chain
+    /// init → other commands without parsing the report.
+    pub json: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,9 +37,43 @@ pub enum InitError {
 
 pub fn run(args: InitArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
+    let json = args.json;
     match init(args) {
         Ok(ws_root) => {
             let path = ws_root.display().to_string();
+            if json {
+                // Load the workspace we just wrote to surface defaults
+                // verbatim — gives consumers the agents_dir/backend/lang
+                // configured at init time without a follow-up call.
+                let ws = Workspace::load(&ws_root).ok();
+                let defaults = ws.as_ref().map(|w| {
+                    serde_json::json!({
+                        "agents_dir": w.defaults.agents_dir,
+                        "backend": w.defaults.backend,
+                        "lang": w.defaults.lang,
+                    })
+                });
+                let value = serde_json::json!({
+                    "workspace": path,
+                    "name": ws.as_ref().map(|w| w.workspace.name.clone()),
+                    "version": ws.as_ref().map(|w| w.workspace.version.clone()),
+                    "defaults": defaults,
+                    "files_created": [
+                        ".bwoc/workspace.toml",
+                        ".bwoc/agents.toml",
+                        ".bwoc/memory/README.md",
+                        "agents/README.md",
+                        "projects/README.md",
+                        "notes/README.md",
+                        ".gitignore"
+                    ],
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+                );
+                return 0;
+            }
             println!();
             println!(
                 "{}",

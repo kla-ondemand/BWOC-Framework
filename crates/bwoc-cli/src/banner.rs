@@ -79,6 +79,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "log",
         "Tail an agent's daemon log (.bwoc/agent.log) — daemon stderr (-f / -n N)",
     ),
+    (
+        "memory",
+        "Read workspace-level memory (.bwoc/memory/) — list / show",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

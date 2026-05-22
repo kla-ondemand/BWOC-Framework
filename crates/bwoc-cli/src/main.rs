@@ -21,6 +21,7 @@ mod inbox;
 mod init;
 mod livecheck;
 mod log;
+mod memory;
 mod new;
 mod ping;
 mod retire;
@@ -102,6 +103,47 @@ enum Commands {
     Inbox(InboxArgs),
     /// Tail an agent's daemon log (`.bwoc/agent.log`) — daemon stderr.
     Log(LogArgs),
+    /// Read workspace-level memory (`.bwoc/memory/`).
+    #[command(subcommand)]
+    Memory(MemoryAction),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum MemoryAction {
+    /// List user-authored memory entries in `.bwoc/memory/`.
+    List {
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        /// Emit JSON instead of the human table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print one memory entry's contents to stdout.
+    Show {
+        /// Entry name (with or without `.md` extension).
+        name: String,
+        /// Workspace root. Resolution chain same as `memory list`.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+}
+
+impl MemoryAction {
+    fn into_runtime(self) -> memory::MemoryArgs {
+        match self {
+            MemoryAction::List { workspace, json } => memory::MemoryArgs {
+                action: memory::MemoryAction::List,
+                workspace,
+                json,
+            },
+            MemoryAction::Show { name, workspace } => memory::MemoryArgs {
+                action: memory::MemoryAction::Show(name),
+                workspace,
+                json: false,
+            },
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -686,6 +728,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Log(args)) => {
             let code = log::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Memory(action)) => {
+            let code = memory::run(action.into_runtime());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

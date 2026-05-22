@@ -85,6 +85,9 @@ struct App {
     last_refresh_error: Option<String>,
     bundle: FluentBundle<FluentResource>,
     last_refresh_at: Instant,
+    /// One-line transient feedback from the last user action (e.g. tmux
+    /// open result). Shown in the footer; cleared on next action.
+    last_action: Option<String>,
 }
 
 impl App {
@@ -97,6 +100,7 @@ impl App {
             last_refresh_error: None,
             bundle: i18n::bundle_for(&lang),
             last_refresh_at: Instant::now(),
+            last_action: None,
         };
         app.refresh();
         app
@@ -179,6 +183,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                 (KeyCode::Esc, _) => return Ok(()),
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
                 (KeyCode::Char('r'), _) => app.refresh(),
+                (KeyCode::Char('t'), _) => open_in_tmux(app),
                 (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                 (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
                 _ => {}
@@ -191,6 +196,71 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
         // removals appear without the user pressing `r`.
         if app.last_refresh_at.elapsed() >= AUTO_REFRESH_INTERVAL {
             app.refresh();
+        }
+    }
+}
+
+/// `t` hotkey — spawn `bwoc spawn` for the selected agent in a new tmux
+/// window. Auto-selects the LLM/model via the agent's manifest (`bwoc
+/// spawn` already does this — backend lookup from registry, model from
+/// manifest.primaryModel).
+///
+/// Requires `$TMUX` (the dashboard must itself be running inside a
+/// tmux session). Failure modes:
+///   - no `$TMUX`: updates `app.last_action` with a hint; no-op
+///   - no agent selected: no-op (silent)
+///   - tmux exec error: updates `app.last_action` with the error
+fn open_in_tmux(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — nothing to talk to)".to_string());
+        return;
+    };
+
+    if std::env::var_os("TMUX").is_none() {
+        app.last_action = Some(
+            "(not inside tmux — run `tmux new-session` first, then re-launch dashboard)"
+                .to_string(),
+        );
+        return;
+    }
+
+    let agent_path = root.join(&entry.path);
+    let agent_path_str = agent_path.to_string_lossy().to_string();
+    // `tmux new-window -n <name> -- bwoc spawn --path <p> --backend <b>`
+    // The trailing args after `--` are run as the new window's command.
+    let result = std::process::Command::new("tmux")
+        .args([
+            "new-window",
+            "-n",
+            entry.id.as_str(),
+            "--",
+            "bwoc",
+            "spawn",
+            "--path",
+            agent_path_str.as_str(),
+            "--backend",
+            entry.backend.as_str(),
+        ])
+        .status();
+    match result {
+        Ok(s) if s.success() => {
+            app.last_action = Some(format!(
+                "→ tmux window '{}' opened (backend: {})",
+                entry.id, entry.backend
+            ));
+        }
+        Ok(s) => {
+            app.last_action = Some(format!("tmux new-window exited {s}"));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("tmux exec failed: {e}"));
         }
     }
 }
@@ -560,6 +630,20 @@ fn draw_agents(f: &mut ratatui::Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    // When we have transient feedback from the last action (tmux open
+    // result, "not in tmux" hint, etc.), show that instead of the
+    // hotkey legend — the user just performed an action and wants to
+    // know what happened. The hotkey legend re-appears on next refresh.
+    if let Some(msg) = &app.last_action {
+        let p = Paragraph::new(Line::from(Span::styled(
+            msg.clone(),
+            Style::default().fg(Color::Cyan),
+        )))
+        .alignment(Alignment::Center);
+        f.render_widget(p, area);
+        return;
+    }
+
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let count = if app.agents.is_empty() {
         "0 agents".to_string()
@@ -575,6 +659,8 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::raw("    "),
         Span::styled("↑↓/jk", bold),
         Span::raw(format!(" {nav}    ")),
+        Span::styled("t", bold),
+        Span::raw(" talk (tmux)    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
         Span::styled("q/Esc", bold),

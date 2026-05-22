@@ -114,6 +114,15 @@ fn info_json(root: &Path) -> i32 {
             "notes": crate::livecheck::count_user_md_files(&root.join("notes")),
             "memory": crate::livecheck::count_user_md_files(&root.join(".bwoc/memory")),
         },
+        "attention": {
+            // Always present so consumers can branch on .attention.total_pending == 0.
+            "agents_needing_attention": registry.agents.iter()
+                .filter(|a| crate::livecheck::inbox_count(root, a) > 0)
+                .count(),
+            "total_pending": registry.agents.iter()
+                .map(|a| crate::livecheck::inbox_count(root, a) as u64)
+                .sum::<u64>(),
+        },
         "agents": registry.agents.iter().map(|a| serde_json::json!({
             "id": a.id,
             "path": a.path,
@@ -638,6 +647,28 @@ fn info(
             println!("    memory:      {memory}");
         }
     }
+
+    // Attention summary: agents with pending inbox envelopes. Surfaces
+    // "what needs reading?" at the workspace overview without forcing
+    // the user to scan the per-agent rows. Silent when nothing is
+    // pending (fresh / idle workspaces stay quiet).
+    let mut agents_needing_attention = 0u32;
+    let mut total_pending = 0u64;
+    for a in &registry.agents {
+        let c = crate::livecheck::inbox_count(root, a) as u64;
+        if c > 0 {
+            agents_needing_attention += 1;
+            total_pending += c;
+        }
+    }
+    if agents_needing_attention > 0 {
+        println!();
+        println!(
+            "  Attention: {agents_needing_attention} agent(s) have {total_pending} \
+             pending message(s) total. Run `bwoc list --inbox-pending` to see them.",
+        );
+    }
+
     println!();
     Ok(())
 }

@@ -172,25 +172,50 @@ bwoc-framwork/
 
 ## Getting Started
 
-### Install the CLI (one command)
+### Install the toolkit (one command)
 
 ```bash
 ./scripts/install.sh
 ```
 
-Equivalent to `cargo install --path crates/bwoc-cli --locked`. Requires a [Rust toolchain](https://rustup.rs/) on PATH. Installs the `bwoc` binary to `~/.cargo/bin/`.
+Installs both binaries (`bwoc` CLI + `bwoc-agent` daemon) to `~/.cargo/bin/`. Requires a [Rust toolchain](https://rustup.rs/) on PATH. The script also warns up front if `~/.cargo/bin` isn't on PATH.
+
+CLI-only install (skips the daemon, which is required for `bwoc start` to spawn `bwoc-agent --serve`):
+
+```bash
+cargo install --path crates/bwoc-cli --locked --force
+```
 
 ### As an Agent Author
 
-Either path — both produce the same canonical structure:
+```bash
+mkdir my-workspace && cd my-workspace
+bwoc init                 # creates .bwoc/workspace.toml + agents/ + scaffold dirs
+bwoc new alpha            # interactive: pickers for backend, role, primary model;
+                          # stack-detected defaults for lint/format/test/build
+bwoc start alpha          # flip status active + spawn bwoc-agent --serve
+bwoc list                 # ●/○ liveness + STATUS + BACKEND + INBOX + PATH
+bwoc status alpha         # detail + runtime: ● running (pid N, uptime Xs)
+```
+
+Press Enter through the `bwoc new` prompts to accept all suggested defaults — every required field has a picker or a stack-aware default.
 
 ```bash
-# Today (shell script, manual manifest edit)
-cd modules/agent-template && ./scripts/incarnate.sh <agent-name>
+# Send a message; tail the inbox in another terminal
+bwoc send alpha "please refactor src/lib.rs"
+bwoc inbox alpha --watch     # blocks; new messages appear live
 
-# Or (Rust CLI, manifest inputs as flags — Phase 1 v2.0 in progress)
-bwoc new <agent-name> --role "..." --primary-model "..." \
-  --lint-cmd "..." --format-cmd "..." --test-cmd "..." --build-cmd "..."
+# When done
+bwoc stop alpha              # signals daemon STOP + flips registry
+bwoc retire alpha            # removes from registry (+ optional file delete)
+```
+
+Run `bwoc help` for a list of in-binary topic guides (`getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`). Run `bwoc help <topic>` for any specific one.
+
+The original shell-script flow is still supported for raw template work:
+
+```bash
+cd modules/agent-template && ./scripts/incarnate.sh <agent-name>
 ```
 
 **Target: from clone to first configured commit in under 30 minutes.**

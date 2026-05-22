@@ -50,6 +50,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "Inbox flow: send · inbox · --watch · --clear (sammā-vācā Phase 0)",
         MESSAGING,
     ),
+    (
+        "persona",
+        "Per-agent identity: scope, out-of-scope, mindsets, skills",
+        PERSONA,
+    ),
 ];
 
 pub fn run(args: HelpArgs) -> i32 {
@@ -457,6 +462,69 @@ Interactive workflow (typical):
 
 See: bwoc help daemon     — what reads inbox.jsonl on the daemon side
      bwoc help lifecycle  — the state machine inbox commands work with
+";
+
+const PERSONA: &str = "\
+Per-agent identity — WHO the agent is, WHAT it does, HOW it thinks,
+what it KNOWS. Four slots live inside each incarnated agent's tree:
+
+  persona/README.md   identity + role + scope (single file)
+  mindsets/<*>.md     decision-making frameworks (one per file)
+  skills/<*>.md       concrete capabilities (one per file)
+  memories/<*>.md     accumulated knowledge (one per file)
+
+Configure these at incarnation time via `bwoc new` flags:
+
+  bwoc new <name> \\
+    --role 'code reviewer' \\
+    --scope 'review PR diffs and flag conventions violations' \\
+    --out-of-scope 'do refactors larger than the diff under review' \\
+    --mindsets verify-before-act,right-amount \\
+    --skills diff-review,test-author
+
+What each flag does:
+
+  --role STR           one-or-two-word agentRole (manifest field).
+                       picker default: \"code reviewer\".
+
+  --scope STR          one-line \"this agent DOES X\".
+                       fills {{scopeDescription}} in AGENTS.md and
+                       persona/README.md. Optional; empty leaves the
+                       placeholder raw for manual edit later.
+
+  --out-of-scope STR   one-line \"this agent DOES NOT do Y\".
+                       fills {{outOfScope}}. Optional.
+
+  --mindsets a,b,c     comma-separated kebab-case slugs. Creates
+                       mindsets/<slug>.md per slug with the SPEC.md
+                       scaffold (When to Apply / How to Apply /
+                       When NOT to Apply / Related Principles).
+                       Existing files are NOT clobbered.
+
+  --skills a,b,c       comma-separated kebab-case slugs. Creates
+                       skills/<slug>.md per slug (Domain / Inputs /
+                       Outputs / Verification Gates / Out of Scope).
+                       Maturity defaults to L1 per Ariya-dhana 7.
+
+All four flags are optional. Press Enter through any prompt to skip.
+
+The mindset and skill stubs are starting points — fill them in with
+domain knowledge. The dashboard's detail pane and `bwoc status <name>`
+both surface the resulting counts (mindsets/skills/memories) and the
+persona scope inline.
+
+Conceptual mapping:
+  persona     —  WHO (Khandha 5: identity aggregate)
+  mindsets    —  HOW (decision filters — Yoniso, Mattaññutā, Anattā)
+  skills      —  DOES (capabilities — Ariya-dhana 7 maturity ladder)
+  memories    —  KNOWS (Sappurisadhamma 7 — context held over time)
+
+Edit any of these any time after incarnation — they're plain `.md`
+under the agent's directory. The CLI doesn't gate edits; reads them
+on demand.
+
+See: bwoc help lifecycle  — when these get populated (new vs later)
+     bwoc help manifest   — config.manifest.json schema (scope lives there too)
 ";
 
 #[cfg(test)]

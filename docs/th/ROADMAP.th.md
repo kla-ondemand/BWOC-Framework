@@ -62,7 +62,7 @@
 | `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn; `--all` mass-start agent ที่ stopped ทั้งหมด |
 | `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
 | `bwoc chat <name>` (+ `--tmux`) | resolve backend จาก registry; exec `bwoc spawn` |
-| `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + auto-refresh 2s + hotkey tmux `t/l/i` (chat / log -f / inbox --watch); transient `last_action` feedback ใน footer |
+| `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + auto-refresh 2s + hotkey tmux `t/l/i` (chat / log -f / inbox --watch); transient `last_action` feedback ใน footer; banner แสดง attention pending count เมื่อมี agent ที่มีข้อความค้าง |
 | Daemon-side inbox watch + cursor | ประกาศ envelope ใหม่ไปยัง stderr; `.bwoc/inbox.cursor` รอด restart |
 | `--json` ครอบคลุม read-only commands | `list`, `status`, `workspace info`, `workspace validate`, `check` |
 | CI matrix | `ubuntu-latest` · `macos-latest` · `windows-latest` เขียวทุก push |

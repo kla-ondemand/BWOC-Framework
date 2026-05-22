@@ -333,6 +333,75 @@ fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Project stacks we recognise well enough to suggest lint/format/test/build
+/// defaults for. Detected by looking for a manifest file in `cwd` or any
+/// ancestor up to (and including) a `.bwoc/workspace.toml` boundary.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum ProjectKind {
+    Rust,
+    Node,
+    Python,
+    Go,
+    Unknown,
+}
+
+/// Detect the project kind from `start`, walking up to either a manifest
+/// hit or the enclosing workspace root (we don't escape the workspace).
+fn detect_project_kind(start: &Path) -> ProjectKind {
+    let mut cur = start.to_path_buf();
+    loop {
+        if cur.join("Cargo.toml").is_file() {
+            return ProjectKind::Rust;
+        }
+        if cur.join("package.json").is_file() {
+            return ProjectKind::Node;
+        }
+        if cur.join("pyproject.toml").is_file() || cur.join("requirements.txt").is_file() {
+            return ProjectKind::Python;
+        }
+        if cur.join("go.mod").is_file() {
+            return ProjectKind::Go;
+        }
+        // Don't escape the workspace boundary if we're inside one.
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return ProjectKind::Unknown;
+        }
+        if !cur.pop() {
+            return ProjectKind::Unknown;
+        }
+    }
+}
+
+/// Suggested default command for one of the build-related manifest fields.
+/// Returns `None` if the stack is `Unknown` or the field has no sensible
+/// default for this stack (e.g. Python has no canonical `build`).
+fn suggested_cmd(kind: ProjectKind, field: &str) -> Option<&'static str> {
+    match (kind, field) {
+        (ProjectKind::Rust, "lintCmd") => Some("cargo clippy --all-targets -- -D warnings"),
+        (ProjectKind::Rust, "formatCmd") => Some("cargo fmt --all -- --check"),
+        (ProjectKind::Rust, "testCmd") => Some("cargo test --workspace"),
+        (ProjectKind::Rust, "buildCmd") => Some("cargo build --workspace"),
+
+        (ProjectKind::Node, "lintCmd") => Some("npm run lint"),
+        (ProjectKind::Node, "formatCmd") => Some("npm run format -- --check"),
+        (ProjectKind::Node, "testCmd") => Some("npm test"),
+        (ProjectKind::Node, "buildCmd") => Some("npm run build"),
+
+        (ProjectKind::Python, "lintCmd") => Some("ruff check ."),
+        (ProjectKind::Python, "formatCmd") => Some("ruff format --check ."),
+        (ProjectKind::Python, "testCmd") => Some("pytest"),
+        // No canonical Python build cmd — leave for the user.
+        (ProjectKind::Python, "buildCmd") => None,
+
+        (ProjectKind::Go, "lintCmd") => Some("go vet ./..."),
+        (ProjectKind::Go, "formatCmd") => Some("gofmt -l ."),
+        (ProjectKind::Go, "testCmd") => Some("go test ./..."),
+        (ProjectKind::Go, "buildCmd") => Some("go build ./..."),
+
+        _ => None,
+    }
+}
+
 /// Fill in any missing required fields by interactive prompt (TTY) or fail
 /// fast with the list of missing fields (non-TTY).
 fn resolve(
@@ -375,13 +444,46 @@ fn resolve(
         }
     }
 
-    let role = resolve_one(args.role, "agentRole", &descriptions, tty, bundle)?;
+    let role = resolve_one(args.role, "agentRole", &descriptions, tty, bundle, None)?;
     let primary_model =
         resolve_primary_model(args.primary_model, args.backend, &descriptions, tty, bundle)?;
-    let lint_cmd = resolve_one(args.lint_cmd, "lintCmd", &descriptions, tty, bundle)?;
-    let format_cmd = resolve_one(args.format_cmd, "formatCmd", &descriptions, tty, bundle)?;
-    let test_cmd = resolve_one(args.test_cmd, "testCmd", &descriptions, tty, bundle)?;
-    let build_cmd = resolve_one(args.build_cmd, "buildCmd", &descriptions, tty, bundle)?;
+
+    // Detect the project stack once and feed sensible defaults into the
+    // four cmd prompts so the user can press Enter to accept them.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let kind = detect_project_kind(&cwd);
+    let lint_cmd = resolve_one(
+        args.lint_cmd,
+        "lintCmd",
+        &descriptions,
+        tty,
+        bundle,
+        suggested_cmd(kind, "lintCmd"),
+    )?;
+    let format_cmd = resolve_one(
+        args.format_cmd,
+        "formatCmd",
+        &descriptions,
+        tty,
+        bundle,
+        suggested_cmd(kind, "formatCmd"),
+    )?;
+    let test_cmd = resolve_one(
+        args.test_cmd,
+        "testCmd",
+        &descriptions,
+        tty,
+        bundle,
+        suggested_cmd(kind, "testCmd"),
+    )?;
+    let build_cmd = resolve_one(
+        args.build_cmd,
+        "buildCmd",
+        &descriptions,
+        tty,
+        bundle,
+        suggested_cmd(kind, "buildCmd"),
+    )?;
 
     Ok(Resolved {
         name: args.name,
@@ -404,12 +506,17 @@ fn resolve(
 
 /// Either return the already-supplied value, or interactively prompt
 /// (assumed to only be called when `tty` is true after fail-fast guard).
+///
+/// `suggestion` is an optional pre-filled default. When set, the prompt
+/// shows it as `[default: ...]` and an empty input accepts it instead of
+/// erroring. When `None`, empty input is rejected as before.
 fn resolve_one(
     cur: Option<String>,
     key: &str,
     descriptions: &HashMap<String, String>,
     tty: bool,
     bundle: &fluent_bundle::FluentBundle<fluent_bundle::FluentResource>,
+    suggestion: Option<&str>,
 ) -> Result<String, NewError> {
     if let Some(v) = cur {
         return Ok(v);
@@ -422,17 +529,28 @@ fn resolve_one(
         .get(key)
         .map(|s| s.as_str())
         .unwrap_or("required field");
-    let prompt = i18n::t_with(bundle, "new-prompt-format", &[("key", key), ("desc", desc)]);
+    let prompt = match suggestion {
+        Some(s) => i18n::t_with(
+            bundle,
+            "new-prompt-format-with-default",
+            &[("key", key), ("desc", desc), ("default", s)],
+        ),
+        None => i18n::t_with(bundle, "new-prompt-format", &[("key", key), ("desc", desc)]),
+    };
     let mut stdout = io::stdout();
     write!(stdout, "{prompt}")?;
     stdout.flush()?;
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
-    let trimmed = line.trim().to_string();
+    let trimmed = line.trim();
     if trimmed.is_empty() {
+        // Enter on a prompt with a suggestion → accept the suggestion.
+        if let Some(s) = suggestion {
+            return Ok(s.to_string());
+        }
         return Err(NewError::MissingFields(vec![key.to_string()]));
     }
-    Ok(trimmed)
+    Ok(trimmed.to_string())
 }
 
 /// Specialized prompt for `primaryModel` — shows a numbered list of common
@@ -685,6 +803,47 @@ mod tests {
             deep_memory_cmd: None,
             worktree_base: None,
         }
+    }
+
+    #[test]
+    fn detect_and_suggest() {
+        // Build a tmp dir for each known manifest file → assert detection.
+        let base = std::env::temp_dir().join(format!("bwoc-detect-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        for (manifest, expected) in [
+            ("Cargo.toml", ProjectKind::Rust),
+            ("package.json", ProjectKind::Node),
+            ("pyproject.toml", ProjectKind::Python),
+            ("go.mod", ProjectKind::Go),
+        ] {
+            let dir = base.join(manifest.replace('.', "_"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(manifest), "x").unwrap();
+            assert_eq!(detect_project_kind(&dir), expected, "for {manifest}");
+        }
+        // A bare dir with nothing → Unknown.
+        let bare = base.join("bare");
+        fs::create_dir_all(&bare).unwrap();
+        assert_eq!(detect_project_kind(&bare), ProjectKind::Unknown);
+        let _ = fs::remove_dir_all(&base);
+
+        // Catalog spot-checks: representative entries per stack + the gap.
+        assert_eq!(
+            suggested_cmd(ProjectKind::Rust, "lintCmd"),
+            Some("cargo clippy --all-targets -- -D warnings"),
+        );
+        assert_eq!(
+            suggested_cmd(ProjectKind::Node, "testCmd"),
+            Some("npm test")
+        );
+        assert_eq!(
+            suggested_cmd(ProjectKind::Go, "buildCmd"),
+            Some("go build ./..."),
+        );
+        // Python has no canonical build cmd by design — must return None.
+        assert_eq!(suggested_cmd(ProjectKind::Python, "buildCmd"), None);
+        // Unknown stack must always return None.
+        assert_eq!(suggested_cmd(ProjectKind::Unknown, "lintCmd"), None);
     }
 
     #[test]

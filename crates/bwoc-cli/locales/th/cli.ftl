@@ -17,6 +17,7 @@ new-report-step-edit-agents = 2. แก้ AGENTS.md Section 1 — กรอก 
 new-report-step-edit-persona = 3. แก้ persona/README.md — กำหนด identity, domain, boundary
 new-report-step-git = 4. git init && git add -A && git commit -m 'feat(agent): incarnate'
 new-prompt-format = { $key } ({ $desc }):{" "}
+new-prompt-format-with-default = { $key } ({ $desc }) [ค่าเริ่มต้น: { $default }]:{" "}
 new-model-picker-header = model ที่ใช้บ่อยสำหรับ { $backend } (เลือกตัวเลข หรือพิมพ์ชื่อ model เอง):
 new-model-picker-default-hint = (ค่าเริ่มต้น: 1)
 

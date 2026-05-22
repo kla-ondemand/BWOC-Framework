@@ -1,20 +1,22 @@
-//! `bwoc memory list|show <name>` — workspace-level memory access.
+//! `bwoc memory list|show|put|search` — workspace-level memory access.
 //!
-//! Reads `.bwoc/memory/` (scaffolded by `bwoc init`). Per the
+//! Reads + writes `.bwoc/memory/` (scaffolded by `bwoc init`). Per the
 //! WORKSPACE.en.md spec §"Central Memory", this is the per-workspace
 //! tier — knowledge shared across all agents in the workspace.
 //!
-//! Two read commands ship now:
-//!   - `bwoc memory list`            — names + sizes of *.md files
-//!   - `bwoc memory show <name>`     — print one file's contents
+//! Commands:
+//!   - `bwoc memory list`              — names + sizes (table or `--json`)
+//!   - `bwoc memory show <name>`       — print one file's contents
+//!   - `bwoc memory put <name>`        — write from `--file` or stdin
+//!   - `bwoc memory search <query>`    — substring match across entries
 //!
-//! Write (`put`) is deliberately deferred — the directory is plain
-//! Markdown, so `cat > .bwoc/memory/<name>.md` from any shell works
-//! today. The CLI exists for *reading* (which agents need at runtime)
-//! and for keeping users from having to remember the path layout.
+//! All commands operate strictly inside `.bwoc/memory/`. Name traversal
+//! (`/`, `\`, leading `.`) is refused before any file-system access.
+//! Atomic write (stage to `.tmp` → rename) so a failed write never
+//! leaves half-state. `put` refuses overwrite without `--force`.
 //!
-//! README.md inside the dir is intentionally exempted from `list`
-//! output — it's slot-level documentation, not a memory entry.
+//! README.md inside the dir is intentionally exempted from `list` and
+//! `search` — it's slot-level documentation, not a memory entry.
 
 use std::path::{Path, PathBuf};
 
@@ -33,6 +35,8 @@ pub enum MemoryAction {
         source: PutSource,
         force: bool,
     },
+    /// Substring search across all memory entries. Case-insensitive.
+    Search(String),
 }
 
 /// Where `put` reads the new entry's content from.
@@ -69,7 +73,86 @@ pub fn run(args: MemoryArgs) -> i32 {
             source,
             force,
         } => put(&memory_dir, &name, source, force),
+        MemoryAction::Search(query) => search(&memory_dir, &query, args.json),
     }
+}
+
+/// Substring search across all `.md` entries (excluding README.md). Prints
+/// `<name>:<line>:<content>` per match in human mode; structured shape in
+/// `--json`. Case-insensitive. Exit 0 even when no matches (an empty
+/// search isn't an error — `grep`'s pattern).
+fn search(memory_dir: &Path, query: &str, json: bool) -> i32 {
+    let needle = query.to_lowercase();
+    let Ok(read) = std::fs::read_dir(memory_dir) else {
+        eprintln!(
+            "bwoc memory search: failed to read {}",
+            memory_dir.display()
+        );
+        return 1;
+    };
+
+    let mut hits: Vec<(String, usize, String)> = Vec::new();
+    let mut entry_paths: Vec<(String, PathBuf)> = read
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".md") || name == "README.md" {
+                return None;
+            }
+            Some((name, e.path()))
+        })
+        .collect();
+    entry_paths.sort_by(|a, b| a.0.cmp(&b.0));
+
+    for (name, path) in &entry_paths {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in content.lines().enumerate() {
+            if line.to_lowercase().contains(&needle) {
+                hits.push((name.clone(), idx + 1, line.to_string()));
+            }
+        }
+    }
+
+    if json {
+        let value = serde_json::json!({
+            "query": query,
+            "hits": hits
+                .iter()
+                .map(|(n, l, s)| serde_json::json!({
+                    "name": n,
+                    "line": l,
+                    "content": s,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc memory search --json: serialize failed: {e}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if hits.is_empty() {
+        println!("(no matches for '{query}' in {})", memory_dir.display());
+        return 0;
+    }
+    println!();
+    for (name, line, content) in &hits {
+        println!("{name}:{line}: {content}");
+    }
+    println!();
+    println!(
+        "{} match{} for '{query}'.",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "es" },
+    );
+    println!();
+    0
 }
 
 /// Write a memory entry. Refuses traversal patterns + dot-prefix

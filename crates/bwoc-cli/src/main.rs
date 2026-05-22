@@ -141,6 +141,17 @@ enum MemoryAction {
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
     },
+    /// Substring search across memory entries (case-insensitive).
+    Search {
+        /// Substring to look for in any entry's content.
+        query: String,
+        /// Workspace root. Resolution chain same as `memory list`.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        /// Emit JSON instead of the human-readable grep-style output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 impl MemoryAction {
@@ -176,6 +187,15 @@ impl MemoryAction {
                     json: false,
                 }
             }
+            MemoryAction::Search {
+                query,
+                workspace,
+                json,
+            } => memory::MemoryArgs {
+                action: memory::MemoryAction::Search(query),
+                workspace,
+                json,
+            },
         }
     }
 }

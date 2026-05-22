@@ -553,10 +553,19 @@ Commands:
   bwoc memory list                    list entries (NAME / SIZE table)
   bwoc memory list --json             same as a JSON object
   bwoc memory show <name>             print one entry to stdout
+  bwoc memory put <name>              write from stdin (or `--file <p>`); `--force` overwrites
+  bwoc memory search <query>          substring match across entries (case-insensitive)
 
-Entry name in `show` accepts `<name>` or `<name>.md` interchangeably.
-Path traversal is refused: names with `/`, `\\`, or a leading `.`
-exit 2 with an error before any read attempt.
+Entry name in `show` / `put` accepts `<name>` or `<name>.md`
+interchangeably. Path traversal is refused: names with `/`, `\\`,
+or a leading `.` exit 2 with an error before any file-system access.
+
+`put` is atomic: stages to `<name>.md.tmp` then renames, so a
+failed write never leaves a half-written entry. Refuses overwrite
+without `--force`.
+
+`search` prints `<name>:<line>:<content>` per match (grep-style)
+or a JSON object with `--json`. Empty result is exit 0, not an error.
 
 Read API for agents:
   Agents read these files like any other Markdown — no parsing,
@@ -565,14 +574,11 @@ Read API for agents:
   backend CLI will have the workspace in their cwd, so reads are
   relative-path simple.
 
-Write convention (no CLI yet):
-  `bwoc memory put <name>` is queued. Until it ships, write entries
-  with any text editor or `cat`:
-      cat > .bwoc/memory/team-style.md <<EOF
-      # Team style
-      - 2-space indent in TypeScript
-      - PR titles use Conventional Commits
-      EOF
+Write API for agents / users:
+  `bwoc memory put <name>` accepts either `--file <path>` or stdin.
+  Both shapes are common:
+      echo 'team-style: 2-space indent' | bwoc memory put team-style
+      bwoc memory put deploy --file ./deploy-recipe.md
 
   The directory is gitignored or tracked by team preference — there
   is no special ceremony.

@@ -6,7 +6,7 @@ A framework for building AI coding agents grounded in Buddhist philosophy as an 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#tech-stack)
 [![Docs](https://img.shields.io/badge/docs-EN%20%7C%20TH-blue.svg)](modules/agent-template/docs/)
-[![Status](https://img.shields.io/badge/status-Phase%201%20v2.0-yellow.svg)](#status)
+[![Status](https://img.shields.io/badge/status-Phase%202%20ṭhiti-yellow.svg)](#status)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 Buddhist principles are used here as **engineering thinking aids** — not religious interpretation. Pali terms are section names; the content is technical.
@@ -22,7 +22,7 @@ Buddhist principles are used here as **engineering thinking aids** — not relig
 - [The 22 Frameworks](#the-22-frameworks)
 - [Stack Diagram](#stack-diagram)
 - [Five Principles to Know First](#five-principles-to-know-first)
-- [Repository Structure](#repository-structure)
+- [Repository & Workspace Layout](#repository--workspace-layout)
 - [Getting Started](#getting-started)
 - [Reading Paths](#reading-paths)
 - [Security Rules (Sīla 5)](#security-rules-sīla-5)
@@ -243,7 +243,7 @@ bwoc stop alpha              # signals daemon STOP + flips registry
 bwoc retire alpha            # removes from registry (+ optional file delete)
 ```
 
-Run `bwoc help` for a list of in-binary topic guides (`getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`). Run `bwoc help <topic>` for any specific one.
+Run `bwoc help` for the topic index. Ten guides ship in-binary: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona`, `memory`. Run `bwoc help <topic>` for any specific one.
 
 The original shell-script flow is still supported for raw template work:
 

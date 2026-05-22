@@ -529,8 +529,13 @@ fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i3
     }
 
     if json {
+        // Aggregate stats: useful for CI/monitoring ("is memory bloated?")
+        // without re-walking the entries client-side.
+        let total_bytes: u64 = entries.iter().map(|(_, s)| *s).sum();
         let value = serde_json::json!({
             "workspace_memory_dir": memory_dir.display().to_string(),
+            "count": entries.len(),
+            "total_bytes": total_bytes,
             "entries": entries
                 .iter()
                 .map(|(n, s)| serde_json::json!({ "name": n, "size_bytes": s }))

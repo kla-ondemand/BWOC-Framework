@@ -75,6 +75,13 @@ fn emit_json(root: &Path, registry: &AgentsRegistry, name: Option<&str>) -> i32 
                 Health::Fail(m) => ("fail", Some(m.as_str())),
             };
             let primary_model = read_primary_model(root, a);
+            // Surface persona scope + resource counts (mirror of the
+            // human-readable detail). Lets JSON consumers branch on
+            // whether `--scope` was set without re-parsing the manifest.
+            let agent_path = root.join(&a.path);
+            let manifest = Manifest::load_from_path(&agent_path.join("config.manifest.json")).ok();
+            let scope = manifest.as_ref().and_then(|m| m.scope_description.clone());
+            let out_of_scope = manifest.as_ref().and_then(|m| m.out_of_scope.clone());
             serde_json::json!({
                 "id": a.id,
                 "path": a.path,
@@ -82,8 +89,15 @@ fn emit_json(root: &Path, registry: &AgentsRegistry, name: Option<&str>) -> i32 
                 "status": a.status,
                 "incarnated": a.incarnated,
                 "primary_model": primary_model,
+                "scope": scope,
+                "out_of_scope": out_of_scope,
                 "health": health_str,
                 "health_detail": health_detail,
+                "resources": {
+                    "mindsets": crate::livecheck::count_user_md_files(&agent_path.join("mindsets")),
+                    "skills": crate::livecheck::count_user_md_files(&agent_path.join("skills")),
+                    "memories": crate::livecheck::count_user_md_files(&agent_path.join("memories")),
+                },
             })
         })
         .collect();
@@ -220,9 +234,44 @@ fn print_one(root: &Path, registry: &AgentsRegistry, name: &str) -> i32 {
             println!("    testCmd:        {}", m.test_cmd);
             println!("    buildCmd:       {}", m.build_cmd);
             println!("    version:        {}", m.version);
+            // Persona scope (when user supplied `--scope`/`--out-of-scope`
+            // at `bwoc new` time; otherwise omitted — the {{placeholder}}
+            // fallback isn't useful here).
+            if let Some(scope) = &m.scope_description {
+                println!("    scope:          {scope}");
+            }
+            if let Some(out) = &m.out_of_scope {
+                println!("    outOfScope:     {out}");
+            }
         }
         Err(e) => println!("  Manifest:    (failed to read: {e})"),
     }
+
+    // Resource counts — mindsets / skills / memories. Mirror of the
+    // dashboard detail pane. Only printed when at least one is non-zero
+    // (avoid noise on fresh-from-template agents).
+    let resources = [
+        (
+            "mindsets",
+            crate::livecheck::count_user_md_files(&agent_path.join("mindsets")),
+        ),
+        (
+            "skills",
+            crate::livecheck::count_user_md_files(&agent_path.join("skills")),
+        ),
+        (
+            "memories",
+            crate::livecheck::count_user_md_files(&agent_path.join("memories")),
+        ),
+    ];
+    if resources.iter().any(|(_, n)| *n > 0) {
+        println!();
+        println!("  Resources:");
+        for (label, n) in &resources {
+            println!("    {label:<14}  {n}");
+        }
+    }
+
     println!();
     println!("  Health:");
     match &health {

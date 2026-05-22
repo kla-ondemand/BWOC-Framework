@@ -1,17 +1,26 @@
 //! `bwoc-agent` — minimal runtime shipped with each incarnated BWOC agent.
 //!
-//! Phase 1 v2.0 DoD: read `config.manifest.json` from the current directory
-//! and print structured liveness with the agent identity. The full task-loop
-//! and control-socket responsibilities land in Phase 2.
+//! Two modes:
+//!   - **default** (no args): print the liveness banner from
+//!     `config.manifest.json` in cwd and exit. Phase 1 v2.0 DoD.
+//!   - **--serve**: write `<cwd>/.bwoc/agent.pid` and block until
+//!     SIGTERM / SIGINT. This is the first foundation step toward
+//!     Phase 2's control socket — `bwoc status` can detect a running
+//!     agent via the PID file + signal-0 liveness test even before
+//!     the full IPC protocol lands.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use bwoc_core::manifest::Manifest;
 
 mod i18n;
 
 fn main() -> ExitCode {
+    let serve = std::env::args().any(|a| a == "--serve");
     let lang = i18n::resolve_lang();
     let bundle = i18n::bundle_for(&lang);
 
@@ -30,7 +39,6 @@ fn main() -> ExitCode {
     let manifest = match Manifest::load_from_path(&manifest_path) {
         Ok(m) => m,
         Err(e) => {
-            // Parse-error path stays English (thiserror localization deferred).
             eprintln!(
                 "bwoc-agent: failed to load manifest at {}: {e}",
                 manifest_path.display()
@@ -40,6 +48,64 @@ fn main() -> ExitCode {
     };
 
     println!("{}", liveness_banner(&manifest, &bundle));
+
+    if serve {
+        return serve_loop(&cwd);
+    }
+    ExitCode::SUCCESS
+}
+
+/// `--serve` mode: write a PID file under `.bwoc/agent.pid` and block
+/// until SIGTERM / SIGINT. Removes the PID file on graceful exit.
+///
+/// This is the Phase 2 foundation. The control socket (real IPC for
+/// `bwoc status` / `log` / `send` / `stop`) lands later; for now the
+/// PID file alone is enough to surface "running" vs "not running"
+/// state to the CLI.
+fn serve_loop(cwd: &std::path::Path) -> ExitCode {
+    let bwoc_dir = cwd.join(".bwoc");
+    if let Err(e) = std::fs::create_dir_all(&bwoc_dir) {
+        eprintln!("bwoc-agent --serve: failed to create .bwoc/: {e}");
+        return ExitCode::from(1);
+    }
+    let pid_path = bwoc_dir.join("agent.pid");
+    let pid = std::process::id();
+    if let Err(e) = std::fs::write(&pid_path, format!("{pid}\n")) {
+        eprintln!(
+            "bwoc-agent --serve: failed to write {}: {e}",
+            pid_path.display()
+        );
+        return ExitCode::from(1);
+    }
+    eprintln!(
+        "bwoc-agent --serve: pid {pid} written to {}",
+        pid_path.display()
+    );
+    eprintln!("bwoc-agent --serve: blocking on SIGTERM / SIGINT (Ctrl-C)");
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    if let Err(e) = ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }) {
+        eprintln!("bwoc-agent --serve: failed to install signal handler: {e}");
+        // Best-effort cleanup before bailing.
+        let _ = std::fs::remove_file(&pid_path);
+        return ExitCode::from(1);
+    }
+
+    while running.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Graceful exit — remove the PID file.
+    if let Err(e) = std::fs::remove_file(&pid_path) {
+        eprintln!(
+            "bwoc-agent --serve: warning — failed to remove {}: {e}",
+            pid_path.display()
+        );
+    }
+    eprintln!("bwoc-agent --serve: stopped cleanly");
     ExitCode::SUCCESS
 }
 

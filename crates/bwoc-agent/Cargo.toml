@@ -15,3 +15,4 @@ path = "src/main.rs"
 bwoc-core = { workspace = true }
 fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }
+ctrlc = { workspace = true }

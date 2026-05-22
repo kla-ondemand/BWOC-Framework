@@ -147,8 +147,13 @@ fn print_all(root: &Path, registry: &AgentsRegistry) -> i32 {
         if !matches!(health, Health::Ok) {
             unhealthy += 1;
         }
+        let live_mark = if running_pid(root, a).is_some() {
+            "●"
+        } else {
+            "○"
+        };
         println!(
-            "{:<24} {:<8} {:<10} {:<24} {}",
+            "{live_mark} {:<22} {:<8} {:<10} {:<24} {}",
             a.id, mark, a.backend, model, a.path
         );
     }
@@ -181,12 +186,18 @@ fn print_one(root: &Path, registry: &AgentsRegistry, name: &str) -> i32 {
     let agent_path = root.join(&entry.path);
     let health = probe(root, entry);
 
+    let runtime = match running_pid(root, entry) {
+        Some(pid) => format!("● running (pid {pid})"),
+        None => "○ not running".to_string(),
+    };
+
     println!();
     println!("Agent: {}", entry.id);
     println!("={}", "=".repeat(entry.id.len() + 5));
     println!("  path:        {}", entry.path);
     println!("  backend:     {}", entry.backend);
     println!("  status:      {}", entry.status);
+    println!("  runtime:     {runtime}");
     println!("  incarnated:  {}", entry.incarnated);
     println!();
     match Manifest::load_from_path(&agent_path.join("config.manifest.json")) {
@@ -254,6 +265,38 @@ fn probe(root: &Path, a: &AgentEntry) -> Health {
         return Health::Warn("config.manifest.json missing".to_string());
     }
     Health::Ok
+}
+
+/// Runtime liveness check via PID file. Returns Some(pid) if the file
+/// exists, parses, and the process is alive (signal-0 succeeds);
+/// None otherwise. Stale PID files (process gone) are detected as
+/// None without removing the file — `bwoc-agent --serve` cleans up
+/// on graceful exit, and explicit `bwoc doctor` can sweep stale ones.
+fn running_pid(root: &Path, a: &AgentEntry) -> Option<u32> {
+    let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
+    let raw = std::fs::read_to_string(&pid_path).ok()?;
+    let pid: u32 = raw.trim().parse().ok()?;
+    if signal_zero_alive(pid) {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+/// Send signal 0 to `pid` — returns true if the process exists and we
+/// have permission to signal it. On Unix this is the standard liveness
+/// test; on Windows we conservatively return false (full Windows
+/// supervision lands with the control socket).
+#[cfg(unix)]
+fn signal_zero_alive(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) is a syscall with no side effects beyond
+    // returning an errno. We pass a valid pid and signal=0.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn signal_zero_alive(_pid: u32) -> bool {
+    false
 }
 
 fn read_primary_model(root: &Path, a: &AgentEntry) -> Option<String> {

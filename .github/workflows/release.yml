@@ -1,0 +1,89 @@
+name: Release
+
+# Triggered on tag push matching `v*` (e.g. `v0.1.0`, `v1.0.0-rc1`).
+# Builds release binaries for all 3 advertised platforms, packages
+# them into archives, and attaches them to the auto-created GitHub
+# Release. Maintainers push the tag manually:
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# Code-signing is NOT done yet — binaries are unsigned. Adding
+# signing requires per-platform cert setup (Apple Developer for
+# macOS, Windows Authenticode); deferred to a follow-up iter when
+# the user authorizes the certs and storage location.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # required to create / upload to GitHub Release
+
+jobs:
+  build:
+    name: build ${{ matrix.target }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cargo build (release)
+        run: cargo build --release --workspace --target ${{ matrix.target }}
+
+      - name: Package (tar.gz)
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tag="${GITHUB_REF##refs/tags/}"
+          name="bwoc-${tag}-${{ matrix.target }}"
+          mkdir "$name"
+          cp target/${{ matrix.target }}/release/bwoc       "$name/"
+          cp target/${{ matrix.target }}/release/bwoc-agent "$name/"
+          cp README.md LICENSE CHANGELOG.md                 "$name/" 2>/dev/null || true
+          tar -czf "dist/${name}.tar.gz" "$name"
+          shasum -a 256 "dist/${name}.tar.gz" > "dist/${name}.tar.gz.sha256"
+
+      - name: Package (zip)
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF}" -replace '^refs/tags/', ''
+          $name = "bwoc-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path $name | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/bwoc.exe"       -Destination "$name/"
+          Copy-Item "target/${{ matrix.target }}/release/bwoc-agent.exe" -Destination "$name/"
+          Copy-Item README.md, LICENSE, CHANGELOG.md -Destination "$name/" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "$name" -DestinationPath "dist/$name.zip"
+          $h = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
+          "$h  $name.zip" | Out-File -Encoding ascii "dist/$name.zip.sha256"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          # Auto-detect prerelease from tag suffix (`v0.1.0-rc1` etc).
+          prerelease: ${{ contains(github.ref, '-') }}
+          # Auto-generate release notes from commit history between this
+          # tag and the previous tag. The maintainer can edit afterwards.
+          generate_release_notes: true

@@ -15,6 +15,7 @@ mod doctor;
 mod i18n;
 mod init;
 mod new;
+mod retire;
 mod spawn;
 mod user_home;
 mod util;
@@ -59,6 +60,34 @@ enum Commands {
     List(ListArgs),
     /// Diagnose environment + workspace; with `--auto`, fix safe issues in place.
     Doctor(DoctorArgs),
+    /// Retire an agent — remove it from the workspace's registry (vaya).
+    Retire(RetireArgs),
+}
+
+#[derive(Args, Debug)]
+struct RetireArgs {
+    /// Name of the agent to retire. Matches by id ("agent-foo") or bare name ("foo").
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Skip the interactive confirmation. Required for non-TTY (scripted) use.
+    #[arg(long)]
+    yes: bool,
+    /// Keep the agent directory on disk; only remove the registry entry.
+    #[arg(long = "keep-files")]
+    keep_files: bool,
+}
+
+impl From<RetireArgs> for retire::RetireArgs {
+    fn from(a: RetireArgs) -> Self {
+        Self {
+            name: a.name,
+            workspace: a.workspace,
+            yes: a.yes,
+            keep_files: a.keep_files,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -275,6 +304,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Doctor(args)) => {
             let code = doctor::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Retire(args)) => {
+            let code = retire::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

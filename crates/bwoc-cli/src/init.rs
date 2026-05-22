@@ -322,6 +322,7 @@ mod tests {
             path: Some(dir.to_path_buf()),
             force,
             lang: "en".to_string(),
+            json: false,
         }
     }
 

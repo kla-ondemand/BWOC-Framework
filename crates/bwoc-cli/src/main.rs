@@ -53,6 +53,9 @@ enum Commands {
     Check {
         /// Path to the agent or template to audit. Defaults to current directory.
         path: Option<PathBuf>,
+        /// Emit JSON to stdout instead of the human-readable report.
+        #[arg(long)]
+        json: bool,
     },
     /// Incarnate a new agent from the template (uppāda).
     New(Box<NewArgs>),
@@ -243,11 +246,17 @@ enum WorkspaceCommand {
     Info {
         /// Workspace root path. Defaults to current directory.
         path: Option<PathBuf>,
+        /// Emit JSON instead of the human-readable layout.
+        #[arg(long)]
+        json: bool,
     },
     /// Run validation rules; exit 0 if complete, 2 if violations.
     Validate {
         /// Workspace root path. Defaults to current directory.
         path: Option<PathBuf>,
+        /// Emit JSON instead of the human-readable report.
+        #[arg(long)]
+        json: bool,
     },
     /// Find inconsistencies (phantom registry entries, orphan dirs); --apply to fix safe ones.
     Prune {
@@ -406,9 +415,9 @@ fn main() -> ExitCode {
     }
 
     match cli.command {
-        Some(Commands::Check { path }) => {
+        Some(Commands::Check { path, json }) => {
             let target = path.unwrap_or_else(|| PathBuf::from("."));
-            let code = check::run(&target, &lang);
+            let code = check::run(&target, &lang, json);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::New(args)) => {
@@ -425,14 +434,16 @@ fn main() -> ExitCode {
         }
         Some(Commands::Workspace { command }) => {
             let code = match command {
-                WorkspaceCommand::Info { path } => workspace::run_info(workspace::InfoArgs {
+                WorkspaceCommand::Info { path, json } => workspace::run_info(workspace::InfoArgs {
                     path,
                     lang: lang.clone(),
+                    json,
                 }),
-                WorkspaceCommand::Validate { path } => {
+                WorkspaceCommand::Validate { path, json } => {
                     workspace::run_validate(workspace::ValidateArgs {
                         path,
                         lang: lang.clone(),
+                        json,
                     })
                 }
                 WorkspaceCommand::Prune { path, apply } => {

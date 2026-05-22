@@ -303,10 +303,31 @@ pub fn print_report(
 }
 
 /// Entry point. Returns the process exit code (0 = ok, 1 = violations).
-pub fn run(target: &Path, lang: &str) -> i32 {
-    let bundle = i18n::bundle_for(lang);
+pub fn run(target: &Path, lang: &str, json: bool) -> i32 {
     let report = audit(target);
-    print_report(&report, &bundle);
+    if json {
+        let value = serde_json::json!({
+            "target": report.target,
+            "passes": report.passes,
+            "warnings": report.warnings,
+            "violations": report.violations,
+            "summary": {
+                "passes": report.passes.len(),
+                "warnings": report.warnings.len(),
+                "violations": report.violations.len(),
+            },
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc check: failed to serialize JSON: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let bundle = i18n::bundle_for(lang);
+        print_report(&report, &bundle);
+    }
     if report.violations.is_empty() { 0 } else { 1 }
 }
 

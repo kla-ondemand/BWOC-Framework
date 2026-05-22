@@ -13,11 +13,13 @@ use crate::i18n;
 pub struct InfoArgs {
     pub path: Option<PathBuf>,
     pub lang: String,
+    pub json: bool,
 }
 
 pub struct ValidateArgs {
     pub path: Option<PathBuf>,
     pub lang: String,
+    pub json: bool,
 }
 
 pub struct ListArgs {
@@ -34,13 +36,15 @@ pub struct PruneArgs {
 pub fn run_info(args: InfoArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
     let Some(root) = find_workspace_root(args.path) else {
-        // Error path stays English (thiserror localization deferred).
         eprintln!(
             "bwoc workspace info: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
              Pass a path, set BWOC_WORKSPACE, or run `bwoc init` first."
         );
         return 2;
     };
+    if args.json {
+        return info_json(&root);
+    }
     match info(&root, &bundle) {
         Ok(()) => 0,
         Err(e) => {
@@ -50,10 +54,61 @@ pub fn run_info(args: InfoArgs) -> i32 {
     }
 }
 
+fn info_json(root: &Path) -> i32 {
+    if !root.is_dir() {
+        eprintln!("bwoc workspace info: not a directory: {}", root.display());
+        return 1;
+    }
+    if !root.join(".bwoc/workspace.toml").exists() {
+        eprintln!(
+            "bwoc workspace info: not a BWOC workspace (no .bwoc/workspace.toml): {}",
+            root.display()
+        );
+        return 2;
+    }
+    let ws = match Workspace::load(root) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("bwoc workspace info: {e}");
+            return 1;
+        }
+    };
+    let registry = AgentsRegistry::load(root).unwrap_or_default();
+
+    let value = serde_json::json!({
+        "workspace": root.display().to_string(),
+        "name": ws.workspace.name,
+        "version": ws.workspace.version,
+        "created": ws.workspace.created,
+        "defaults": {
+            "agents_dir": ws.defaults.agents_dir,
+            "backend": ws.defaults.backend,
+            "lang": ws.defaults.lang,
+        },
+        "agents_count": registry.agents.len(),
+        "agents": registry.agents.iter().map(|a| serde_json::json!({
+            "id": a.id,
+            "path": a.path,
+            "backend": a.backend,
+            "status": a.status,
+            "incarnated": a.incarnated,
+        })).collect::<Vec<_>>(),
+    });
+    match serde_json::to_string_pretty(&value) {
+        Ok(s) => {
+            println!("{s}");
+            0
+        }
+        Err(e) => {
+            eprintln!("bwoc workspace info: failed to serialize JSON: {e}");
+            1
+        }
+    }
+}
+
 pub fn run_validate(args: ValidateArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
     let Some(root) = find_workspace_root(args.path) else {
-        // Error path stays English (thiserror localization deferred).
         eprintln!(
             "bwoc workspace validate: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
              Pass a path, set BWOC_WORKSPACE, or run `bwoc init` first."
@@ -61,7 +116,26 @@ pub fn run_validate(args: ValidateArgs) -> i32 {
         return 2;
     };
     let report = validate(&root);
-    print_validation_report(&root, &report, &bundle);
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "passes": report.passes,
+            "violations": report.violations,
+            "summary": {
+                "passes": report.passes.len(),
+                "violations": report.violations.len(),
+            },
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc workspace validate: failed to serialize JSON: {e}");
+                return 1;
+            }
+        }
+    } else {
+        print_validation_report(&root, &report, &bundle);
+    }
     if report.violations.is_empty() { 0 } else { 2 }
 }
 

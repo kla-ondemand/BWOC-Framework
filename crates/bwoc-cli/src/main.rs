@@ -12,6 +12,7 @@ use std::process::ExitCode;
 mod banner;
 mod check;
 mod completion;
+mod dashboard;
 mod doctor;
 mod help;
 mod i18n;
@@ -74,6 +75,8 @@ enum Commands {
     Help(HelpArgs),
     /// Emit a shell completion script (bash, zsh, fish, powershell, elvish).
     Completion(CompletionArgs),
+    /// Launch the interactive TUI dashboard (Phase 0 — shell only; agents pane lands later).
+    Dashboard,
 }
 
 #[derive(Args, Debug)]
@@ -394,6 +397,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Completion(args)) => {
             let code = completion::run::<Cli>(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Dashboard) => {
+            let code = dashboard::run(dashboard::DashboardArgs {});
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

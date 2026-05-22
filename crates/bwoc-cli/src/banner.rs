@@ -50,6 +50,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "completion",
         "Emit a shell completion script (bash, zsh, fish, powershell, elvish)",
     ),
+    (
+        "dashboard",
+        "Interactive TUI (Phase 0 — shell only; agents pane lands later)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

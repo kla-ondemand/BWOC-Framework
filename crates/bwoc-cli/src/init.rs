@@ -96,26 +96,89 @@ fn init(args: InitArgs) -> Result<PathBuf, InitError> {
     let registry = AgentsRegistry::default();
     registry.save(&root)?;
 
-    // Create the agents/ directory so the workspace passes a `validate` later.
+    // Create the agents/ directory + its README.
     let agents_dir = root.join(&ws.defaults.agents_dir);
     fs::create_dir_all(&agents_dir)?;
+    write_readme_if_missing(&agents_dir, AGENTS_README)?;
 
     // Scaffold the standard workspace layout: empty dirs the user is
-    // expected to populate. `projects/` for the work agents help build,
-    // `notes/` for implementation logs per `NAMING.en.md` §category 10
-    // (`YYYY-MM-DD_<title>.md`). Pre-existing dirs are kept (create_dir_all
-    // is idempotent). Add more here if/when conventions emerge.
-    for extra in WORKSPACE_EXTRAS {
-        fs::create_dir_all(root.join(extra))?;
+    // expected to populate, each with a README explaining its role.
+    // `projects/` for the work agents help build, `notes/` for
+    // implementation logs per `NAMING.en.md` §category 10
+    // (`YYYY-MM-DD_<title>.md`). Pre-existing dirs and READMEs are
+    // kept (idempotent — write_readme_if_missing skips existing files).
+    for (dir, readme) in WORKSPACE_EXTRAS {
+        let p = root.join(dir);
+        fs::create_dir_all(&p)?;
+        write_readme_if_missing(&p, readme)?;
     }
 
     Ok(root)
 }
 
-/// Standard sub-directories scaffolded by `bwoc init` alongside `.bwoc/`
-/// and the configured `agents_dir`. Add new entries here when a new
-/// convention lands in `WORKSPACE.en.md`.
-const WORKSPACE_EXTRAS: &[&str] = &["projects", "notes"];
+/// Write `README.md` into `dir` if it doesn't already exist. Idempotent —
+/// repeated `bwoc init --force` calls won't clobber user edits.
+fn write_readme_if_missing(dir: &Path, content: &str) -> io::Result<()> {
+    let readme = dir.join("README.md");
+    if readme.exists() {
+        return Ok(());
+    }
+    fs::write(readme, content)
+}
+
+/// Standard sub-directories scaffolded by `bwoc init` (paired with the
+/// README content written into each). The configured `agents_dir`
+/// (from `ws.defaults`) is handled separately above.
+const WORKSPACE_EXTRAS: &[(&str, &str)] = &[("projects", PROJECTS_README), ("notes", NOTES_README)];
+
+const AGENTS_README: &str = "# agents/
+
+Incarnated BWOC agents live here. Each subdirectory is one agent with
+its own `AGENTS.md`, `config.manifest.json`, backend symlinks
+(`CLAUDE.md` / `GEMINI.md` / `CODEX.md` / `KIMI.md` → `AGENTS.md`),
+and slot dirs (`persona/`, `memories/`, `mindsets/`, `skills/`,
+`interconnect/`).
+
+## Commands
+
+- `bwoc new <name>`       — incarnate a new agent here
+- `bwoc list`             — see what's registered
+- `bwoc check <name>`     — audit backend neutrality
+- `bwoc retire <name>`    — remove an agent (registry + files)
+
+See [`docs/en/INCARNATION.en.md`](../docs/en/INCARNATION.en.md) for
+the full walkthrough.
+";
+
+const PROJECTS_README: &str = "# projects/
+
+Your work — apps, repos, libraries the BWOC agents help you build.
+
+This directory is yours. The framework doesn't enforce structure
+here; populate it however your project conventions require (one
+project per sub-directory is the obvious pattern).
+
+Agents access projects via their `worktreeBase` setting or by being
+spawned from a project directory: `bwoc spawn --path <project-dir>`.
+";
+
+const NOTES_README: &str = "# notes/
+
+Implementation notes, decisions, and design logs.
+
+## Naming convention
+
+Files follow `YYYY-MM-DD_<title>.md` per
+[`docs/en/NAMING.en.md`](../docs/en/NAMING.en.md) category 10.
+Example: `2026-05-22_workspace-design.md`.
+
+## What goes here
+
+Development-oriented context — what changed, *why*, decisions made,
+alternatives considered, bugs surfaced and fixed. Distinct from
+`CHANGELOG.md` (release-oriented) and per-agent `memories/`
+(scoped to one agent's perspective).
+";
 
 fn workspace_name(root: &Path) -> String {
     root.file_name()
@@ -155,6 +218,25 @@ mod tests {
         assert!(dir.join("agents").is_dir());
         assert!(dir.join("projects").is_dir());
         assert!(dir.join("notes").is_dir());
+        // Each scaffold dir now ships with a README explaining its role.
+        assert!(dir.join("agents/README.md").is_file());
+        assert!(dir.join("projects/README.md").is_file());
+        assert!(dir.join("notes/README.md").is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_preserves_existing_readme() {
+        // If a README already exists (user edited it), `bwoc init --force`
+        // must not clobber it.
+        let dir = fresh_dir("readme-keep");
+        // Pre-create one of the scaffold dirs with a custom README.
+        fs::create_dir_all(dir.join("notes")).unwrap();
+        fs::write(dir.join("notes/README.md"), "# my custom notes readme").unwrap();
+        let code = run(args(&dir, false));
+        assert_eq!(code, 0);
+        let content = fs::read_to_string(dir.join("notes/README.md")).unwrap();
+        assert_eq!(content, "# my custom notes readme");
         let _ = fs::remove_dir_all(&dir);
     }
 

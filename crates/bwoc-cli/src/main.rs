@@ -480,6 +480,20 @@ struct NewArgs {
     /// Base directory for worktrees (truly optional). Default: /tmp
     #[arg(long)]
     worktree_base: Option<String>,
+    /// Persona scope: one-line "this agent does X". Fills `{{scopeDescription}}`.
+    #[arg(long)]
+    scope: Option<String>,
+    /// Persona anti-scope: one-line "this agent does NOT do Y".
+    #[arg(long = "out-of-scope")]
+    out_of_scope: Option<String>,
+    /// Initial mindsets to seed — comma-separated kebab-case names (e.g.
+    /// "verify-before-act,right-amount"). One stub `.md` per name.
+    #[arg(long)]
+    mindsets: Option<String>,
+    /// Initial skills to seed — comma-separated kebab-case names. One stub
+    /// `.md` per name.
+    #[arg(long)]
+    skills: Option<String>,
 }
 
 impl NewArgs {
@@ -501,6 +515,10 @@ impl NewArgs {
             test_cmd: self.test_cmd,
             build_cmd: self.build_cmd,
             worktree_base: self.worktree_base,
+            scope: self.scope,
+            out_of_scope: self.out_of_scope,
+            mindsets: self.mindsets,
+            skills: self.skills,
         }
     }
 }

@@ -40,6 +40,14 @@ pub struct Manifest {
     pub build_cmd: String,
     #[serde(rename = "worktreeBase", skip_serializing_if = "Option::is_none")]
     pub worktree_base: Option<String>,
+    /// One-line description of what the agent DOES. Fills `{{scopeDescription}}`
+    /// in AGENTS.md and persona/README.md at incarnation time.
+    #[serde(rename = "scopeDescription", skip_serializing_if = "Option::is_none")]
+    pub scope_description: Option<String>,
+    /// One-line description of what the agent DOES NOT do. Fills
+    /// `{{outOfScope}}` in AGENTS.md and persona/README.md.
+    #[serde(rename = "outOfScope", skip_serializing_if = "Option::is_none")]
+    pub out_of_scope: Option<String>,
     pub version: String,
 }
 
@@ -86,6 +94,8 @@ mod tests {
             test_cmd: "true".into(),
             build_cmd: "true".into(),
             worktree_base: None,
+            scope_description: None,
+            out_of_scope: None,
             version: "2.0".into(),
         }
     }

@@ -47,6 +47,14 @@ pub struct NewArgs {
     pub sessions_path: Option<String>,
     pub deep_memory_cmd: Option<String>,
     pub worktree_base: Option<String>,
+    /// Persona scope: 1-line "this agent does X". Fills `{{scopeDescription}}`.
+    pub scope: Option<String>,
+    /// Persona anti-scope: 1-line "this agent does NOT do Y". Fills `{{outOfScope}}`.
+    pub out_of_scope: Option<String>,
+    /// Comma-separated names of initial mindsets — one stub `.md` per name.
+    pub mindsets: Option<String>,
+    /// Comma-separated names of initial skills — one stub `.md` per name.
+    pub skills: Option<String>,
 }
 
 /// All required fields resolved to concrete strings; ready for incarnate.
@@ -66,6 +74,10 @@ struct Resolved {
     test_cmd: String,
     build_cmd: String,
     worktree_base: Option<String>,
+    scope_description: Option<String>,
+    out_of_scope: Option<String>,
+    mindsets: Vec<String>,
+    skills: Vec<String>,
 }
 
 /// Entry point — returns the process exit code.
@@ -97,6 +109,12 @@ pub struct IncarnationReport {
     pub symlinks: Vec<String>,
     /// Workspace root that the new agent was registered to, if any.
     pub registered_in: Option<PathBuf>,
+    /// Mindset stub files created under `mindsets/` (relative paths).
+    pub mindset_stubs: Vec<String>,
+    /// Skill stub files created under `skills/` (relative paths).
+    pub skill_stubs: Vec<String>,
+    /// Whether persona scope placeholders got substituted (vs left for manual edit).
+    pub persona_filled: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -157,7 +175,19 @@ pub fn incarnate(
     let manifest_path = resolved.target.join("config.manifest.json");
     manifest.save_to_path(&manifest_path)?;
 
-    // 4. Register with the nearest workspace if one is found.
+    // 4. Substitute persona scope/anti-scope placeholders in AGENTS.md +
+    //    persona/README.md (only when user supplied values; otherwise the
+    //    `{{placeholder}}` stays raw for manual edit).
+    let persona_filled = resolved.scope_description.is_some() || resolved.out_of_scope.is_some();
+    substitute_persona_placeholders(&resolved.target, &resolved)?;
+
+    // 5. Seed user-requested mindset and skill stubs (each is a stub `.md`
+    //    file under mindsets/<name>.md or skills/<name>.md; user fills the
+    //    actual content later).
+    let mindset_stubs = seed_mindset_stubs(&resolved.target, &resolved.mindsets)?;
+    let skill_stubs = seed_skill_stubs(&resolved.target, &resolved.skills)?;
+
+    // 6. Register with the nearest workspace if one is found.
     let registered_in = match register_in_workspace(&resolved.target, &manifest, resolved.backend) {
         Ok(ws) => ws,
         Err(e) => {
@@ -173,6 +203,9 @@ pub fn incarnate(
         target: resolved.target,
         symlinks,
         registered_in,
+        mindset_stubs,
+        skill_stubs,
+        persona_filled,
     })
 }
 
@@ -517,6 +550,37 @@ fn resolve(
         suggested_cmd(kind, "buildCmd"),
     )?;
 
+    // Persona scope is optional but recommended — promptable on TTY.
+    // Empty input leaves `{{scopeDescription}}` raw for manual edit later.
+    let scope_description = resolve_optional_text(
+        args.scope,
+        "scope",
+        "Persona scope — what does this agent DO? (one line; Enter to skip)",
+        tty,
+    )?;
+    let out_of_scope = resolve_optional_text(
+        args.out_of_scope,
+        "outOfScope",
+        "Persona anti-scope — what does it NOT do? (one line; Enter to skip)",
+        tty,
+    )?;
+    let mindsets = parse_comma_list(args.mindsets.as_deref())
+        .or_else(|| {
+            prompt_optional_csv(
+                tty,
+                "Initial mindsets to seed (comma-separated kebab-case; Enter to skip)",
+            )
+        })
+        .unwrap_or_default();
+    let skills = parse_comma_list(args.skills.as_deref())
+        .or_else(|| {
+            prompt_optional_csv(
+                tty,
+                "Initial skills to seed (comma-separated kebab-case; Enter to skip)",
+            )
+        })
+        .unwrap_or_default();
+
     Ok(Resolved {
         name: args.name,
         target,
@@ -533,7 +597,82 @@ fn resolve(
         test_cmd,
         build_cmd,
         worktree_base: args.worktree_base,
+        scope_description,
+        out_of_scope,
+        mindsets,
+        skills,
     })
+}
+
+/// Prompt for a single line of text on TTY; non-TTY without `cur` returns None.
+/// Empty input returns None (the placeholder stays raw in the cloned files).
+fn resolve_optional_text(
+    cur: Option<String>,
+    _key: &str,
+    prompt_text: &str,
+    tty: bool,
+) -> Result<Option<String>, NewError> {
+    if let Some(v) = cur {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(trimmed.to_string()));
+    }
+    if !tty {
+        return Ok(None);
+    }
+    use std::io::{Write as _, stdin, stdout};
+    let mut out = stdout();
+    write!(out, "{prompt_text}: ")?;
+    out.flush()?;
+    let mut line = String::new();
+    stdin().read_line(&mut line)?;
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// Parse `--mindsets "a,b,c"` (CLI flag form) into Some(["a","b","c"]).
+/// None when the flag wasn't passed; empty Vec when passed but empty.
+fn parse_comma_list(raw: Option<&str>) -> Option<Vec<String>> {
+    let s = raw?;
+    Some(
+        s.split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
+    )
+}
+
+/// TTY-only prompt for a comma-separated list. Returns Some(...) when the
+/// user gave any non-empty input, None otherwise (so callers can chain).
+fn prompt_optional_csv(tty: bool, prompt_text: &str) -> Option<Vec<String>> {
+    if !tty {
+        return None;
+    }
+    use std::io::{Write as _, stdin, stdout};
+    let mut out = stdout();
+    let _ = write!(out, "{prompt_text}: ");
+    let _ = out.flush();
+    let mut line = String::new();
+    if stdin().read_line(&mut line).is_err() {
+        return None;
+    }
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(
+        trimmed
+            .split(',')
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect(),
+    )
 }
 
 /// Either return the already-supplied value, or interactively prompt
@@ -829,8 +968,103 @@ fn build_manifest(r: &Resolved) -> Manifest {
         test_cmd: r.test_cmd.clone(),
         build_cmd: r.build_cmd.clone(),
         worktree_base: r.worktree_base.clone(),
+        scope_description: r.scope_description.clone(),
+        out_of_scope: r.out_of_scope.clone(),
         version: "2.0".to_string(),
     }
+}
+
+/// Substitute the persona placeholders in the freshly-cloned agent's
+/// AGENTS.md and persona/README.md. Empty / None values leave the
+/// `{{placeholder}}` raw so the user knows to edit later. Errors are
+/// surfaced (file IO problems should fail loud).
+fn substitute_persona_placeholders(target: &Path, r: &Resolved) -> Result<(), NewError> {
+    let scope = r.scope_description.as_deref().unwrap_or("");
+    let out_of_scope = r.out_of_scope.as_deref().unwrap_or("");
+    if scope.is_empty() && out_of_scope.is_empty() {
+        return Ok(());
+    }
+    for rel in ["AGENTS.md", "persona/README.md"] {
+        let path = target.join(rel);
+        if !path.is_file() {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path)?;
+        let mut updated = content.clone();
+        if !scope.is_empty() {
+            updated = updated.replace("{{scopeDescription}}", scope);
+        }
+        if !out_of_scope.is_empty() {
+            updated = updated.replace("{{outOfScope}}", out_of_scope);
+        }
+        if updated != content {
+            std::fs::write(&path, updated)?;
+        }
+    }
+    Ok(())
+}
+
+/// Write empty-but-structured stub files into mindsets/ for each name
+/// supplied. Names are kebab-case slugs. Existing files are NOT clobbered.
+fn seed_mindset_stubs(target: &Path, names: &[String]) -> Result<Vec<String>, NewError> {
+    seed_stubs(target, names, "mindsets", |name| {
+        format!(
+            "---\ntitle: {title}\naliases: []\ntags:\n  - type/mindset\n  - principle/TODO\n---\n\n# {title}\n\n> [!abstract] One-sentence description of when this mindset applies.\n\n## When to Apply\n\nTODO\n\n## How to Apply\n\nTODO\n\n## When NOT to Apply\n\nTODO\n\n## Related Principles\n\n- TODO (link to PHILOSOPHY.en.md)\n",
+            title = title_case(name)
+        )
+    })
+}
+
+/// Write empty-but-structured stub files into skills/ for each name.
+fn seed_skill_stubs(target: &Path, names: &[String]) -> Result<Vec<String>, NewError> {
+    seed_stubs(target, names, "skills", |name| {
+        format!(
+            "---\ntitle: {title}\naliases: []\ntags:\n  - type/skill\n  - domain/TODO\nmaturity: L1\n---\n\n# {title}\n\n> [!abstract] One-sentence description of what the agent does with this skill.\n\n## Domain\n\nTODO\n\n## Inputs\n\nTODO\n\n## Outputs\n\nTODO\n\n## Verification Gates\n\nTODO\n\n## Out of Scope\n\nTODO\n",
+            title = title_case(name)
+        )
+    })
+}
+
+fn seed_stubs(
+    target: &Path,
+    names: &[String],
+    subdir: &str,
+    body_for: impl Fn(&str) -> String,
+) -> Result<Vec<String>, NewError> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = target.join(subdir);
+    std::fs::create_dir_all(&dir)?;
+    let mut created = Vec::new();
+    for raw in names {
+        let slug = raw.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        let path = dir.join(format!("{slug}.md"));
+        if path.exists() {
+            continue; // don't clobber
+        }
+        std::fs::write(&path, body_for(slug))?;
+        created.push(format!("{subdir}/{slug}.md"));
+    }
+    Ok(created)
+}
+
+/// "verify-before-act" → "Verify Before Act"
+fn title_case(slug: &str) -> String {
+    slug.split('-')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn print_report(
@@ -907,6 +1141,10 @@ mod tests {
             sessions_path: None,
             deep_memory_cmd: None,
             worktree_base: None,
+            scope: None,
+            out_of_scope: None,
+            mindsets: None,
+            skills: None,
         }
     }
 
@@ -981,6 +1219,10 @@ mod tests {
             test_cmd: "true".to_string(),
             build_cmd: "true".to_string(),
             worktree_base: None,
+            scope_description: None,
+            out_of_scope: None,
+            mindsets: Vec::new(),
+            skills: Vec::new(),
         };
         let m = build_manifest(&r);
         assert_eq!(m.agent_id, "agent-demo");

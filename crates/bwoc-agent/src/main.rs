@@ -372,6 +372,8 @@ mod tests {
             test_cmd: "true".into(),
             build_cmd: "true".into(),
             worktree_base: None,
+            scope_description: None,
+            out_of_scope: None,
             version: "2.0".into(),
         }
     }

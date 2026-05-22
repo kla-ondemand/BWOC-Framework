@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# install.sh — one-command install (or upgrade) of the bwoc CLI.
+# install.sh — one-command install (or upgrade) of the bwoc toolkit.
 #
-# Builds and installs the `bwoc` binary to ~/.cargo/bin/ (must be on PATH).
-# The agent template is embedded in the binary at compile time, so the
-# installed `bwoc` works from any directory — no on-disk template required.
+# Builds and installs BOTH binaries to ~/.cargo/bin/:
+#   bwoc        — the CLI (init, new, list, start, stop, status, etc.)
+#   bwoc-agent  — the per-agent daemon (spawned by `bwoc start`)
+#
+# The agent template is embedded in the `bwoc` binary at compile time,
+# so the installed CLI works from any directory — no on-disk template
+# required.
 #
 # Requires: a Rust toolchain (https://rustup.rs/).
 #
 # Usage (from a clone of bwoc-framwork):
-#   ./scripts/install.sh           # install (or upgrade in place — always uses --force)
+#   ./scripts/install.sh           # install or upgrade in place (uses --force)
+#   ./scripts/install.sh --help    # this message
 #
-# Or one-liner from the repo root:
+# Or one-liner from the repo root (CLI only — won't get bwoc-agent):
 #   cargo install --path crates/bwoc-cli --locked --force
 #
 # Related:
@@ -20,6 +25,11 @@
 
 set -euo pipefail
 
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,24p' "$0" | sed 's/^# \?//'
+  exit 0
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -28,27 +38,67 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-# Detect existing install so we can phrase the message accurately.
-existing=""
+# Pre-flight: warn if ~/.cargo/bin isn't on PATH — that's where cargo
+# install puts the binaries, so it must be on PATH for them to be
+# discoverable. Don't fail; the user might have a custom shell setup.
+case ":$PATH:" in
+  *":$HOME/.cargo/bin:"*) ;;
+  *)
+    echo "warning: \$HOME/.cargo/bin is not on PATH." >&2
+    echo "         The binaries will install but won't be discoverable." >&2
+    echo "         Add this to your shell config (~/.bashrc, ~/.zshrc, etc.):" >&2
+    echo "           export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >&2
+    echo "" >&2
+    ;;
+esac
+
+# Detect existing installs so we can phrase the message accurately.
+existing_cli=""
 if command -v bwoc >/dev/null 2>&1; then
-  existing="$(bwoc --version 2>/dev/null | head -1 || true)"
+  existing_cli="$(bwoc --version 2>/dev/null | head -1 || true)"
+fi
+existing_agent=""
+if command -v bwoc-agent >/dev/null 2>&1; then
+  # bwoc-agent doesn't accept --version; treat presence as enough.
+  existing_agent="bwoc-agent"
 fi
 
-if [ -n "$existing" ]; then
-  echo "Upgrading bwoc in place (was: $existing) from $REPO_ROOT/crates/bwoc-cli ..."
+if [ -n "$existing_cli" ] || [ -n "$existing_agent" ]; then
+  echo "Upgrading bwoc toolkit in place from $REPO_ROOT ..."
+  [ -n "$existing_cli" ] && echo "  bwoc:       was $existing_cli"
+  [ -n "$existing_agent" ] && echo "  bwoc-agent: was present"
 else
-  echo "Installing bwoc from $REPO_ROOT/crates/bwoc-cli ..."
+  echo "Installing bwoc toolkit from $REPO_ROOT ..."
 fi
+echo ""
 
-# --force allows re-running this script to upgrade an existing install
-# without manual `cargo uninstall` first.
+# 1. The CLI.
+echo "[1/2] cargo install bwoc-cli ..."
 cargo install --path crates/bwoc-cli --locked --force
 
+# 2. The daemon binary — required for `bwoc start`'s daemon spawn,
+# `bwoc-agent --serve`, and the PING/STATUS/STOP IPC protocol.
 echo ""
-new_version="$(bwoc --version 2>/dev/null | head -1 || echo 'bwoc')"
+echo "[2/2] cargo install bwoc-agent ..."
+cargo install --path crates/bwoc-agent --locked --force
+
+echo ""
+new_version="$(bwoc --version 2>/dev/null | head -1 || echo 'bwoc (not on PATH)')"
 echo "Installed: $new_version"
+if command -v bwoc-agent >/dev/null 2>&1; then
+  echo "Installed: bwoc-agent (daemon)"
+else
+  echo "warning: bwoc-agent installed but not on PATH — see warning above"
+fi
 echo ""
 echo "Verify with:"
 echo "  bwoc --help"
+echo "  bwoc help getting-started"
 echo ""
-echo "If 'bwoc' is not found, add ~/.cargo/bin to your PATH."
+echo "Quickstart:"
+echo "  mkdir my-workspace && cd my-workspace"
+echo "  bwoc init"
+echo "  bwoc new alpha            # interactive picker for backend / role / model"
+echo "  bwoc start alpha          # spawns bwoc-agent --serve in the agent's dir"
+echo "  bwoc list                 # see runtime + inbox count"
+echo ""

@@ -68,6 +68,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "Append a message to an agent's inbox (.bwoc/inbox.jsonl)",
     ),
     (
+        "chat",
+        "Chat with an agent — exec backend CLI with manifest-driven model (--tmux for new window)",
+    ),
+    (
         "inbox",
         "Read messages from an agent's inbox (--limit N, --json supported)",
     ),

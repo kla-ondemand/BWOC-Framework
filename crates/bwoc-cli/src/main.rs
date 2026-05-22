@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod banner;
+mod chat;
 mod check;
 mod completion;
 mod dashboard;
@@ -94,6 +95,8 @@ enum Commands {
     Ping(PingArgs),
     /// Append a message to an agent's inbox (`.bwoc/inbox.jsonl`).
     Send(SendArgs),
+    /// Chat with an agent — exec backend CLI with manifest-driven model.
+    Chat(ChatArgs),
     /// Read messages from an agent's inbox (`.bwoc/inbox.jsonl`).
     Inbox(InboxArgs),
 }
@@ -132,6 +135,29 @@ impl From<InboxArgs> for inbox::InboxArgs {
             watch: a.watch,
             clear: a.clear,
             yes: a.yes,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct ChatArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Run inside a new tmux window instead of exec'ing in this shell. Requires $TMUX.
+    #[arg(long)]
+    tmux: bool,
+}
+
+impl ChatArgs {
+    fn into_runtime(self, lang: String) -> chat::ChatArgs {
+        chat::ChatArgs {
+            name: self.name,
+            workspace: self.workspace,
+            lang,
+            tmux: self.tmux,
         }
     }
 }
@@ -615,6 +641,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Send(args)) => {
             let code = send::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Chat(args)) => {
+            let code = chat::run(args.into_runtime(lang.clone()));
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Inbox(args)) => {

@@ -22,6 +22,32 @@ new-detect-stack = ตรวจพบ project: { $stack } — จะเติม
 new-detect-unknown = ไม่พบ project stack — กรุณาพิมพ์ค่าของ lintCmd / formatCmd / testCmd / buildCmd ด้วยตนเอง
 new-model-picker-header = model ที่ใช้บ่อยสำหรับ { $backend } (เลือกตัวเลข หรือพิมพ์ชื่อ model เอง):
 new-role-picker-header = บทบาท agent ที่ใช้บ่อย (เลือกตัวเลข หรือพิมพ์บทบาทเอง):
+
+# bwoc dashboard — label ของ TUI
+dash-pane-agents = agent
+dash-pane-detail = รายละเอียด
+dash-pane-dashboard = dashboard
+dash-workspace-label = Workspace: { $path }
+dash-workspace-none = Workspace: (ไม่พบ — ระบุ --workspace, ตั้ง BWOC_WORKSPACE, หรือรัน `bwoc init`)
+dash-empty-select = (เลือก agent เพื่อดูรายละเอียด)
+dash-empty-no-agents = (ยังไม่มี agent — รัน `bwoc new <ชื่อ>` เพื่อสร้าง agent แรก)
+dash-empty-no-workspace = (ไม่พบ workspace — ออก แล้วรัน `bwoc init` ก่อน)
+dash-load-error = อ่าน agents ไม่ได้: { $error }
+dash-retry-hint = กด `r` เพื่อลองอีกครั้ง
+dash-detail-manifest = manifest:
+dash-detail-label-id = id
+dash-detail-label-path = path
+dash-detail-label-backend = backend
+dash-detail-label-incarnated = สร้างเมื่อ
+dash-detail-label-role = บทบาท
+dash-detail-label-model = model
+dash-detail-label-fallback = fallback
+dash-detail-label-memory = memory
+dash-detail-label-version = เวอร์ชัน
+dash-detail-label-health = สุขภาพ
+dash-footer-navigate = นำทาง
+dash-footer-refresh = รีเฟรช
+dash-footer-quit = ออก
 new-model-picker-default-hint = (ค่าเริ่มต้น: 1)
 
 # bwoc check — หัวข้อ + label PASS/WARN/FAIL + สรุป

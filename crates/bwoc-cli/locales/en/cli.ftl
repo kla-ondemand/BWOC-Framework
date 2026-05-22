@@ -22,6 +22,32 @@ new-detect-stack = Detected project: { $stack } — defaults will be filled for 
 new-detect-unknown = No project stack detected — please type each of lintCmd / formatCmd / testCmd / buildCmd manually.
 new-model-picker-header = Common { $backend } models (pick a number, or type a custom model name):
 new-role-picker-header = Common agent roles (pick a number, or type a custom role):
+
+# bwoc dashboard — TUI labels
+dash-pane-agents = agents
+dash-pane-detail = detail
+dash-pane-dashboard = dashboard
+dash-workspace-label = Workspace: { $path }
+dash-workspace-none = Workspace: (none — pass --workspace, set BWOC_WORKSPACE, or run `bwoc init`)
+dash-empty-select = (select an agent to see details)
+dash-empty-no-agents = (no agents registered — `bwoc new <name>` to incarnate the first)
+dash-empty-no-workspace = (no workspace found — exit and run `bwoc init` first)
+dash-load-error = failed to read agents: { $error }
+dash-retry-hint = press `r` to retry
+dash-detail-manifest = manifest:
+dash-detail-label-id = id
+dash-detail-label-path = path
+dash-detail-label-backend = backend
+dash-detail-label-incarnated = incarnated
+dash-detail-label-role = role
+dash-detail-label-model = model
+dash-detail-label-fallback = fallback
+dash-detail-label-memory = memory
+dash-detail-label-version = version
+dash-detail-label-health = health
+dash-footer-navigate = navigate
+dash-footer-refresh = refresh
+dash-footer-quit = quit
 new-model-picker-default-hint = (default: 1)
 
 # bwoc check — header + PASS/WARN/FAIL labels + summaries

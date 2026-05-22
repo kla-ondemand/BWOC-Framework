@@ -14,6 +14,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::i18n;
 use bwoc_core::manifest::Manifest;
 use bwoc_core::workspace::{AgentEntry, AgentsRegistry};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -21,6 +22,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use fluent_bundle::{FluentBundle, FluentResource};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -30,6 +32,7 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 pub struct DashboardArgs {
     pub workspace: Option<PathBuf>,
+    pub lang: String,
 }
 
 pub fn run(args: DashboardArgs) -> i32 {
@@ -41,7 +44,7 @@ pub fn run(args: DashboardArgs) -> i32 {
         return 2;
     }
 
-    let mut app = App::new(args.workspace);
+    let mut app = App::new(args.workspace, args.lang);
 
     let mut term = match setup_terminal() {
         Ok(t) => t,
@@ -73,16 +76,18 @@ struct App {
     agents: Vec<AgentEntry>,
     table_state: TableState,
     last_refresh_error: Option<String>,
+    bundle: FluentBundle<FluentResource>,
 }
 
 impl App {
-    fn new(workspace_arg: Option<PathBuf>) -> Self {
+    fn new(workspace_arg: Option<PathBuf>, lang: String) -> Self {
         let workspace = resolve_workspace(workspace_arg);
         let mut app = Self {
             workspace,
             agents: Vec::new(),
             table_state: TableState::default(),
             last_refresh_error: None,
+            bundle: i18n::bundle_for(&lang),
         };
         app.refresh();
         app
@@ -223,16 +228,17 @@ fn draw_body(f: &mut ratatui::Frame, area: Rect, app: &mut App) {
 }
 
 fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let title = format!(" {} ", i18n::t(&app.bundle, "dash-pane-detail"));
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" detail ")
+        .title(title)
         .border_style(Style::default().add_modifier(Modifier::DIM));
 
     let Some(idx) = app.table_state.selected() else {
         let p = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
-                "(select an agent to see details)",
+                i18n::t(&app.bundle, "dash-empty-select"),
                 Style::default().add_modifier(Modifier::DIM),
             )),
         ])
@@ -502,15 +508,18 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         let cur = app.table_state.selected().unwrap_or(0) + 1;
         format!("{}/{}", cur, app.agents.len())
     };
+    let nav = i18n::t(&app.bundle, "dash-footer-navigate");
+    let refresh = i18n::t(&app.bundle, "dash-footer-refresh");
+    let quit = i18n::t(&app.bundle, "dash-footer-quit");
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(count, Style::default().fg(Color::Cyan)),
         Span::raw("    "),
         Span::styled("↑↓/jk", bold),
-        Span::raw(" navigate    "),
+        Span::raw(format!(" {nav}    ")),
         Span::styled("r", bold),
-        Span::raw(" refresh    "),
+        Span::raw(format!(" {refresh}    ")),
         Span::styled("q/Esc", bold),
-        Span::raw(" quit"),
+        Span::raw(format!(" {quit}")),
     ]))
     .alignment(Alignment::Center);
     f.render_widget(footer, area);

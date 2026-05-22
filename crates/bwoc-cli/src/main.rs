@@ -86,10 +86,11 @@ struct DashboardArgs {
     workspace: Option<PathBuf>,
 }
 
-impl From<DashboardArgs> for dashboard::DashboardArgs {
-    fn from(a: DashboardArgs) -> Self {
-        Self {
-            workspace: a.workspace,
+impl DashboardArgs {
+    fn into_runtime(self, lang: String) -> dashboard::DashboardArgs {
+        dashboard::DashboardArgs {
+            workspace: self.workspace,
+            lang,
         }
     }
 }
@@ -415,7 +416,7 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Dashboard(args)) => {
-            let code = dashboard::run(args.into());
+            let code = dashboard::run(args.into_runtime(lang.clone()));
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

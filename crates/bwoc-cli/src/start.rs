@@ -1,15 +1,20 @@
-//! `bwoc start <name>` — reactivate a previously stopped agent.
+//! `bwoc start <name>` — reactivate an agent and launch its daemon.
 //!
-//! Sets `status` from `"stopped"` back to `"active"` in the workspace's
-//! `.bwoc/agents.toml`. The counterpart of `bwoc stop`.
+//! Two side effects (both idempotent):
+//!   1. Sets `status` to `"active"` in the workspace's `.bwoc/agents.toml`
+//!   2. Spawns `bwoc-agent --serve` in the agent's directory if no
+//!      live daemon is already running there (PID file + signal-0).
 //!
-//! Mirror of `stop.rs` (deliberately duplicated for now — two small
-//! siblings with no API drift beat a premature "set-state" abstraction).
-//! If/when a third state verb appears, fold into `crate::state` or
-//! similar.
+//! Counterpart of `bwoc stop` which now both flips status to "stopped"
+//! AND sends STOP over the socket if the daemon is alive.
+//!
+//! Spawn is fire-and-forget — child stdio redirected to /dev/null,
+//! parent exits without waiting. On Unix the child is reparented
+//! to init/launchd when this process returns.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use bwoc_core::workspace::AgentsRegistry;
 
@@ -17,6 +22,8 @@ pub struct StartArgs {
     pub name: String,
     pub workspace: Option<PathBuf>,
     pub yes: bool,
+    /// Skip spawning `bwoc-agent --serve`; only flip registry status.
+    pub no_daemon: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -28,8 +35,6 @@ pub enum StartError {
     NoWorkspace,
     #[error("no agent named '{name}' in workspace {workspace}")]
     NotFound { name: String, workspace: PathBuf },
-    #[error("agent '{name}' is already active")]
-    AlreadyActive { name: String },
     #[error("aborted by user")]
     Aborted,
     #[error("io error: {0}")]
@@ -48,9 +53,7 @@ pub fn run(args: StartArgs) -> i32 {
         Err(e) => {
             eprintln!("bwoc start: {e}");
             match e {
-                StartError::NoWorkspace
-                | StartError::NotFound { .. }
-                | StartError::AlreadyActive { .. } => 2,
+                StartError::NoWorkspace | StartError::NotFound { .. } => 2,
                 _ => 1,
             }
         }
@@ -75,19 +78,28 @@ fn start(args: StartArgs) -> Result<(), StartError> {
             workspace: workspace.clone(),
         })?;
 
-    if registry.agents[idx].status == "active" {
-        return Err(StartError::AlreadyActive {
-            name: args.name.clone(),
-        });
-    }
-
     let entry = registry.agents[idx].clone();
+    let agent_path = workspace.join(&entry.path);
+    let already_active = entry.status == "active";
+    let already_running = daemon_is_alive(&agent_path);
+
     println!();
     println!("About to start agent:");
     println!("  id:       {}", entry.id);
     println!("  path:     {}", entry.path);
     println!("  backend:  {}", entry.backend);
-    println!("  status:   {} → active", entry.status);
+    if already_active {
+        println!("  status:   active (no change)");
+    } else {
+        println!("  status:   {} → active", entry.status);
+    }
+    if already_running {
+        println!("  daemon:   already running");
+    } else if args.no_daemon {
+        println!("  daemon:   --no-daemon (will NOT spawn)");
+    } else {
+        println!("  daemon:   will spawn `bwoc-agent --serve`");
+    }
     println!();
 
     if !args.yes {
@@ -105,17 +117,82 @@ fn start(args: StartArgs) -> Result<(), StartError> {
         }
     }
 
-    registry.agents[idx].status = "active".to_string();
-    registry.save(&workspace)?;
+    // Idempotent: flip status if needed.
+    if !already_active {
+        registry.agents[idx].status = "active".to_string();
+        registry.save(&workspace)?;
+    }
+
+    // Spawn the daemon unless told not to or it's already running.
+    let daemon_spawned = if args.no_daemon || already_running {
+        None
+    } else {
+        Some(spawn_daemon(&agent_path)?)
+    };
 
     println!();
     println!("Started: {}", entry.id);
-    println!(
-        "  Registry updated: {}/.bwoc/agents.toml",
-        workspace.display()
-    );
+    if already_active {
+        println!("  Registry: already active (no change)");
+    } else {
+        println!(
+            "  Registry: updated to active at {}/.bwoc/agents.toml",
+            workspace.display()
+        );
+    }
+    match daemon_spawned {
+        Some(pid) => println!("  Daemon:   spawned (pid {pid})"),
+        None if already_running => println!("  Daemon:   already running"),
+        None => println!("  Daemon:   not spawned (--no-daemon)"),
+    }
     println!();
     Ok(())
+}
+
+/// Spawn `bwoc-agent --serve` in `agent_path`. Stdio is silenced — the
+/// daemon's own files (PID, socket, inbox.cursor) are the durable
+/// evidence it's alive. Returns the child PID.
+fn spawn_daemon(agent_path: &Path) -> Result<u32, StartError> {
+    let child = Command::new("bwoc-agent")
+        .arg("--serve")
+        .current_dir(agent_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| {
+            io::Error::other(format!(
+                "failed to spawn `bwoc-agent --serve` in {}: {e} \
+                 (is bwoc-agent on PATH? `cargo install --path crates/bwoc-agent`)",
+                agent_path.display()
+            ))
+        })?;
+    Ok(child.id())
+}
+
+/// True iff the agent has a PID file AND the pid is alive (signal-0).
+/// Mirror of `status.rs::running_pid` — 5th copy now; the shared
+/// `livecheck` module promotion is overdue (flagged in earlier
+/// commits) and is the right next-iter focused refactor.
+fn daemon_is_alive(agent_path: &Path) -> bool {
+    let pid_path = agent_path.join(".bwoc/agent.pid");
+    let Ok(raw) = std::fs::read_to_string(&pid_path) else {
+        return false;
+    };
+    let Ok(pid) = raw.trim().parse::<u32>() else {
+        return false;
+    };
+    signal_zero_alive(pid)
+}
+
+#[cfg(unix)]
+fn signal_zero_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn signal_zero_alive(_pid: u32) -> bool {
+    false
 }
 
 fn resolve_workspace(explicit: Option<PathBuf>) -> Option<PathBuf> {
@@ -174,13 +251,14 @@ mod tests {
     }
 
     #[test]
-    fn start_sets_status_to_active() {
+    fn start_with_no_daemon_sets_status_to_active() {
         let root = setup_workspace("ok", "stopped");
         assert!(
             start(StartArgs {
                 name: "alpha".into(),
                 workspace: Some(root.clone()),
                 yes: true,
+                no_daemon: true,
             })
             .is_ok()
         );
@@ -190,14 +268,18 @@ mod tests {
     }
 
     #[test]
-    fn start_refuses_already_active() {
+    fn start_already_active_is_idempotent() {
+        // Was previously rejected with AlreadyActive — now allowed because
+        // it still does useful work (idempotent registry + potential
+        // daemon spawn).
         let root = setup_workspace("already", "active");
-        let err = start(StartArgs {
+        let result = start(StartArgs {
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
+            no_daemon: true,
         });
-        assert!(matches!(err, Err(StartError::AlreadyActive { .. })));
+        assert!(result.is_ok(), "expected Ok, got: {result:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -208,6 +290,7 @@ mod tests {
             name: "zzz".into(),
             workspace: Some(root.clone()),
             yes: true,
+            no_daemon: true,
         });
         assert!(matches!(err, Err(StartError::NotFound { .. })));
         let _ = fs::remove_dir_all(&root);

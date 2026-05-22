@@ -184,6 +184,9 @@ struct StartArgs {
     /// Skip the interactive confirmation. Required for non-TTY (scripted) use.
     #[arg(long)]
     yes: bool,
+    /// Only flip registry status; do not spawn `bwoc-agent --serve`.
+    #[arg(long = "no-daemon")]
+    no_daemon: bool,
 }
 
 impl From<StartArgs> for start::StartArgs {
@@ -192,6 +195,7 @@ impl From<StartArgs> for start::StartArgs {
             name: a.name,
             workspace: a.workspace,
             yes: a.yes,
+            no_daemon: a.no_daemon,
         }
     }
 }

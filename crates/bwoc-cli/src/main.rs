@@ -478,8 +478,14 @@ impl From<HelpArgs> for help::HelpArgs {
 
 #[derive(Args, Debug)]
 struct StatusArgs {
-    /// Agent name. Matches by id ("agent-foo") or bare name ("foo"). If omitted, shows all agents.
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo"). If omitted, shows the
+    /// per-agent table summary. Mutually exclusive with `--all`.
+    #[arg(conflicts_with = "all")]
     name: Option<String>,
+    /// Print the full detail block for every agent (loops the single-agent view).
+    /// Mutually exclusive with `name`.
+    #[arg(long)]
+    all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -494,6 +500,7 @@ impl From<StatusArgs> for status::StatusArgs {
             name: a.name,
             workspace: a.workspace,
             json: a.json,
+            all: a.all,
         }
     }
 }

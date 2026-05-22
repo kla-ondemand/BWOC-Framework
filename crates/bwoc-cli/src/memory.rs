@@ -100,7 +100,7 @@ fn list(memory_dir: &Path, json: bool) -> i32 {
         println!();
         return 0;
     }
-    println!("{:<40} {}", "NAME", "SIZE");
+    println!("{:<40} SIZE", "NAME");
     println!("{} {}", "─".repeat(40), "─".repeat(10));
     for (name, size) in &entries {
         println!("{name:<40} {size} bytes");

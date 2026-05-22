@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod banner;
 mod check;
 mod i18n;
 mod init;
@@ -251,7 +252,10 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {
-            println!("{}", i18n::t(&bundle, "default-help-hint"));
+            // No subcommand — print the startup banner. Banner already
+            // includes a `bwoc --help` hint at the bottom.
+            let _ = &bundle; // banner is lang-agnostic for now
+            banner::print();
             ExitCode::SUCCESS
         }
     }

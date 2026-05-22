@@ -240,16 +240,20 @@ pub fn run_list(args: ListArgs) -> i32 {
         return 0;
     }
 
+    // pad_visual handles Unicode column-width so TH labels align right
+    // (Rust's `{:<N}` pads by byte count; CJK + Thai byte-count diverges
+    // from display width).
+    use crate::livecheck::pad_visual;
     println!(
-        "{:<32} {:<10} {:<10} {:<7} {}",
-        i18n::t(&bundle, "list-col-id"),
-        i18n::t(&bundle, "list-col-status"),
-        i18n::t(&bundle, "list-col-backend"),
-        "INBOX",
+        "{} {} {} {} {}",
+        pad_visual(&i18n::t(&bundle, "list-col-id"), 32),
+        pad_visual(&i18n::t(&bundle, "list-col-status"), 10),
+        pad_visual(&i18n::t(&bundle, "list-col-backend"), 10),
+        pad_visual("INBOX", 7),
         i18n::t(&bundle, "list-col-path"),
     );
     println!(
-        "{:<32} {:<10} {:<10} {:<7} {}",
+        "{} {} {} {} {}",
         "─".repeat(32),
         "─".repeat(10),
         "─".repeat(10),
@@ -269,8 +273,12 @@ pub fn run_list(args: ListArgs) -> i32 {
             count.to_string()
         };
         println!(
-            "{mark} {:<30} {:<10} {:<10} {:<7} {}",
-            a.id, a.status, a.backend, inbox_cell, a.path
+            "{mark} {} {} {} {} {}",
+            pad_visual(&a.id, 30),
+            pad_visual(&a.status, 10),
+            pad_visual(&a.backend, 10),
+            pad_visual(&inbox_cell, 7),
+            a.path,
         );
     }
     0

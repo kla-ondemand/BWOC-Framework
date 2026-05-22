@@ -147,7 +147,7 @@ checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
 
 [[package]]
 name = "bwoc-agent"
-version = "0.1.399"
+version = "0.1.403"
 dependencies = [
  "bwoc-core",
  "ctrlc",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "bwoc-cli"
-version = "0.1.399"
+version = "0.1.403"
 dependencies = [
  "bwoc-core",
  "clap",
@@ -171,11 +171,12 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "unic-langid",
+ "unicode-width",
 ]
 
 [[package]]
 name = "bwoc-core"
-version = "0.1.399"
+version = "0.1.403"
 dependencies = [
  "serde",
  "serde_json",

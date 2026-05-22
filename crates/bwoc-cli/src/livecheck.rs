@@ -146,6 +146,23 @@ pub fn count_subdirs(dir: &Path) -> usize {
         .count()
 }
 
+/// Pad `text` with trailing spaces to `width` *visual columns*, not bytes.
+/// `{:<N}` in Rust pads by byte count which misaligns CJK and Thai output;
+/// this helper uses unicode-width to compute the actual display width.
+///
+/// If `text` is already ≥ `width` visual columns, returns the text
+/// unchanged (no truncation — column overflow is preferable to losing
+/// data, matches Rust's own `{:<N}` overflow behavior).
+pub fn pad_visual(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let cur = text.width();
+    if cur >= width {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(width - cur))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

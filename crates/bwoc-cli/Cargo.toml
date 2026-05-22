@@ -18,6 +18,7 @@ clap_complete = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 libc = "0.2"
+unicode-width = { workspace = true }
 serde_json = { workspace = true }
 fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }

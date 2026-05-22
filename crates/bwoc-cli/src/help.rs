@@ -35,6 +35,21 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "uppāda · ṭhiti · vaya — how commands map to the agent lifecycle",
         ARC,
     ),
+    (
+        "lifecycle",
+        "Agent state machine: new · start · stop · retire (registry + daemon)",
+        LIFECYCLE,
+    ),
+    (
+        "daemon",
+        "bwoc-agent --serve internals: PID, socket, inbox cursor, doctor sweeps",
+        DAEMON,
+    ),
+    (
+        "messaging",
+        "Inbox flow: send · inbox · --watch · --clear (sammā-vācā Phase 0)",
+        MESSAGING,
+    ),
 ];
 
 pub fn run(args: HelpArgs) -> i32 {
@@ -298,6 +313,150 @@ not the agent.
 
 See: docs/en/ROADMAP.en.md         — full phase definitions
      docs/en/PHILOSOPHY.en.md §0.1  — the arc in detail
+";
+
+const LIFECYCLE: &str = "\
+Agent state machine — registry intent + daemon process state.
+
+Verbs:
+  bwoc new <name>      Create + register a new agent (uppāda).
+                       Interactive picker for backend/role/model;
+                       writes config.manifest.json + appends to
+                       .bwoc/agents.toml.
+
+  bwoc start <name>    Idempotent — runs both side effects as needed:
+                         status = active in registry
+                         spawn `bwoc-agent --serve` if no daemon
+                       Use --no-daemon to skip the spawn (registry
+                       flip only).
+
+  bwoc stop <name>     Idempotent — runs both side effects as needed:
+                         send STOP over .bwoc/agent.sock if daemon alive
+                         status = stopped in registry
+                       Files stay on disk.
+
+  bwoc retire <name>   Remove from registry (vaya). With --keep-files
+                       leaves the agent dir; without, deletes it too.
+
+State matrix (all combinations are valid):
+  status   | daemon  | typical command
+  ---------|---------|----------------
+  active   | running | normal operating state
+  active   | none    | crashed or --no-daemon; `bwoc start` to spawn
+  stopped  | none    | paused; `bwoc start` to resume
+  stopped  | running | brief — `bwoc stop` is mid-cleanup
+
+Registry intent vs runtime state:
+  - `bwoc list` shows both: ● (daemon alive) / ○ (not), plus
+    STATUS column for registry value.
+  - `bwoc status <name>` shows the runtime line including
+    `● running (pid N, uptime 5m12s)` when the socket answers
+    STATUS.
+  - `bwoc doctor` sweeps stale debris from crashes (PID files,
+    sockets, inbox cursors).
+
+See: bwoc help daemon      — what bwoc-agent --serve actually does
+     bwoc help messaging   — inbox flow once the daemon is running
+";
+
+const DAEMON: &str = "\
+`bwoc-agent --serve` — the per-agent daemon. Long-running process
+inside an agent's directory; the IPC server backing `bwoc ping` /
+`bwoc status`'s uptime line / `bwoc stop`'s socket signal.
+
+Files it owns under <agent>/.bwoc/:
+  agent.pid          Decimal PID of the daemon process. Used by
+                     `bwoc list` / `bwoc status` for the ●/○ liveness
+                     indicator (PID file + signal-0 check).
+  agent.sock         Unix domain socket. Accepts the IPC protocol.
+  inbox.cursor       Byte offset into inbox.jsonl marking what the
+                     daemon has already consumed. Persists across
+                     restarts so a daemon offline period doesn't
+                     skip messages.
+
+Files it READS (created by other commands):
+  config.manifest.json   Agent identity + role + model + commands.
+  inbox.jsonl            Append-only message log. The daemon polls
+                         this every ~100ms and announces new envelopes
+                         to its stderr.
+
+IPC protocol (line-text; debuggable with `nc -U`):
+  PING\\n      → PONG\\n
+  STATUS\\n    → OK uptime_secs=<N> pid=<N>\\n
+  STOP\\n      → OK shutting down\\n  (daemon exits cleanly)
+  *\\n         → ERR unknown command\\n
+
+Lifecycle:
+  $ bwoc start alpha             # spawns bwoc-agent --serve
+  $ bwoc status alpha            # runtime: ● running (pid N, uptime Xs)
+  $ bwoc ping alpha              # alpha → PONG
+  $ bwoc stop alpha              # signals daemon STOP
+
+Direct invocation (less common):
+  $ cd agents/agent-alpha
+  $ bwoc-agent --serve           # blocks until SIGTERM/SIGINT
+                                 # cleans up .pid + .sock on graceful exit
+
+Crashes & cleanup:
+  Graceful exit removes .pid and .sock. Hard kills (SIGKILL, OOM)
+  leave them behind — `bwoc doctor --auto` sweeps both:
+    bwoc doctor --auto
+      FIXED  agent pid: alpha — removed stale PID file
+      FIXED  agent sock: alpha — removed stale socket
+      FIXED  inbox cursor: alpha — removed out-of-bounds cursor
+
+See: bwoc help messaging  — inbox flow (the daemon's main work)
+     bwoc help lifecycle  — when to start/stop/retire
+";
+
+const MESSAGING: &str = "\
+sammā-vācā Phase 0 — user → agent inbox communication. Append-only
+JSON-lines file at <agent>/.bwoc/inbox.jsonl. Future phases add
+agent → agent SEND with trust scoring (Kalyāṇamitta 7).
+
+Envelope shape (one JSON object per line):
+  {\"ts\": \"<ISO 8601 UTC>\",
+   \"from\": \"user\",
+   \"to\": \"<agent-id>\",
+   \"message\": \"...\"}
+
+Commands:
+
+  bwoc send <to> <msg>           Append a message to the agent's inbox.
+                                 No daemon required — the file gets
+                                 created on first send.
+
+  bwoc inbox <agent>             Read all messages (or `--limit N` for
+                                 just the last N, `--json` for machine
+                                 output).
+
+  bwoc inbox <agent> --watch     Tail mode — block printing new
+                                 envelopes as they arrive (Ctrl-C to
+                                 stop). Pairs with `bwoc send` in
+                                 another terminal for interactive use.
+
+  bwoc inbox <agent> --clear     Acknowledge / truncate the inbox after
+                                 reading. TTY prompts unless --yes.
+                                 The daemon notices the truncation on
+                                 its next 100ms poll and resets cursor.
+
+Daemon-side behavior (when bwoc-agent --serve is running):
+  - Watches inbox.jsonl every ~100ms
+  - Tracks consumed offset in .bwoc/inbox.cursor (persists across
+    daemon restarts)
+  - Announces each new envelope to stderr:
+      bwoc-agent: inbox ← user: <message>
+
+Interactive workflow (typical):
+  Terminal A:  bwoc start alpha            # daemon up
+  Terminal A:  bwoc inbox alpha --watch    # live view
+  Terminal B:  bwoc send alpha \"do thing\"  # arrives in <300ms
+
+`bwoc list` shows the INBOX column with each agent's pending count
+(rendered as \"—\" for empty inboxes).
+
+See: bwoc help daemon     — what reads inbox.jsonl on the daemon side
+     bwoc help lifecycle  — the state machine inbox commands work with
 ";
 
 #[cfg(test)]

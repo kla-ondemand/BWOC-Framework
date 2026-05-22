@@ -22,7 +22,12 @@ pub struct RetireArgs {
     pub name: String,
     pub workspace: Option<PathBuf>,
     pub yes: bool,
+    /// Preserve the entire agent directory; remove only the registry entry.
     pub keep_files: bool,
+    /// Preserve just `memories/` (and the parent dir scaffold); remove
+    /// everything else. Lets users retire an agent while keeping the
+    /// knowledge it accumulated. Mutually exclusive with `keep_files`.
+    pub keep_memory: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +97,11 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
     println!();
     if args.keep_files {
         println!("Keeping files on disk; removing only the registry entry.");
+    } else if args.keep_memory {
+        println!(
+            "Keeping just memories/; removing everything else under: {}",
+            agent_path.display()
+        );
     } else {
         println!("This will DELETE the directory: {}", agent_path.display());
     }
@@ -113,9 +123,16 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
         }
     }
 
-    // 1. Delete the directory (unless --keep-files).
+    // 1. File handling:
+    //    --keep-files   → leave dir intact
+    //    --keep-memory  → remove all top-level entries EXCEPT memories/
+    //    (default)      → remove the whole agent dir
     if !args.keep_files && agent_path.exists() {
-        fs::remove_dir_all(&agent_path)?;
+        if args.keep_memory {
+            remove_all_except_memories(&agent_path)?;
+        } else {
+            fs::remove_dir_all(&agent_path)?;
+        }
     }
 
     // 2. Remove from registry.
@@ -126,6 +143,12 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
     println!("Retired: {}", entry.id);
     if args.keep_files {
         println!("  Files kept at: {}", agent_path.display());
+    } else if args.keep_memory {
+        println!(
+            "  Memories preserved at: {}",
+            agent_path.join("memories").display()
+        );
+        println!("  Other files removed under: {}", agent_path.display());
     } else {
         println!("  Files removed: {}", agent_path.display());
     }
@@ -134,6 +157,27 @@ fn retire(args: RetireArgs) -> Result<(), RetireError> {
         workspace.display()
     );
     println!();
+    Ok(())
+}
+
+/// Walk the agent directory and remove everything except `memories/`.
+/// Idempotent — missing memories/ is fine (the parent dir just gets
+/// stripped clean). After this returns, `<agent_path>/memories/` is
+/// the only thing left, if it existed.
+fn remove_all_except_memories(agent_path: &std::path::Path) -> io::Result<()> {
+    let read = fs::read_dir(agent_path)?;
+    for entry in read.flatten() {
+        let name = entry.file_name();
+        if name == "memories" {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path)?;
+        } else {
+            fs::remove_file(&path)?;
+        }
+    }
     Ok(())
 }
 

@@ -589,8 +589,14 @@ struct RetireArgs {
     #[arg(long)]
     yes: bool,
     /// Keep the agent directory on disk; only remove the registry entry.
-    #[arg(long = "keep-files")]
+    /// Mutually exclusive with `--keep-memory`.
+    #[arg(long = "keep-files", conflicts_with = "keep_memory")]
     keep_files: bool,
+    /// Preserve just `memories/` while removing the rest of the agent dir.
+    /// Lets users retire an agent but keep its accumulated knowledge.
+    /// Mutually exclusive with `--keep-files`.
+    #[arg(long = "keep-memory")]
+    keep_memory: bool,
 }
 
 impl From<RetireArgs> for retire::RetireArgs {
@@ -600,6 +606,7 @@ impl From<RetireArgs> for retire::RetireArgs {
             workspace: a.workspace,
             yes: a.yes,
             keep_files: a.keep_files,
+            keep_memory: a.keep_memory,
         }
     }
 }

@@ -113,6 +113,39 @@ pub fn inbox_count(root: &Path, a: &AgentEntry) -> usize {
     content.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
+/// Count `.md` files in a directory, excluding template scaffolding
+/// (`SPEC.md`, `README.md`). Returns 0 when the directory doesn't
+/// exist or isn't readable — same shape as an empty dir.
+///
+/// Used for the per-agent mindsets/skills/memories counts and the
+/// workspace-level projects/notes counts in the dashboard.
+pub fn count_user_md_files(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let s = name.to_string_lossy();
+            s.ends_with(".md") && s != "SPEC.md" && s != "README.md"
+        })
+        .count()
+}
+
+/// Count direct subdirectories of a workspace-level dir (e.g. `projects/`
+/// for project subprojects, `notes/` for date-stamped subdirs if used).
+/// Returns 0 on missing/unreadable.
+pub fn count_subdirs(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

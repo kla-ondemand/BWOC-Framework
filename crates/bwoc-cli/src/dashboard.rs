@@ -443,12 +443,71 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 Span::styled("  version     ", key_style),
                 Span::raw(m.version),
             ]));
+            // Persona scope (from the new manifest fields populated by
+            // `bwoc new --scope` / `--out-of-scope`). Shown only when
+            // set — otherwise the {{placeholder}} fallback is just
+            // noise here.
+            if let Some(scope) = &m.scope_description {
+                lines.push(Line::from(vec![
+                    Span::styled("  scope       ", key_style),
+                    Span::raw(scope.clone()),
+                ]));
+            }
+            if let Some(out) = &m.out_of_scope {
+                lines.push(Line::from(vec![
+                    Span::styled("  out-of-scope", key_style),
+                    Span::raw(format!(" {out}")),
+                ]));
+            }
         }
         Err(e) => {
             lines.push(Line::from(Span::styled(
                 format!("manifest: failed ({e})"),
                 Style::default().fg(Color::Red),
             )));
+        }
+    }
+
+    // Resource counts — mindsets / skills / memories. Each is the
+    // count of `.md` files in the directory excluding template
+    // scaffolding (SPEC.md / README.md). 0 renders as "—".
+    let counts_block = [
+        (
+            "mindsets",
+            crate::livecheck::count_user_md_files(&agent_path.join("mindsets")),
+        ),
+        (
+            "skills",
+            crate::livecheck::count_user_md_files(&agent_path.join("skills")),
+        ),
+        (
+            "memories",
+            crate::livecheck::count_user_md_files(&agent_path.join("memories")),
+        ),
+    ];
+    if counts_block.iter().any(|(_, n)| *n > 0) {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "resources:",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (label, n) in &counts_block {
+            let value = if *n == 0 {
+                "—".to_string()
+            } else {
+                n.to_string()
+            };
+            let value_color = if *n == 0 {
+                Color::DarkGray
+            } else {
+                Color::Reset
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {label:<12}"), key_style),
+                Span::styled(value, Style::default().fg(value_color)),
+            ]));
         }
     }
 

@@ -63,6 +63,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "ping",
         "Ping a --serve'd agent over its Unix socket (PING → PONG)",
     ),
+    (
+        "send",
+        "Append a message to an agent's inbox (.bwoc/inbox.jsonl)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

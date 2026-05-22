@@ -690,10 +690,18 @@ fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Some(p) => {
             // Workspace-level counts surfacing the scaffolded dirs
             // (`projects/` subdirs, `notes/` user .md files, `.bwoc/memory/`
-            // entries). 0 renders as "—" for visual quiet.
+            // entries) + the attention sum (agents with pending inbox).
+            // 0 renders as "—" for visual quiet; attention is OMITTED
+            // entirely when no agent has pending — surfaces only when
+            // it matters.
             let projects = crate::livecheck::count_subdirs(&p.join("projects"));
             let notes = crate::livecheck::count_user_md_files(&p.join("notes"));
             let memory = crate::livecheck::count_user_md_files(&p.join(".bwoc/memory"));
+            let total_pending: u64 = app
+                .agents
+                .iter()
+                .map(|a| crate::livecheck::inbox_count(p, a) as u64)
+                .sum();
             let p_str = if projects == 0 {
                 "—".to_string()
             } else {
@@ -709,12 +717,18 @@ fn draw_banner(f: &mut ratatui::Frame, area: Rect, app: &App) {
             } else {
                 memory.to_string()
             };
+            let attn_suffix = if total_pending > 0 {
+                format!("  ·  attention: {total_pending} pending")
+            } else {
+                String::new()
+            };
             format!(
-                "Workspace: {}  ·  projects: {}  ·  notes: {}  ·  memory: {}",
+                "Workspace: {}  ·  projects: {}  ·  notes: {}  ·  memory: {}{}",
                 p.display(),
                 p_str,
                 n_str,
-                m_str
+                m_str,
+                attn_suffix
             )
         }
         None => "Workspace: (none — pass --workspace, set BWOC_WORKSPACE, or run `bwoc init`)"

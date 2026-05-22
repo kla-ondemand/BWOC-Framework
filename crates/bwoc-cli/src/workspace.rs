@@ -25,6 +25,11 @@ pub struct ListArgs {
     pub lang: String,
 }
 
+pub struct PruneArgs {
+    pub path: Option<PathBuf>,
+    pub apply: bool,
+}
+
 pub fn run_info(args: InfoArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
     let Some(root) = find_workspace_root(args.path) else {
@@ -109,6 +114,132 @@ pub fn run_list(args: ListArgs) -> i32 {
         println!("{:<32} {:<10} {:<10} {}", a.id, a.status, a.backend, a.path);
     }
     0
+}
+
+pub fn run_prune(args: PruneArgs) -> i32 {
+    let Some(root) = find_workspace_root(args.path) else {
+        eprintln!(
+            "bwoc workspace prune: no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+             Pass a path, set BWOC_WORKSPACE, or run `bwoc init` first."
+        );
+        return 2;
+    };
+
+    let mut registry = match AgentsRegistry::load(&root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("bwoc workspace prune: failed to read agents.toml: {e}");
+            return 1;
+        }
+    };
+
+    let agents_dir_name = Workspace::load(&root)
+        .map(|w| w.defaults.agents_dir)
+        .unwrap_or_else(|_| "agents".to_string());
+    let agents_dir = root.join(&agents_dir_name);
+
+    // Phantom entries: in registry, but the directory is gone.
+    let phantom_indices: Vec<usize> = registry
+        .agents
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| (!root.join(&a.path).is_dir()).then_some(i))
+        .collect();
+
+    // Orphan dirs: subdirs of agents_dir that look like agents (have AGENTS.md)
+    // but aren't in the registry.
+    let mut orphans: Vec<PathBuf> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if !p.is_dir() || !p.join("AGENTS.md").is_file() {
+                continue;
+            }
+            let rel = p
+                .strip_prefix(&root)
+                .map(|r| r.display().to_string())
+                .unwrap_or_else(|_| p.display().to_string());
+            if !registry.agents.iter().any(|a| a.path == rel) {
+                orphans.push(p);
+            }
+        }
+    }
+
+    println!();
+    println!("Workspace prune: {}", root.display());
+    println!("=================");
+    if phantom_indices.is_empty() && orphans.is_empty() {
+        println!("Clean — no phantom registry entries, no orphan agent directories.");
+        println!();
+        return 0;
+    }
+
+    if !phantom_indices.is_empty() {
+        println!();
+        println!("Phantom registry entries (in agents.toml but directory is missing):");
+        for &i in &phantom_indices {
+            let a = &registry.agents[i];
+            println!(
+                "  - {} @ {}  (backend: {}, status: {})",
+                a.id, a.path, a.backend, a.status
+            );
+        }
+    }
+    if !orphans.is_empty() {
+        println!();
+        println!(
+            "Orphan agent directories (under {}/ but not in agents.toml):",
+            agents_dir_name
+        );
+        for o in &orphans {
+            let rel = o
+                .strip_prefix(&root)
+                .map(|r| r.display().to_string())
+                .unwrap_or_else(|_| o.display().to_string());
+            println!("  - {rel}");
+        }
+        println!();
+        println!("Orphan dirs are NOT auto-removed (they may hold real work). To clean an orphan:");
+        println!("  bwoc retire <name>          # if it should be deleted");
+        println!("  # OR add it back to agents.toml manually if it should stay.");
+    }
+
+    if args.apply {
+        // Remove phantom entries from registry, reverse-index order.
+        let mut removed = Vec::new();
+        for &i in phantom_indices.iter().rev() {
+            removed.push(registry.agents.remove(i).id);
+        }
+        if let Err(e) = registry.save(&root) {
+            eprintln!();
+            eprintln!("bwoc workspace prune: failed to save updated agents.toml: {e}");
+            return 1;
+        }
+        println!();
+        if !removed.is_empty() {
+            println!(
+                "Applied: removed {} phantom entries from agents.toml: {}",
+                removed.len(),
+                removed.join(", ")
+            );
+        }
+        if !orphans.is_empty() {
+            println!(
+                "Skipped: {} orphan directories (use `bwoc retire <name>` per directory).",
+                orphans.len()
+            );
+        }
+        println!();
+        return if orphans.is_empty() { 0 } else { 2 };
+    }
+
+    println!();
+    println!(
+        "Dry run — nothing changed. Rerun with `--apply` to remove {} phantom registry entries.",
+        phantom_indices.len()
+    );
+    println!();
+    2
 }
 
 /// Resolve the workspace per `WORKSPACE.en.md` §"Workspace Resolution":

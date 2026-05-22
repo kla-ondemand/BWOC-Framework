@@ -35,7 +35,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "Run the configured LLM backend in an agent's directory",
     ),
     ("list", "List agents registered in the workspace"),
-    ("workspace", "Inspect the workspace (info, validate)"),
+    ("workspace", "Inspect the workspace (info, validate, prune)"),
     (
         "doctor",
         "Diagnose environment + workspace, --auto to fix safe issues",

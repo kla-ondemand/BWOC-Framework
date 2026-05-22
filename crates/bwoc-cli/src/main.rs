@@ -121,6 +121,14 @@ enum WorkspaceCommand {
         /// Workspace root path. Defaults to current directory.
         path: Option<PathBuf>,
     },
+    /// Find inconsistencies (phantom registry entries, orphan dirs); --apply to fix safe ones.
+    Prune {
+        /// Workspace root path. Defaults to current directory.
+        path: Option<PathBuf>,
+        /// Apply the safe removals (phantom entries). Orphan dirs are never auto-removed.
+        #[arg(long)]
+        apply: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -294,6 +302,9 @@ fn main() -> ExitCode {
                         path,
                         lang: lang.clone(),
                     })
+                }
+                WorkspaceCommand::Prune { path, apply } => {
+                    workspace::run_prune(workspace::PruneArgs { path, apply })
                 }
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))

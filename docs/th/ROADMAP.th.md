@@ -100,7 +100,7 @@
 |---|---|
 | `bwoc stop <name>` | escalation ladder 3 ขั้น: socket `STOP` → SIGTERM → SIGKILL (รอ ~3s ระหว่างขั้น); idempotent; รายงานว่าขั้นไหนทำให้ daemon จบ `--all` mass-stop agent ที่ไม่ stopped ทั้งหมด (clap บังคับ mutex กับ `name`) |
 | `bwoc retire <name>` | ลบจาก registry; file mode 3 แบบ: default (ลบ dir), `--keep-files` (เก็บทั้งหมด), `--keep-memory` (เก็บแค่ `memories/`, ลบที่เหลือ — archive ความรู้ที่ agent สั่งสมในขณะที่ปล่อย agent ไป) `--keep-files` กับ `--keep-memory` เป็น clap-mutex |
-| `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย |
+| `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย; `--json` emit `{ phantoms, orphans, applied, removed }` สำหรับ CI gating |
 | User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |
 
 ### ที่เหลือสำหรับ Phase 3

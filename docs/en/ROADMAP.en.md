@@ -100,7 +100,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 |---|---|
 | `bwoc stop <name>` | 3-step escalation ladder: socket `STOP` → SIGTERM → SIGKILL (~3s wait between steps); idempotent; reports which step ended the daemon. `--all` to mass-stop every non-stopped agent (clap-enforced mutex with `name`). |
 | `bwoc retire <name>` | Removes from registry; 3 file modes: default (delete dir), `--keep-files` (retain everything), `--keep-memory` (preserve just `memories/`, remove the rest — archives accumulated knowledge while letting the agent go). `--keep-files` and `--keep-memory` are clap-mutex. |
-| `bwoc workspace prune` | Reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift. |
+| `bwoc workspace prune` | Reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift; `--json` emits `{ phantoms, orphans, applied, removed }` for CI gating. |
 | User → agent inbox (sammā-vācā Phase 0) | `bwoc send` + `bwoc inbox` ship as JSONL envelopes; foundation for agent → agent messaging. |
 
 ### Remaining for Phase 3

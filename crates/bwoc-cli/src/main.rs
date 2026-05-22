@@ -151,9 +151,12 @@ enum MemoryAction {
         /// Source file. Used when `[content]` is omitted.
         #[arg(long, conflicts_with = "content")]
         file: Option<PathBuf>,
-        /// Overwrite an existing entry. Refuses without this flag.
-        #[arg(long)]
+        /// Overwrite an existing entry. Mutually exclusive with `--append`.
+        #[arg(long, conflicts_with = "append")]
         force: bool,
+        /// Append to an existing entry (newline-separated). Mutually exclusive with `--force`.
+        #[arg(long)]
+        append: bool,
         /// Workspace root. Resolution chain same as `memory list`.
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
@@ -225,10 +228,11 @@ impl MemoryAction {
                 content,
                 file,
                 force,
+                append,
                 workspace,
             } => {
                 // Precedence: inline content > --file > stdin. clap
-                // already enforces (content, file) mutex.
+                // already enforces (content, file) mutex AND (force, append) mutex.
                 let source = match (content, file) {
                     (Some(c), _) => memory::PutSource::Inline(c),
                     (None, Some(p)) => memory::PutSource::FilePath(p),
@@ -239,6 +243,7 @@ impl MemoryAction {
                         name,
                         source,
                         force,
+                        append,
                     },
                     workspace,
                     json: false,

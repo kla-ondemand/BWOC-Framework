@@ -37,11 +37,14 @@ pub enum MemoryAction {
     Show(String),
     /// Print every entry concatenated. Useful for agent-boot context loading.
     ShowAll,
-    /// Write an entry. `source` is the content stream; `force` permits overwrite.
+    /// Write an entry. `source` is the content stream; `force` permits
+    /// overwrite of existing; `append` adds to the end of existing
+    /// (mutually exclusive — the CLI shim enforces).
     Put {
         name: String,
         source: PutSource,
         force: bool,
+        append: bool,
     },
     /// Substring search across all memory entries. Case-insensitive.
     Search(String),
@@ -89,7 +92,8 @@ pub fn run(args: MemoryArgs) -> i32 {
             name,
             source,
             force,
-        } => put(&memory_dir, &name, source, force),
+            append,
+        } => put(&memory_dir, &name, source, force, append),
         MemoryAction::Search(query) => search(&memory_dir, &query, args.json),
         MemoryAction::Remove { name, yes } => remove(&memory_dir, &name, yes),
     }
@@ -327,7 +331,7 @@ fn search(memory_dir: &Path, query: &str, json: bool) -> i32 {
 /// is either a file path or stdin; on EOF the content is written to
 /// `.bwoc/memory/<name>.md` atomically (write to temp + rename, so a
 /// failed write doesn't leave a half-written file).
-fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
+fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool, append: bool) -> i32 {
     let filename = if name.ends_with(".md") {
         name.to_string()
     } else {
@@ -341,10 +345,10 @@ fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
         return 2;
     }
     let target = memory_dir.join(&filename);
-    if target.exists() && !force {
+    if target.exists() && !force && !append {
         eprintln!(
             "bwoc memory put: '{filename}' already exists at {}. \
-             Re-run with --force to overwrite.",
+             Re-run with --force to overwrite, or --append to add to the end.",
             target.display()
         );
         return 2;
@@ -392,9 +396,34 @@ fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
         }
     };
 
-    // Atomic write: stage to a sibling .tmp, then rename.
+    // Build the final body. For --append, read existing + ensure
+    // separator newline + concat. For overwrite (default or --force),
+    // the new content IS the body.
+    let final_content = if append && target.exists() {
+        let existing = match std::fs::read_to_string(&target) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "bwoc memory put --append: failed to read existing {}: {e}",
+                    target.display()
+                );
+                return 1;
+            }
+        };
+        let mut buf = existing;
+        if !buf.ends_with('\n') {
+            buf.push('\n');
+        }
+        buf.push_str(&content);
+        buf
+    } else {
+        content
+    };
+
+    // Atomic write: stage to a sibling .tmp, then rename. Same path
+    // for both overwrite and append (read-modify-write is staged too).
     let tmp = target.with_extension("md.tmp");
-    if let Err(e) = std::fs::write(&tmp, &content) {
+    if let Err(e) = std::fs::write(&tmp, &final_content) {
         eprintln!("bwoc memory put: failed to stage {}: {e}", tmp.display());
         return 1;
     }
@@ -407,13 +436,31 @@ fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
         return 1;
     }
 
+    let verb = if append && force {
+        // Unreachable at CLI layer (clap mutex) but defensive on the lib API.
+        "wrote"
+    } else if append {
+        "appended to"
+    } else {
+        "wrote"
+    };
     println!(
-        "Wrote {} ({} byte{}).",
+        "{} {} ({} byte{}).",
+        capitalize_first(verb),
         target.display(),
-        content.len(),
-        if content.len() == 1 { "" } else { "s" }
+        final_content.len(),
+        if final_content.len() == 1 { "" } else { "s" }
     );
     0
+}
+
+/// "appended to" → "Appended to" — used for the put() success message.
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 /// List user-authored memory entries. Skips `README.md` (the slot doc

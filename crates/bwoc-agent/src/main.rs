@@ -55,6 +55,21 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Non-Unix stub. The full `--serve` daemon mode relies on Unix domain
+/// sockets, signal handling via signal-0, and ctrlc — none of which
+/// have shipped on the Windows path yet. Document the gap clearly so
+/// users hitting `bwoc start` on Windows see the right error rather
+/// than a cryptic compile-or-runtime failure.
+#[cfg(not(unix))]
+fn serve_loop(_cwd: &std::path::Path) -> ExitCode {
+    eprintln!(
+        "bwoc-agent --serve: daemon mode is currently Unix-only \
+         (uses Unix domain sockets + signal-0 liveness). \
+         Windows named-pipe support is queued; see ROADMAP."
+    );
+    ExitCode::from(2)
+}
+
 /// `--serve` mode: write a PID file at `.bwoc/agent.pid`, open a Unix
 /// domain socket at `.bwoc/agent.sock`, and accept simple line-based
 /// requests until SIGTERM / SIGINT. Removes both files on exit.
@@ -66,6 +81,7 @@ fn main() -> ExitCode {
 /// Future commands (STATUS / LOG / SEND / STOP) will slot in here as
 /// they're spec'd. Keeping it line-text instead of binary so it's
 /// debuggable with `nc -U`.
+#[cfg(unix)]
 fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     use std::io::ErrorKind;
     use std::os::unix::net::UnixListener;
@@ -196,6 +212,7 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
 /// Load the persisted inbox cursor (byte offset into inbox.jsonl).
 /// Returns None if the file is missing, unreadable, or malformed —
 /// callers treat that as "first run; start at current EOF".
+#[cfg(unix)]
 fn load_cursor(path: &std::path::Path) -> Option<u64> {
     let raw = std::fs::read_to_string(path).ok()?;
     raw.trim().parse::<u64>().ok()
@@ -204,6 +221,7 @@ fn load_cursor(path: &std::path::Path) -> Option<u64> {
 /// Save the inbox cursor. Best-effort — failure logs to stderr but
 /// doesn't bring down the daemon (cursor staleness costs at-most one
 /// redundant message announcement on next restart).
+#[cfg(unix)]
 fn save_cursor(path: &std::path::Path, pos: u64) {
     if let Err(e) = std::fs::write(path, format!("{pos}\n")) {
         eprintln!(
@@ -218,6 +236,7 @@ fn save_cursor(path: &std::path::Path, pos: u64) {
 /// after consumption. Idempotent on no-change — returns the same offset.
 /// Tolerant of: missing file (offset stays), file truncation (resets to
 /// EOF), partial last-line (only consumes complete `\n`-terminated lines).
+#[cfg(unix)]
 fn check_inbox_for_new(path: &std::path::Path, from_offset: u64) -> u64 {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -261,6 +280,7 @@ fn check_inbox_for_new(path: &std::path::Path, from_offset: u64) -> u64 {
 
 /// Print one inbox envelope to stderr in a one-line form. Tries to parse
 /// as JSON and pretty-print {from, message}; falls back to raw line.
+#[cfg(unix)]
 fn announce(line: &str) {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
         let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");

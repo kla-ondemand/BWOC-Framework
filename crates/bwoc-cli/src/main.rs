@@ -140,12 +140,16 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// Write a memory entry. Reads from `--file` or stdin.
+    /// Write a memory entry. Source precedence: inline `[content]` > `--file` > stdin.
     Put {
         /// Entry name (with or without `.md` extension).
         name: String,
-        /// Source file. If omitted, content is read from stdin until EOF.
-        #[arg(long)]
+        /// Inline content. If given, used as the entry body verbatim
+        /// (with a trailing newline appended if missing). Skips both
+        /// `--file` and stdin.
+        content: Option<String>,
+        /// Source file. Used when `[content]` is omitted.
+        #[arg(long, conflicts_with = "content")]
         file: Option<PathBuf>,
         /// Overwrite an existing entry. Refuses without this flag.
         #[arg(long)]
@@ -218,13 +222,17 @@ impl MemoryAction {
             }
             MemoryAction::Put {
                 name,
+                content,
                 file,
                 force,
                 workspace,
             } => {
-                let source = match file {
-                    Some(p) => memory::PutSource::FilePath(p),
-                    None => memory::PutSource::Stdin,
+                // Precedence: inline content > --file > stdin. clap
+                // already enforces (content, file) mutex.
+                let source = match (content, file) {
+                    (Some(c), _) => memory::PutSource::Inline(c),
+                    (None, Some(p)) => memory::PutSource::FilePath(p),
+                    (None, None) => memory::PutSource::Stdin,
                 };
                 memory::MemoryArgs {
                     action: memory::MemoryAction::Put {

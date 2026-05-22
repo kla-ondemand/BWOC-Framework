@@ -58,6 +58,9 @@ pub enum PutSource {
     FilePath(PathBuf),
     /// Read from stdin until EOF. Useful for here-docs and pipes.
     Stdin,
+    /// Use literal string as the entry body. Useful for one-liner entries:
+    ///   `bwoc memory put style "use 2-space indent in TypeScript"`
+    Inline(String),
 }
 
 pub fn run(args: MemoryArgs) -> i32 {
@@ -349,6 +352,18 @@ fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
 
     // Read the content.
     let content = match source {
+        PutSource::Inline(s) => {
+            if s.is_empty() {
+                eprintln!("bwoc memory put: inline content was empty — pass a non-empty string.");
+                return 2;
+            }
+            // Ensure trailing newline for clean append behavior on cat/concat.
+            if s.ends_with('\n') {
+                s
+            } else {
+                format!("{s}\n")
+            }
+        }
         PutSource::FilePath(p) => match std::fs::read_to_string(&p) {
             Ok(s) => s,
             Err(e) => {

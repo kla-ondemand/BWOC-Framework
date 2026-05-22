@@ -171,9 +171,10 @@ fn spawn_daemon(agent_path: &Path) -> Result<u32, StartError> {
 }
 
 /// True iff the agent has a PID file AND the pid is alive (signal-0).
-/// Mirror of `status.rs::running_pid` — 5th copy now; the shared
-/// `livecheck` module promotion is overdue (flagged in earlier
-/// commits) and is the right next-iter focused refactor.
+/// Thin wrapper over `crate::livecheck::signal_zero_alive` — the
+/// livecheck `running_pid` helper takes `(root, AgentEntry)`, but here
+/// we already have an `agent_path`, so reading the pid file directly
+/// is cleaner than reconstructing the relative path.
 fn daemon_is_alive(agent_path: &Path) -> bool {
     let pid_path = agent_path.join(".bwoc/agent.pid");
     let Ok(raw) = std::fs::read_to_string(&pid_path) else {
@@ -182,17 +183,7 @@ fn daemon_is_alive(agent_path: &Path) -> bool {
     let Ok(pid) = raw.trim().parse::<u32>() else {
         return false;
     };
-    signal_zero_alive(pid)
-}
-
-#[cfg(unix)]
-fn signal_zero_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn signal_zero_alive(_pid: u32) -> bool {
-    false
+    crate::livecheck::signal_zero_alive(pid)
 }
 
 fn resolve_workspace(explicit: Option<PathBuf>) -> Option<PathBuf> {

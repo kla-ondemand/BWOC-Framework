@@ -271,7 +271,7 @@ fn check_stale_pids(root: &Path, auto: bool) -> Vec<CheckResult> {
                 continue;
             }
         };
-        if signal_zero_alive(pid) {
+        if crate::livecheck::signal_zero_alive(pid) {
             // Process exists — not stale, skip silently.
             continue;
         }
@@ -304,15 +304,7 @@ fn check_stale_pids(root: &Path, auto: bool) -> Vec<CheckResult> {
     out
 }
 
-#[cfg(unix)]
-fn signal_zero_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn signal_zero_alive(_pid: u32) -> bool {
-    false
-}
+// signal_zero_alive moved to crate::livecheck.
 
 /// Detect `<agent>/.bwoc/agent.sock` files that no live process owns.
 /// A socket is considered stale when ANY of:
@@ -336,7 +328,7 @@ fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
         let owner_alive = std::fs::read_to_string(&pid_path)
             .ok()
             .and_then(|s| s.trim().parse::<u32>().ok())
-            .map(signal_zero_alive)
+            .map(crate::livecheck::signal_zero_alive)
             .unwrap_or(false);
         if owner_alive {
             continue; // Socket has a live owner; not stale.

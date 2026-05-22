@@ -182,7 +182,7 @@ pub fn run_list(args: ListArgs) -> i32 {
                 return false;
             }
         }
-        if args.running_only && !is_running(&root, a) {
+        if args.running_only && crate::livecheck::running_pid(&root, a).is_none() {
             return false;
         }
         true
@@ -201,8 +201,8 @@ pub fn run_list(args: ListArgs) -> i32 {
                 "backend": a.backend,
                 "status": a.status,
                 "incarnated": a.incarnated,
-                "running": is_running(&root, a),
-                "inbox_count": inbox_count(&root, a),
+                "running": crate::livecheck::running_pid(&root, a).is_some(),
+                "inbox_count": crate::livecheck::inbox_count(&root, a),
             })).collect::<Vec<_>>(),
         });
         match serde_json::to_string_pretty(&value) {
@@ -257,8 +257,12 @@ pub fn run_list(args: ListArgs) -> i32 {
         "─".repeat(20),
     );
     for a in &filtered {
-        let mark = if is_running(&root, a) { "●" } else { "○" };
-        let count = inbox_count(&root, a);
+        let mark = if crate::livecheck::running_pid(&root, a).is_some() {
+            "●"
+        } else {
+            "○"
+        };
+        let count = crate::livecheck::inbox_count(&root, a);
         let inbox_cell = if count == 0 {
             "—".to_string()
         } else {
@@ -272,42 +276,9 @@ pub fn run_list(args: ListArgs) -> i32 {
     0
 }
 
-/// Count complete envelope lines in `<agent>/.bwoc/inbox.jsonl`. Returns
-/// 0 when the file is missing or unreadable — same shape as a real empty
-/// inbox, which keeps the table cell calm.
-fn inbox_count(root: &Path, a: &bwoc_core::workspace::AgentEntry) -> usize {
-    let path = root.join(&a.path).join(".bwoc/inbox.jsonl");
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return 0;
-    };
-    content.lines().filter(|l| !l.trim().is_empty()).count()
-}
-
-/// Liveness probe — true if the agent has a PID file AND the pid is
-/// alive. Mirror of `status.rs::running_pid` / `doctor.rs` signal-0
-/// check. With this third caller, the small unsafe libc::kill helper
-/// is now ripe for promotion to a shared module — flagged for the
-/// next refactor pass.
-fn is_running(root: &Path, a: &bwoc_core::workspace::AgentEntry) -> bool {
-    let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
-    let Ok(raw) = std::fs::read_to_string(&pid_path) else {
-        return false;
-    };
-    let Ok(pid) = raw.trim().parse::<u32>() else {
-        return false;
-    };
-    signal_zero_alive(pid)
-}
-
-#[cfg(unix)]
-fn signal_zero_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-#[cfg(not(unix))]
-fn signal_zero_alive(_pid: u32) -> bool {
-    false
-}
+// Liveness (signal_zero_alive, running_pid) + inbox_count moved to
+// crate::livecheck. `is_running` was just `running_pid().is_some()` —
+// call sites updated to use livecheck directly.
 
 /// Format a one-phrase summary of the active filters for the empty-set
 /// hint message. Returns e.g. `--status=active`, `--backend=claude`,

@@ -147,7 +147,7 @@ fn print_all(root: &Path, registry: &AgentsRegistry) -> i32 {
         if !matches!(health, Health::Ok) {
             unhealthy += 1;
         }
-        let live_mark = if running_pid(root, a).is_some() {
+        let live_mark = if crate::livecheck::running_pid(root, a).is_some() {
             "●"
         } else {
             "○"
@@ -186,9 +186,12 @@ fn print_one(root: &Path, registry: &AgentsRegistry, name: &str) -> i32 {
     let agent_path = root.join(&entry.path);
     let health = probe(root, entry);
 
-    let runtime = match running_pid(root, entry) {
-        Some(pid) => match query_uptime(root, entry) {
-            Some(secs) => format!("● running (pid {pid}, uptime {})", format_uptime(secs)),
+    let runtime = match crate::livecheck::running_pid(root, entry) {
+        Some(pid) => match crate::livecheck::query_uptime(root, entry) {
+            Some(secs) => format!(
+                "● running (pid {pid}, uptime {})",
+                crate::livecheck::format_uptime(secs)
+            ),
             None => format!("● running (pid {pid})"),
         },
         None => "○ not running".to_string(),
@@ -270,88 +273,8 @@ fn probe(root: &Path, a: &AgentEntry) -> Health {
     Health::Ok
 }
 
-/// Runtime liveness check via PID file. Returns Some(pid) if the file
-/// exists, parses, and the process is alive (signal-0 succeeds);
-/// None otherwise. Stale PID files (process gone) are detected as
-/// None without removing the file — `bwoc-agent --serve` cleans up
-/// on graceful exit, and explicit `bwoc doctor` can sweep stale ones.
-fn running_pid(root: &Path, a: &AgentEntry) -> Option<u32> {
-    let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
-    let raw = std::fs::read_to_string(&pid_path).ok()?;
-    let pid: u32 = raw.trim().parse().ok()?;
-    if signal_zero_alive(pid) {
-        Some(pid)
-    } else {
-        None
-    }
-}
-
-/// Send signal 0 to `pid` — returns true if the process exists and we
-/// have permission to signal it. On Unix this is the standard liveness
-/// test; on Windows we conservatively return false (full Windows
-/// supervision lands with the control socket).
-#[cfg(unix)]
-fn signal_zero_alive(pid: u32) -> bool {
-    // SAFETY: kill(pid, 0) is a syscall with no side effects beyond
-    // returning an errno. We pass a valid pid and signal=0.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
-}
-
-/// Query the daemon's STATUS command over the Unix socket. Returns
-/// Some(uptime_secs) on a successful reply, None when the socket is
-/// missing or the daemon doesn't answer. Bounded by a tight 500ms
-/// timeout so a hung agent doesn't slow `bwoc status` down.
-#[cfg(unix)]
-fn query_uptime(root: &Path, a: &AgentEntry) -> Option<u64> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::net::UnixStream;
-    use std::time::Duration;
-
-    let sock_path = root.join(&a.path).join(".bwoc/agent.sock");
-    if !sock_path.exists() {
-        return None;
-    }
-    let mut stream = UnixStream::connect(&sock_path).ok()?;
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
-    stream.write_all(b"STATUS\n").ok()?;
-    let mut line = String::new();
-    BufReader::new(&stream).read_line(&mut line).ok()?;
-    // Expected response: `OK uptime_secs=<N> pid=<N>\n`
-    for token in line.split_whitespace() {
-        if let Some(rest) = token.strip_prefix("uptime_secs=") {
-            return rest.parse().ok();
-        }
-    }
-    None
-}
-
-#[cfg(not(unix))]
-fn query_uptime(_root: &Path, _a: &AgentEntry) -> Option<u64> {
-    None
-}
-
-/// Format seconds as a short human term: "42s", "5m12s", "3h07m", "2d04h".
-/// Keeps the status line one column-length even at long uptimes.
-fn format_uptime(secs: u64) -> String {
-    let (d, rem) = (secs / 86400, secs % 86400);
-    let (h, rem) = (rem / 3600, rem % 3600);
-    let (m, s) = (rem / 60, rem % 60);
-    if d > 0 {
-        format!("{d}d{h:02}h")
-    } else if h > 0 {
-        format!("{h}h{m:02}m")
-    } else if m > 0 {
-        format!("{m}m{s:02}s")
-    } else {
-        format!("{s}s")
-    }
-}
-
-#[cfg(not(unix))]
-fn signal_zero_alive(_pid: u32) -> bool {
-    false
-}
+// Liveness helpers (signal_zero_alive, running_pid, query_uptime,
+// format_uptime) moved to `crate::livecheck` — used by 5+ modules now.
 
 fn read_primary_model(root: &Path, a: &AgentEntry) -> Option<String> {
     let manifest = root.join(&a.path).join("config.manifest.json");

@@ -18,6 +18,7 @@ mod help;
 mod i18n;
 mod inbox;
 mod init;
+mod livecheck;
 mod new;
 mod ping;
 mod retire;

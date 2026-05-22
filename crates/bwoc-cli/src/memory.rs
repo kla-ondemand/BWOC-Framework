@@ -29,6 +29,8 @@ pub struct MemoryArgs {
 pub enum MemoryAction {
     List,
     Show(String),
+    /// Print every entry concatenated. Useful for agent-boot context loading.
+    ShowAll,
     /// Write an entry. `source` is the content stream; `force` permits overwrite.
     Put {
         name: String,
@@ -68,6 +70,7 @@ pub fn run(args: MemoryArgs) -> i32 {
     match args.action {
         MemoryAction::List => list(&memory_dir, args.json),
         MemoryAction::Show(name) => show(&memory_dir, &name),
+        MemoryAction::ShowAll => show_all(&memory_dir, args.json),
         MemoryAction::Put {
             name,
             source,
@@ -75,6 +78,89 @@ pub fn run(args: MemoryArgs) -> i32 {
         } => put(&memory_dir, &name, source, force),
         MemoryAction::Search(query) => search(&memory_dir, &query, args.json),
     }
+}
+
+/// Print every entry concatenated, alphabetical by filename. Each entry
+/// gets a one-line header (`# === <name> ===`) so downstream parsers
+/// (or agents) can split the stream. README.md is excluded (same rule
+/// as `list` / `search`).
+///
+/// In `--json`, returns an array of `{ "name": "...", "content": "..." }`
+/// objects — same alphabetical order. Lets a host program load
+/// workspace memory programmatically without shell-parsing the human
+/// stream.
+///
+/// Designed for agent-boot: `bwoc memory show --all` prepends the full
+/// per-workspace memory context to whatever the agent does next. The
+/// cost (one read of all *.md) is acceptable for sub-MiB total.
+fn show_all(memory_dir: &Path, json: bool) -> i32 {
+    let Ok(read) = std::fs::read_dir(memory_dir) else {
+        eprintln!(
+            "bwoc memory show --all: failed to read {}",
+            memory_dir.display()
+        );
+        return 1;
+    };
+    let mut entries: Vec<(String, PathBuf)> = read
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.ends_with(".md") || name == "README.md" {
+                return None;
+            }
+            Some((name, e.path()))
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if json {
+        let mut arr: Vec<serde_json::Value> = Vec::with_capacity(entries.len());
+        for (name, path) in &entries {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            arr.push(serde_json::json!({
+                "name": name,
+                "content": content,
+            }));
+        }
+        let value = serde_json::json!({
+            "workspace_memory_dir": memory_dir.display().to_string(),
+            "entries": arr,
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc memory show --all --json: serialize failed: {e}");
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if entries.is_empty() {
+        println!("(no entries in {})", memory_dir.display());
+        return 0;
+    }
+    for (i, (name, path)) in entries.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("# === {name} ===");
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                print!("{content}");
+                if !content.ends_with('\n') {
+                    println!();
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "bwoc memory show --all: failed to read {}: {e}",
+                    path.display()
+                );
+            }
+        }
+    }
+    0
 }
 
 /// Substring search across all `.md` entries (excluding README.md). Prints
@@ -297,7 +383,19 @@ fn list(memory_dir: &Path, json: bool) -> i32 {
 
 /// Print one memory file's contents. `<name>` may be given with or
 /// without the `.md` extension; we normalize.
+///
+/// Empty `name` means the dispatcher saw `bwoc memory show` with neither
+/// `<name>` nor `--all`. We emit the actionable error here (rather than
+/// inside `MemoryAction::into_runtime`, which must stay infallible).
 fn show(memory_dir: &Path, name: &str) -> i32 {
+    if name.is_empty() {
+        eprintln!(
+            "bwoc memory show: need either a <name> argument or --all. \
+             Try `bwoc memory list` to see what's there."
+        );
+        let _ = memory_dir; // silence unused-warn on this guard-path
+        return 2;
+    }
     let filename = if name.ends_with(".md") {
         name.to_string()
     } else {

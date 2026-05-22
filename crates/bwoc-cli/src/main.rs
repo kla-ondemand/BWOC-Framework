@@ -119,13 +119,20 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
-    /// Print one memory entry's contents to stdout.
+    /// Print one memory entry's contents to stdout, or `--all` for every entry concatenated.
     Show {
-        /// Entry name (with or without `.md` extension).
-        name: String,
+        /// Entry name (with or without `.md` extension). Omit when using `--all`.
+        name: Option<String>,
+        /// Print every entry concatenated (alphabetical), each with a `# === <name> ===` header.
+        /// Mutually exclusive with `<name>`.
+        #[arg(long, conflicts_with = "name")]
+        all: bool,
         /// Workspace root. Resolution chain same as `memory list`.
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
+        /// Emit JSON (only meaningful with `--all`; single-entry `show` is plain content).
+        #[arg(long)]
+        json: bool,
     },
     /// Write a memory entry. Reads from `--file` or stdin.
     Put {
@@ -162,11 +169,27 @@ impl MemoryAction {
                 workspace,
                 json,
             },
-            MemoryAction::Show { name, workspace } => memory::MemoryArgs {
-                action: memory::MemoryAction::Show(name),
+            MemoryAction::Show {
+                name,
+                all,
                 workspace,
-                json: false,
-            },
+                json,
+            } => {
+                // If neither `<name>` nor `--all` was provided, pass an
+                // empty Show("") through. memory::show() detects this and
+                // emits a helpful error. This keeps into_runtime
+                // infallible (returns MemoryArgs, not Result).
+                let action = if all {
+                    memory::MemoryAction::ShowAll
+                } else {
+                    memory::MemoryAction::Show(name.unwrap_or_default())
+                };
+                memory::MemoryArgs {
+                    action,
+                    workspace,
+                    json,
+                }
+            }
             MemoryAction::Put {
                 name,
                 file,

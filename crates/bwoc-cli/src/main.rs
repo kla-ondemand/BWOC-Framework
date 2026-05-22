@@ -20,6 +20,7 @@ mod init;
 mod new;
 mod retire;
 mod spawn;
+mod start;
 mod status;
 mod stop;
 mod user_home;
@@ -80,6 +81,30 @@ enum Commands {
     Dashboard(DashboardArgs),
     /// Pause an agent — set status = "stopped" without removing files.
     Stop(StopArgs),
+    /// Reactivate a stopped agent — set status = "active".
+    Start(StartArgs),
+}
+
+#[derive(Args, Debug)]
+struct StartArgs {
+    /// Name of the agent. Matches by id ("agent-foo") or bare name ("foo").
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Skip the interactive confirmation. Required for non-TTY (scripted) use.
+    #[arg(long)]
+    yes: bool,
+}
+
+impl From<StartArgs> for start::StartArgs {
+    fn from(a: StartArgs) -> Self {
+        Self {
+            name: a.name,
+            workspace: a.workspace,
+            yes: a.yes,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -446,6 +471,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Stop(args)) => {
             let code = stop::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Start(args)) => {
+            let code = start::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

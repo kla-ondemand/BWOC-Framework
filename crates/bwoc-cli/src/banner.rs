@@ -58,6 +58,7 @@ const COMMANDS: &[(&str, &str)] = &[
         "stop",
         "Pause an agent — set status = stopped without removing files",
     ),
+    ("start", "Reactivate a stopped agent — set status = active"),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

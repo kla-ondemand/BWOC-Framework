@@ -376,15 +376,13 @@ fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
 /// bounds. Sister sweep to `check_stale_pids` / `check_stale_sockets`.
 ///
 /// Three failure modes:
-///   - Malformed (won't parse as u64)         → FAIL; --auto removes the file
-///   - Cursor > inbox file size               → FAIL; --auto removes the
-///                                               file. The daemon's own
-///                                               truncation-recovery
-///                                               handles this at startup,
-///                                               but doctor surfacing it
-///                                               makes the inconsistency
-///                                               visible to the human.
-///   - Cursor present + inbox file missing    → FAIL; --auto removes
+///   - Malformed (won't parse as u64) → FAIL; --auto removes the file
+///   - Cursor > inbox file size → FAIL; --auto removes the file
+///   - Cursor present + inbox file missing → FAIL; --auto removes
+///
+/// Out-of-bounds cursors are also handled by the daemon's own
+/// truncation-recovery at startup, but doctor surfacing them makes the
+/// inconsistency visible to the human.
 ///
 /// Live, in-bounds cursors are silently OK.
 fn check_inbox_cursors(root: &Path, auto: bool) -> Vec<CheckResult> {

@@ -56,13 +56,13 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc-agent --serve` daemon | Unix-only (`.bwoc/agent.pid` + `.bwoc/agent.sock`; cfg-gated stub on Windows) |
 | IPC control socket — line-text protocol | `PING`/`STATUS`/`STOP` over Unix domain socket; debuggable with `nc -U` |
 | `bwoc status [name]` | Per-agent health + runtime indicator (●/○) + uptime via socket query |
-| `bwoc list` | Registry view with runtime indicator + INBOX count + `--running` / `--status` / `--backend` filters |
+| `bwoc list` | Registry view with runtime indicator + INBOX count + `--running` / `--status` / `--backend` / `--inbox-pending` filters (combinable; honored by both human + `--json`) |
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
 | `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
 | `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out |
 | `bwoc ping <name>` | CLI client for the daemon's PING command |
 | `bwoc chat <name>` (+ `--tmux`) | Auto-resolves backend from registry; exec's `bwoc spawn` |
-| `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + 2s auto-refresh + `t` hotkey to tmux-spawn |
+| `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + 2s auto-refresh + `t/l/i` tmux hotkeys (chat / log -f / inbox --watch); transient `last_action` feedback in footer |
 | Daemon-side inbox watch + cursor | Announces new envelopes to stderr; `.bwoc/inbox.cursor` survives restart |
 | `--json` across read-only commands | `list`, `status`, `workspace info`, `workspace validate`, `check` |
 | CI matrix | `ubuntu-latest` · `macos-latest` · `windows-latest` green on every push |

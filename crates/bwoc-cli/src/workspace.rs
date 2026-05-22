@@ -26,6 +26,10 @@ pub struct ListArgs {
     pub path: Option<PathBuf>,
     pub lang: String,
     pub json: bool,
+    /// Filter to agents whose `status` field exactly matches (e.g. "active", "stopped").
+    pub status_filter: Option<String>,
+    /// Filter to agents whose `backend` field exactly matches (e.g. "claude", "gemini").
+    pub backend_filter: Option<String>,
 }
 
 pub struct PruneArgs {
@@ -162,12 +166,31 @@ pub fn run_list(args: ListArgs) -> i32 {
         }
     };
 
+    // Apply filters BEFORE serialisation — both human and JSON output
+    // honour them. Filter values are exact string match (case-sensitive)
+    // so users can also filter on custom registry status fields later.
+    let matches = |a: &bwoc_core::workspace::AgentEntry| -> bool {
+        if let Some(s) = &args.status_filter {
+            if a.status != *s {
+                return false;
+            }
+        }
+        if let Some(b) = &args.backend_filter {
+            if a.backend != *b {
+                return false;
+            }
+        }
+        true
+    };
+    let filtered: Vec<&bwoc_core::workspace::AgentEntry> =
+        registry.agents.iter().filter(|a| matches(a)).collect();
+
     // JSON branch — stable machine-readable output, no decorative text,
     // no Fluent (locale doesn't affect machine consumers).
     if args.json {
         let value = serde_json::json!({
             "workspace": root.display().to_string(),
-            "agents": registry.agents.iter().map(|a| serde_json::json!({
+            "agents": filtered.iter().map(|a| serde_json::json!({
                 "id": a.id,
                 "path": a.path,
                 "backend": a.backend,
@@ -188,11 +211,25 @@ pub fn run_list(args: ListArgs) -> i32 {
     }
 
     let root_display = root.display().to_string();
-    if registry.agents.is_empty() {
-        println!(
-            "{}",
-            i18n::t_with(&bundle, "list-empty", &[("path", &root_display)])
-        );
+    if filtered.is_empty() {
+        if registry.agents.is_empty() {
+            // No agents at all.
+            println!(
+                "{}",
+                i18n::t_with(&bundle, "list-empty", &[("path", &root_display)])
+            );
+        } else {
+            // Agents exist but none matched the filter — give an
+            // actionable message instead of just empty output.
+            let filter_desc = describe_filters(
+                args.status_filter.as_deref(),
+                args.backend_filter.as_deref(),
+            );
+            println!(
+                "(no agents match {filter_desc} in workspace {root_display} — {} total)",
+                registry.agents.len()
+            );
+        }
         return 0;
     }
 
@@ -210,10 +247,28 @@ pub fn run_list(args: ListArgs) -> i32 {
         "─".repeat(10),
         "─".repeat(20),
     );
-    for a in &registry.agents {
+    for a in &filtered {
         println!("{:<32} {:<10} {:<10} {}", a.id, a.status, a.backend, a.path);
     }
     0
+}
+
+/// Format a one-phrase summary of the active filters for the empty-set
+/// hint message. Returns e.g. `--status=active`, `--backend=claude`,
+/// or `--status=stopped --backend=gemini`.
+fn describe_filters(status: Option<&str>, backend: Option<&str>) -> String {
+    let mut parts = Vec::new();
+    if let Some(s) = status {
+        parts.push(format!("--status={s}"));
+    }
+    if let Some(b) = backend {
+        parts.push(format!("--backend={b}"));
+    }
+    if parts.is_empty() {
+        "(no filter)".to_string()
+    } else {
+        parts.join(" ")
+    }
 }
 
 pub fn run_prune(args: PruneArgs) -> i32 {

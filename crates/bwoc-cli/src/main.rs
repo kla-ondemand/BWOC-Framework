@@ -297,6 +297,12 @@ struct ListArgs {
     /// Emit JSON to stdout instead of the human-readable table.
     #[arg(long)]
     json: bool,
+    /// Filter by status (exact match). Common values: active, stopped, retired.
+    #[arg(long)]
+    status: Option<String>,
+    /// Filter by backend (exact match).
+    #[arg(long, value_enum)]
+    backend: Option<spawn::Backend>,
 }
 
 impl ListArgs {
@@ -305,6 +311,8 @@ impl ListArgs {
             path: self.path,
             lang,
             json: self.json,
+            status_filter: self.status,
+            backend_filter: self.backend.map(|b| b.cli_name().to_string()),
         }
     }
 }

@@ -260,6 +260,39 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
   - CHANGELOG Known Issues trimmed from 4 → 1 stale items removed
   - 4 implementation notes under `notes/`: bwoc-new UX, gap-analysis, Pages+release pipeline, Phase 2 ṭhiti surface backfill
 
+**Late Phase 2 polish** (since the bullet block above)
+
+- **Memory CRUD completed**:
+  - `bwoc memory put <name> [--file <p>] [--force]` — write from stdin or file; atomic stage+rename
+  - `bwoc memory search <query> [--json]` — case-insensitive substring across entries
+  - `bwoc memory rm <name> [--yes]` — delete an entry (TTY confirm; refuses README.md and traversal)
+  - `bwoc memory show --all [--json]` — print every entry concatenated with `# === <name> ===` headers (or JSON array); pairs with agent-boot context loading
+  - `bwoc help memory` — topic doc covering all 4 CRUD verbs + search
+
+- **Dashboard hotkey triad**:
+  - `t` opens `bwoc spawn` in a new tmux window (chat — original)
+  - `l` opens `bwoc log -f` in a new tmux window (daemon log live tail) — NEW
+  - `i` opens `bwoc inbox --watch` in a new tmux window (inbox live tail) — NEW
+  - Window naming `<agent-id>` / `<agent-id>-log` / `<agent-id>-inbox` so all three can coexist
+
+- **`bwoc list` filter + ordering surface**:
+  - `--inbox-pending` — filter to agents with unread envelopes
+  - `--sort id | inbox | incarnated | backend` — stable sort with informative default
+  - `--count` — emit just the row count (integer or `{"count": N}` with `--json`); short-circuits after filter+sort for shell-script idioms
+
+- **`bwoc doctor`**:
+  - WARN on oversized `agent.log` (10 MiB threshold; `--auto` truncates — diagnostic chatter)
+  - WARN-only on oversized `inbox.jsonl` (5 MiB threshold; `--auto` explicitly refuses to discard user data — Sammā-vācā)
+  - `--json` output with `{ results, summary, exit }` stable shape for CI gating
+  - `bwoc help doctor` topic — full status taxonomy, all 7 checks, deliberate asymmetry on user-data handling
+
+- **Workspace surfaces**:
+  - `bwoc workspace info` text + JSON gained per-workspace `Resources` block (projects / notes / memory counts)
+  - Dashboard banner shows the same counts
+
+- **bwoc-agent**:
+  - `--version` / `-V` / `--help` / `-h` flags (was: only `--serve` handled)
+
 ### Changed
 
 - `modules/agent-template/README.md` — added badges, table of contents, and footer; trimmed the "Incarnating a New Agent" section to a quickstart that points at `docs/en/INCARNATION.en.md`.

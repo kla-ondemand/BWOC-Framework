@@ -55,6 +55,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "Per-agent identity: scope, out-of-scope, mindsets, skills",
         PERSONA,
     ),
+    (
+        "memory",
+        "Workspace-level memory at .bwoc/memory/: the per-workspace tier",
+        MEMORY,
+    ),
 ];
 
 pub fn run(args: HelpArgs) -> i32 {
@@ -525,6 +530,71 @@ on demand.
 
 See: bwoc help lifecycle  — when these get populated (new vs later)
      bwoc help manifest   — config.manifest.json schema (scope lives there too)
+";
+
+const MEMORY: &str = "\
+Memory in BWOC is layered. The CLI surfaces the per-workspace tier
+explicitly; the other tiers are accessed via file paths (today) or
+will get their own CLI later.
+
+Scope hierarchy:
+
+  1. Per-agent       agents/<name>/memories/     (one agent's recall)
+  2. Per-workspace   <workspace>/.bwoc/memory/   ← `bwoc memory` operates here
+  3. Per-user        ~/.bwoc/memory/             (cross-workspace personal)
+  4. Tier 2 backend  pluggable                   (Phase 2+)
+
+`.bwoc/memory/` is scaffolded by `bwoc init` with a README explaining
+the layout. The directory is plain Markdown — entries are files like
+team-style.md, deploy-recipe.md.
+
+Commands:
+
+  bwoc memory list                    list entries (NAME / SIZE table)
+  bwoc memory list --json             same as a JSON object
+  bwoc memory show <name>             print one entry to stdout
+
+Entry name in `show` accepts `<name>` or `<name>.md` interchangeably.
+Path traversal is refused: names with `/`, `\\`, or a leading `.`
+exit 2 with an error before any read attempt.
+
+Read API for agents:
+  Agents read these files like any other Markdown — no parsing,
+  no SDK. The contract is `.bwoc/memory/*.md` exists in the workspace
+  and is plain text. Agents using `bwoc spawn` to launch their
+  backend CLI will have the workspace in their cwd, so reads are
+  relative-path simple.
+
+Write convention (no CLI yet):
+  `bwoc memory put <name>` is queued. Until it ships, write entries
+  with any text editor or `cat`:
+      cat > .bwoc/memory/team-style.md <<EOF
+      # Team style
+      - 2-space indent in TypeScript
+      - PR titles use Conventional Commits
+      EOF
+
+  The directory is gitignored or tracked by team preference — there
+  is no special ceremony.
+
+What goes here:
+  - Cross-agent conventions (\"all agents in this workspace use 2-space indent\")
+  - Shared glossary terms
+  - Deployment recipes, release procedures
+  - Cross-cutting gotchas surfaced by one agent that others should know
+
+What does NOT go here:
+  - Per-agent specifics    → agents/<name>/memories/
+  - Personal preferences   → ~/.bwoc/memory/
+  - Secrets                → don't commit; use env vars or a vault
+
+Excluded from `bwoc memory list`:
+  - README.md (slot doc scaffolded by `bwoc init`)
+  - non-`.md` files (the spec says plain Markdown)
+
+See: bwoc help workspace  — full WORKSPACE.en.md spec including memory
+     bwoc help persona    — per-agent persona (mindsets / skills / memories)
+     bwoc help lifecycle  — when memory gets populated across an agent's life
 ";
 
 #[cfg(test)]

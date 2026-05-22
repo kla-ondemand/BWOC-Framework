@@ -52,7 +52,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "dashboard",
-        "Interactive TUI (Phase 0 — shell only; agents pane lands later)",
+        "Interactive TUI — agents list with navigation + refresh",
     ),
 ];
 

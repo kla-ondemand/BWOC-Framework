@@ -75,8 +75,23 @@ enum Commands {
     Help(HelpArgs),
     /// Emit a shell completion script (bash, zsh, fish, powershell, elvish).
     Completion(CompletionArgs),
-    /// Launch the interactive TUI dashboard (Phase 0 — shell only; agents pane lands later).
-    Dashboard,
+    /// Launch the interactive TUI dashboard (agents list with navigation; refresh with `r`).
+    Dashboard(DashboardArgs),
+}
+
+#[derive(Args, Debug)]
+struct DashboardArgs {
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<DashboardArgs> for dashboard::DashboardArgs {
+    fn from(a: DashboardArgs) -> Self {
+        Self {
+            workspace: a.workspace,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -399,8 +414,8 @@ fn main() -> ExitCode {
             let code = completion::run::<Cli>(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
-        Some(Commands::Dashboard) => {
-            let code = dashboard::run(dashboard::DashboardArgs {});
+        Some(Commands::Dashboard(args)) => {
+            let code = dashboard::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

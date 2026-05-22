@@ -126,12 +126,31 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     // Daemon start time — used by the STATUS command to report uptime.
     let start = Instant::now();
 
+    // Inbox watching — track the size of `.bwoc/inbox.jsonl` and announce
+    // new envelopes to stderr as they arrive. Starts from current EOF so
+    // a daemon restart doesn't re-announce historical messages.
+    let inbox_path = bwoc_dir.join("inbox.jsonl");
+    let mut inbox_pos: u64 = std::fs::metadata(&inbox_path).map(|m| m.len()).unwrap_or(0);
+    if inbox_path.is_file() {
+        eprintln!(
+            "bwoc-agent --serve: watching inbox → {} (starting at offset {inbox_pos})",
+            inbox_path.display()
+        );
+    } else {
+        eprintln!(
+            "bwoc-agent --serve: watching inbox → {} (will create on first send)",
+            inbox_path.display()
+        );
+    }
+
     // Single-threaded accept loop with poll. Each accept is non-blocking
     // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, _addr)) => handle_client(stream, &running, &start),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                // Idle: check the inbox for new envelopes since last poll.
+                inbox_pos = check_inbox_for_new(&inbox_path, inbox_pos);
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => {
@@ -156,6 +175,64 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     }
     eprintln!("bwoc-agent --serve: stopped cleanly");
     ExitCode::SUCCESS
+}
+
+/// Read everything past `from_offset` in the inbox file and print any
+/// new lines to stderr (one envelope per line). Returns the new offset
+/// after consumption. Idempotent on no-change — returns the same offset.
+/// Tolerant of: missing file (offset stays), file truncation (resets to
+/// EOF), partial last-line (only consumes complete `\n`-terminated lines).
+fn check_inbox_for_new(path: &std::path::Path, from_offset: u64) -> u64 {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return from_offset;
+    };
+    let Ok(meta) = file.metadata() else {
+        return from_offset;
+    };
+    let size = meta.len();
+    if size < from_offset {
+        // File was truncated; reset to current EOF.
+        eprintln!("bwoc-agent --serve: inbox truncated ({size} < {from_offset}); resetting cursor");
+        return size;
+    }
+    if size == from_offset {
+        return from_offset; // No new data.
+    }
+    if file.seek(SeekFrom::Start(from_offset)).is_err() {
+        return from_offset;
+    }
+    let mut buf = String::new();
+    if file.read_to_string(&mut buf).is_err() {
+        return from_offset;
+    }
+    // Process complete lines only; if the tail lacks `\n`, leave it for
+    // the next poll.
+    let mut consumed: u64 = 0;
+    for line in buf.split_inclusive('\n') {
+        if !line.ends_with('\n') {
+            break; // partial — don't advance past it
+        }
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            announce(trimmed);
+        }
+        consumed += line.len() as u64;
+    }
+    from_offset + consumed
+}
+
+/// Print one inbox envelope to stderr in a one-line form. Tries to parse
+/// as JSON and pretty-print {from, message}; falls back to raw line.
+fn announce(line: &str) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+        let from = v.get("from").and_then(|x| x.as_str()).unwrap_or("?");
+        let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or(line);
+        eprintln!("bwoc-agent: inbox ← {from}: {msg}");
+    } else {
+        eprintln!("bwoc-agent: inbox (raw) ← {line}");
+    }
 }
 
 #[cfg(unix)]

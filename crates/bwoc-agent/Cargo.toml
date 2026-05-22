@@ -16,3 +16,4 @@ bwoc-core = { workspace = true }
 fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }
 ctrlc = { workspace = true }
+serde_json = { workspace = true }

@@ -68,6 +68,10 @@ pub fn run(args: DoctorArgs) -> i32 {
                 for r in check_stale_pids(&root, args.auto) {
                     results.push(r);
                 }
+                // Stale `agent.sock` cleanup (sibling of the PID sweep).
+                for r in check_stale_sockets(&root, args.auto) {
+                    results.push(r);
+                }
             }
         }
         None => results.push(CheckResult {
@@ -304,6 +308,61 @@ fn signal_zero_alive(pid: u32) -> bool {
 #[cfg(not(unix))]
 fn signal_zero_alive(_pid: u32) -> bool {
     false
+}
+
+/// Detect `<agent>/.bwoc/agent.sock` files that no live process owns.
+/// A socket is considered stale when ANY of:
+///   - sibling `agent.pid` missing  (orphan socket from a crash)
+///   - sibling `agent.pid` exists but the pid isn't alive
+/// With --auto, remove the stale socket. Live sockets are left alone.
+fn check_stale_sockets(root: &Path, auto: bool) -> Vec<CheckResult> {
+    let Ok(registry) = AgentsRegistry::load(root) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for a in &registry.agents {
+        let bwoc = root.join(&a.path).join(".bwoc");
+        let sock_path = bwoc.join("agent.sock");
+        if !sock_path.exists() {
+            continue;
+        }
+        // Is there a live owning process?
+        let pid_path = bwoc.join("agent.pid");
+        let owner_alive = std::fs::read_to_string(&pid_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .map(signal_zero_alive)
+            .unwrap_or(false);
+        if owner_alive {
+            continue; // Socket has a live owner; not stale.
+        }
+        // Stale.
+        if auto {
+            if std::fs::remove_file(&sock_path).is_ok() {
+                out.push(CheckResult {
+                    name: format!("agent sock: {}", a.id),
+                    status: Status::Fixed(format!("removed stale socket (no live owning process)")),
+                });
+            } else {
+                out.push(CheckResult {
+                    name: format!("agent sock: {}", a.id),
+                    status: Status::Fail(format!(
+                        "stale socket at {} but couldn't remove",
+                        sock_path.display()
+                    )),
+                });
+            }
+        } else {
+            out.push(CheckResult {
+                name: format!("agent sock: {}", a.id),
+                status: Status::Fail(format!(
+                    "stale socket at {} (no live owner; rerun with --auto to remove)",
+                    sock_path.display()
+                )),
+            });
+        }
+    }
+    out
 }
 
 fn check_agent_symlinks(root: &Path, auto: bool) -> Vec<CheckResult> {

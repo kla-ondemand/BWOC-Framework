@@ -55,9 +55,9 @@
 |---|---|
 | Daemon `bwoc-agent --serve` | Unix-only (`.bwoc/agent.pid` + `.bwoc/agent.sock`; stub cfg-gated บน Windows) |
 | IPC control socket — protocol แบบ line-text | `PING`/`STATUS`/`STOP` ผ่าน Unix domain socket; debug ได้ด้วย `nc -U` |
-| `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query |
+| `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query; `--all` พิมพ์ detail block ของทุก agent (loop ของ single-agent view; `[name]` กับ `--all` เป็น clap-mutex) |
 | `bwoc list` | registry view + runtime indicator + INBOX count; filter `--running` / `--status` / `--backend` / `--inbox-pending` (รวมกันได้); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (เฉพาะจำนวนแถว) / `--names-only` (bare ids สำหรับ shell loop); ใช้ทั้ง human + `--json` |
-| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
+| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` / `--count` (envelope count เฉย ๆ สำหรับ shell script) |
 | `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale; WARN กรณี `agent.log` ใหญ่ (10 MiB, `--auto` truncate) + `inbox.jsonl` ใหญ่ (5 MiB, WARN-only — user data); `--json` สำหรับ shape stable ใช้ CI gating |
 | `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn; `--all` mass-start agent ที่ stopped ทั้งหมด |
 | `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
@@ -75,7 +75,7 @@
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 | Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show \| put \| search \| rm` | CRUD+search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json`), `show <name>` หรือ `show --all` (header `# === <name> ===`; `--json` array), `put <name>` (stdin หรือ `--file`, atomic + `--force`), `search <query>` (substring case-insensitive + `--json`), `rm <name>` (TTY confirm หรือ `--yes`); ทุก subcommand บังคับ flat-name + ห้าม traversal, refuse README.md |
+| `bwoc memory list \| show \| put \| search \| rm` | CRUD+search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json` + `--count` + `--names-only` สำหรับ script iteration), `show <name>` หรือ `show --all` (header `# === <name> ===`; `--json` array), `put <name>` (stdin หรือ `--file`, atomic + `--force`), `search <query>` (substring case-insensitive + `--json`), `rm <name>` (TTY confirm หรือ `--yes`); ทุก subcommand บังคับ flat-name + ห้าม traversal, refuse README.md |
 
 ### ที่เหลือก่อน ship
 

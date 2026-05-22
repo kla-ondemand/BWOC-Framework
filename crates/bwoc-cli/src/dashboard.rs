@@ -88,6 +88,9 @@ struct App {
     /// One-line transient feedback from the last user action (e.g. tmux
     /// open result). Shown in the footer; cleared on next action.
     last_action: Option<String>,
+    /// Toggled by `?` — overlay listing every hotkey. Any keypress
+    /// dismisses it (including `?`). Doesn't block auto-refresh.
+    show_help: bool,
 }
 
 impl App {
@@ -101,6 +104,7 @@ impl App {
             bundle: i18n::bundle_for(&lang),
             last_refresh_at: Instant::now(),
             last_action: None,
+            show_help: false,
         };
         app.refresh();
         app
@@ -178,17 +182,30 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                 code, modifiers, ..
             }) = event::read()?
         {
-            match (code, modifiers) {
-                (KeyCode::Char('q'), KeyModifiers::NONE) => return Ok(()),
-                (KeyCode::Esc, _) => return Ok(()),
-                (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
-                (KeyCode::Char('r'), _) => app.refresh(),
-                (KeyCode::Char('t'), _) => open_in_tmux(app),
-                (KeyCode::Char('l'), _) => open_log_in_tmux(app),
-                (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
-                (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
-                (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
-                _ => {}
+            // When the help overlay is visible, Esc / q / Ctrl-C still
+            // exit; ANY other key dismisses the overlay (without acting).
+            // This keeps the help "modal-lite": one keystroke up, one down.
+            if app.show_help {
+                match (code, modifiers) {
+                    (KeyCode::Char('q'), KeyModifiers::NONE) => return Ok(()),
+                    (KeyCode::Esc, _) => return Ok(()),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
+                    _ => app.show_help = false,
+                }
+            } else {
+                match (code, modifiers) {
+                    (KeyCode::Char('q'), KeyModifiers::NONE) => return Ok(()),
+                    (KeyCode::Esc, _) => return Ok(()),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => return Ok(()),
+                    (KeyCode::Char('r'), _) => app.refresh(),
+                    (KeyCode::Char('t'), _) => open_in_tmux(app),
+                    (KeyCode::Char('l'), _) => open_log_in_tmux(app),
+                    (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
+                    (KeyCode::Char('?'), _) => app.show_help = true,
+                    (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
+                    (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
+                    _ => {}
+                }
             }
         }
 
@@ -414,6 +431,63 @@ fn draw_frame(f: &mut ratatui::Frame, app: &mut App) {
     draw_banner(f, layout[0], app);
     draw_body(f, layout[1], app);
     draw_footer(f, layout[2], app);
+
+    // Help overlay drawn last so it sits above everything. Centered,
+    // ~50% width × ~70% height. Any keypress dismisses it (handled in
+    // the input loop), so the overlay just renders here.
+    if app.show_help {
+        draw_help_overlay(f, area);
+    }
+}
+
+/// Centered modal listing every keybinding. Cleared on any keypress.
+fn draw_help_overlay(f: &mut ratatui::Frame, area: Rect) {
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Clear, Paragraph};
+
+    // Center: 60% wide, 60% tall.
+    let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+    let h = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(v[1]);
+    let popup = h[1];
+
+    let body = "\
+  ?           toggle this help overlay
+  q / Esc     quit the dashboard
+  Ctrl-C      quit the dashboard
+  r           refresh now (auto-refresh: 2s)
+
+  ↑ / k       previous agent in the list
+  ↓ / j       next agent in the list
+
+  t           open `bwoc spawn` in a new tmux window
+              (chat with the selected agent)
+  l           open `bwoc log -f` in a new tmux window
+              (live tail the daemon log)
+  i           open `bwoc inbox --watch` in a new tmux window
+              (live tail the inbox)
+
+Press any key to dismiss.";
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Hotkeys ")
+        .border_style(Style::default().add_modifier(Modifier::BOLD));
+    f.render_widget(Clear, popup);
+    f.render_widget(Paragraph::new(body).block(block), popup);
 }
 
 fn draw_body(f: &mut ratatui::Frame, area: Rect, app: &mut App) {
@@ -880,6 +954,8 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::raw(" inbox    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
+        Span::styled("?", bold),
+        Span::raw(" help    "),
         Span::styled("q/Esc", bold),
         Span::raw(format!(" {quit}")),
     ]))

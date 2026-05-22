@@ -60,6 +60,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "Workspace-level memory at .bwoc/memory/: the per-workspace tier",
         MEMORY,
     ),
+    (
+        "doctor",
+        "Env + workspace diagnostic with auto-fix sweeps and JSON output",
+        DOCTOR,
+    ),
 ];
 
 pub fn run(args: HelpArgs) -> i32 {
@@ -604,6 +609,82 @@ Excluded from `bwoc memory list`:
 See: bwoc help workspace  — full WORKSPACE.en.md spec including memory
      bwoc help persona    — per-agent persona (mindsets / skills / memories)
      bwoc help lifecycle  — when memory gets populated across an agent's life
+";
+
+const DOCTOR: &str = "\
+`bwoc doctor` checks the environment + workspace for things that can
+drift over time: stale daemon files, malformed cursors, oversized
+logs. Each check produces one of four statuses:
+
+  PASS    everything's fine
+  WARN    issue exists but isn't blocking; advice in the detail
+  FAIL    something is broken; rerun with --auto to attempt a fix
+  FIXED   --auto saw a previous-FAIL/-WARN and repaired it
+
+Exit code: 0 if no FAILs remain, 2 if any FAIL persists.
+
+Checks (run automatically; no flag selection):
+
+  Environment
+    ~/.bwoc/                    Per-user config directory (created on
+                                first run; --auto bootstraps it)
+    backends on PATH            At least one of claude/gemini/codex/kimi
+                                discoverable (WARN if none — `bwoc spawn`
+                                will fail without one)
+
+  Workspace structure
+    .bwoc/workspace.toml        Required marker; parse-checks fields
+    .bwoc/agents.toml           Registry parse-check
+    scaffold dirs               agents/, projects/, notes/, .bwoc/memory/
+
+  Per-agent (when registry parses)
+    agent symlinks              CLAUDE/GEMINI/CODEX/KIMI.md → AGENTS.md
+                                (--auto recreates missing ones)
+    agent.pid                   Stale sweep — PID file present but the
+                                process is dead (signal-0)
+    agent.sock                  Stale sweep — Unix socket present but no
+                                live owner
+    inbox.cursor                Sanity check — malformed (won't parse as
+                                u64), out-of-bounds (> inbox size), or
+                                orphan (cursor present + inbox missing)
+    agent.log oversize          WARN if > 10 MiB (append-mode log; can
+                                grow unbounded); --auto truncates in place
+    inbox.jsonl oversize        WARN if > 5 MiB (user data — `--auto`
+                                explicitly REFUSES to truncate; clear it
+                                with `bwoc inbox <name> --clear` instead)
+
+Flags:
+
+  --workspace <path>            Override workspace resolution. Defaults
+                                follow the standard chain (env, ancestor
+                                walk, cwd).
+
+  --auto                        Attempt to fix safe issues in place.
+                                Never touches user data — agent.log
+                                truncates (diagnostic chatter) but
+                                inbox.jsonl is explicitly preserved.
+
+  --json                        Stable structured output for CI gating:
+                                  {
+                                    \"results\": [{ name, status, detail }],
+                                    \"summary\": { pass, warn, fail, fixed },
+                                    \"exit\": 0|2
+                                  }
+                                `detail` is null for PASS, string otherwise.
+
+Workflow:
+
+  bwoc doctor                   First pass — see what's drifted
+  bwoc doctor --auto            Fix the safe stuff
+  bwoc doctor                   Confirm no FAILs remain
+  bwoc inbox <agent> --clear    User-driven cleanup for inbox bloat
+
+The doctor's policy: never silently discard user data. Diagnostic
+chatter is fair game; messages are not.
+
+See: bwoc help daemon     — what generates pid/sock/cursor in the first place
+     bwoc help messaging  — inbox.jsonl lifecycle, --clear semantics
+     bwoc help lifecycle  — overall state machine doctor diagnoses against
 ";
 
 #[cfg(test)]

@@ -422,9 +422,15 @@ impl SendArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
 struct PingArgs {
     /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
-    name: String,
+    /// Mutually exclusive with `--all` (clap group enforces).
+    name: Option<String>,
+    /// Ping every agent in the workspace. Agents with no live socket
+    /// (not running) are labeled but don't fail the run.
+    #[arg(long)]
+    all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -433,8 +439,9 @@ struct PingArgs {
 impl From<PingArgs> for ping::PingArgs {
     fn from(a: PingArgs) -> Self {
         Self {
-            name: a.name,
+            name: a.name.unwrap_or_default(), // clap group ensures one of (name, all)
             workspace: a.workspace,
+            all: a.all,
         }
     }
 }

@@ -14,8 +14,12 @@ use std::time::Duration;
 use bwoc_core::workspace::AgentsRegistry;
 
 pub struct PingArgs {
+    /// Empty when `--all`. The CLI shim enforces "exactly one of name | all".
     pub name: String,
     pub workspace: Option<PathBuf>,
+    /// Ping every agent in the workspace (skips entries with no live
+    /// socket — those aren't running, not an error).
+    pub all: bool,
 }
 
 pub fn run(args: PingArgs) -> i32 {
@@ -32,6 +36,11 @@ pub fn run(args: PingArgs) -> i32 {
             return 1;
         }
     };
+
+    if args.all {
+        return ping_all(&workspace, &registry);
+    }
+
     let lookup_id = if args.name.starts_with("agent-") {
         args.name.clone()
     } else {
@@ -55,41 +64,95 @@ pub fn run(args: PingArgs) -> i32 {
         return 2;
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::net::UnixStream;
-        let mut stream = match UnixStream::connect(&sock_path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "bwoc ping: failed to connect to {}: {e}",
-                    sock_path.display()
-                );
-                return 2;
-            }
-        };
-        // Bound read time so a hung agent doesn't hang the CLI.
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
-
-        if let Err(e) = stream.write_all(b"PING\n") {
-            eprintln!("bwoc ping: write failed: {e}");
-            return 1;
-        }
-        let mut reader = BufReader::new(&stream);
-        let mut line = String::new();
-        if let Err(e) = reader.read_line(&mut line) {
-            eprintln!("bwoc ping: read failed: {e}");
-            return 1;
-        }
-        let response = line.trim();
-        println!("{} → {}", entry.id, response);
-        if response == "PONG" { 0 } else { 1 }
+    match ping_one(&sock_path, &entry.id) {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(code) => code,
     }
-    #[cfg(not(unix))]
-    {
-        eprintln!("bwoc ping: Unix domain sockets only (Windows support: Phase 2 sub-task)");
+}
+
+/// Single-agent ping. Returns:
+///   Ok(true)  → got PONG (exit 0)
+///   Ok(false) → got something else (protocol drift, exit 1)
+///   Err(n)    → connection failure (exit `n`, usually 2)
+#[cfg(unix)]
+fn ping_one(sock_path: &std::path::Path, id: &str) -> Result<bool, i32> {
+    use std::os::unix::net::UnixStream;
+    let mut stream = match UnixStream::connect(sock_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "bwoc ping: failed to connect to {}: {e}",
+                sock_path.display()
+            );
+            return Err(2);
+        }
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    if let Err(e) = stream.write_all(b"PING\n") {
+        eprintln!("bwoc ping: write failed: {e}");
+        return Err(1);
+    }
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+    if let Err(e) = reader.read_line(&mut line) {
+        eprintln!("bwoc ping: read failed: {e}");
+        return Err(1);
+    }
+    let response = line.trim();
+    println!("{id} → {response}");
+    Ok(response == "PONG")
+}
+
+#[cfg(not(unix))]
+fn ping_one(_sock_path: &std::path::Path, _id: &str) -> Result<bool, i32> {
+    eprintln!("bwoc ping: Unix domain sockets only (Windows support: Phase 2 sub-task)");
+    Err(1)
+}
+
+/// Mass ping. Walks the registry, pings every agent with a live
+/// socket, summarizes. Agents with no socket (not running) are
+/// labeled and counted but don't fail the run — they're just
+/// stopped, not broken.
+fn ping_all(workspace: &std::path::Path, registry: &AgentsRegistry) -> i32 {
+    if registry.agents.is_empty() {
+        println!(
+            "bwoc ping --all: no agents registered in {}.",
+            workspace.display()
+        );
+        return 0;
+    }
+    let mut pong = 0u32;
+    let mut not_running = 0u32;
+    let mut failed = 0u32;
+    let mut protocol_drift = 0u32;
+    println!();
+    for entry in &registry.agents {
+        let sock_path = workspace.join(&entry.path).join(".bwoc/agent.sock");
+        if !sock_path.exists() {
+            println!("{} → not running", entry.id);
+            not_running += 1;
+            continue;
+        }
+        match ping_one(&sock_path, &entry.id) {
+            Ok(true) => pong += 1,
+            Ok(false) => protocol_drift += 1,
+            Err(_) => failed += 1,
+        }
+    }
+    println!();
+    println!(
+        "{} agent(s): {pong} PONG, {not_running} not running, {protocol_drift} protocol drift, {failed} failed",
+        registry.agents.len(),
+    );
+    println!();
+    // Exit 0 if everything that's UP responded correctly; failures
+    // (connection errors / drift) → 1. "not running" is not a failure.
+    if failed > 0 || protocol_drift > 0 {
         1
+    } else {
+        0
     }
 }
 

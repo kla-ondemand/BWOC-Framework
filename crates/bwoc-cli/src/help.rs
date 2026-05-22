@@ -553,8 +553,11 @@ Commands:
   bwoc memory list                    list entries (NAME / SIZE table)
   bwoc memory list --json             same as a JSON object
   bwoc memory show <name>             print one entry to stdout
+  bwoc memory show --all              print every entry concatenated (with `# === <name> ===` headers)
+  bwoc memory show --all --json       same as a JSON array of {name, content}
   bwoc memory put <name>              write from stdin (or `--file <p>`); `--force` overwrites
   bwoc memory search <query>          substring match across entries (case-insensitive)
+  bwoc memory rm <name>               delete an entry; TTY-confirms unless `--yes` / `-y`
 
 Entry name in `show` / `put` accepts `<name>` or `<name>.md`
 interchangeably. Path traversal is refused: names with `/`, `\\`,

@@ -75,7 +75,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc-agent --serve` Windows stub | Compiles + runs default mode; `--serve` returns exit 2 with "Unix-only" message |
 | `bwoc log <agent>` | Tails daemon stderr from `<agent>/.bwoc/agent.log`; `-f`/`--follow` for live streaming; `-n N` for last-N lines; `--clear` truncates in place |
 | Per-workspace memory scaffold | `bwoc init` creates `.bwoc/memory/` with a README documenting the 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show \| put \| search` | Full read/write/search CLI for `.bwoc/memory/`: `list` (table + `--json`), `show <name>`, `put <name>` (from stdin or `--file`, atomic + `--force`), `search <query>` (case-insensitive substring); all enforce flat-name + no-traversal |
+| `bwoc memory list \| show \| put \| search \| rm` | Full CRUD+search CLI for `.bwoc/memory/`: `list` (table + `--json`), `show <name>` or `show --all` (`# === <name> ===` headers; `--json` array), `put <name>` (stdin or `--file`, atomic + `--force`), `search <query>` (case-insensitive substring + `--json`), `rm <name>` (TTY confirm or `--yes`); all enforce flat-name + no-traversal, refuse README.md |
 
 ### Remaining for ship
 

@@ -75,7 +75,7 @@
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
 | Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
-| `bwoc memory list \| show \| put \| search` | CLI read/write/search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json`), `show <name>`, `put <name>` (จาก stdin หรือ `--file`, atomic + `--force`), `search <query>` (substring แบบ case-insensitive); ทุก subcommand บังคับ flat-name + ห้าม traversal |
+| `bwoc memory list \| show \| put \| search \| rm` | CRUD+search ครบสำหรับ `.bwoc/memory/`: `list` (table + `--json`), `show <name>` หรือ `show --all` (header `# === <name> ===`; `--json` array), `put <name>` (stdin หรือ `--file`, atomic + `--force`), `search <query>` (substring case-insensitive + `--json`), `rm <name>` (TTY confirm หรือ `--yes`); ทุก subcommand บังคับ flat-name + ห้าม traversal, refuse README.md |
 
 ### ที่เหลือก่อน ship
 

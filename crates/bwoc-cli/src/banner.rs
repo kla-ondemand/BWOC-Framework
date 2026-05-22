@@ -81,7 +81,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "memory",
-        "Workspace-level memory (.bwoc/memory/) — list / show / put / search",
+        "Workspace-level memory (.bwoc/memory/) — list / show / put / search / rm",
     ),
 ];
 

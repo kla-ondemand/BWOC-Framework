@@ -1,0 +1,19 @@
+title: BWOC Framework
+description: Buddhist Way of Coding — a backend-neutral framework for AI coding agents
+remote_theme: pages-themes/cayman@v0.2.0
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: true
+include:
+  - en
+  - th
+exclude:
+  - _config.yml
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

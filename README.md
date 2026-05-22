@@ -148,25 +148,58 @@ All agents run under the same rules via `conventions.md` and a neutrality check.
 
 ---
 
-## Repository Structure
+## Repository & Workspace Layout
+
+Two distinct trees the project deals with: **(A)** this repository — what a contributor clones; and **(B)** a *user workspace* — what `bwoc init` creates on a user's machine. They are not the same thing.
+
+### A. The BWOC framework repository
 
 ```
 bwoc-framwork/
-└── modules/
-    └── agent-template/          ← Core template (clone to create an agent)
-        ├── docs/
-        │   ├── en/              ← English documentation
-        │   │   ├── PHILOSOPHY.en.md     ← Conceptual core (read first)
-        │   │   ├── OVERVIEW.en.md       ← Entry door (5-min orientation)
-        │   │   ├── PRD.en.md            ← Product (Ariyasacca 4)
-        │   │   ├── SRS.en.md            ← Requirements (Magga 8)
-        │   │   ├── SELF-IMPROVEMENT.en.md
-        │   │   └── THREAT-MODEL.en.md
-        │   └── th/              ← Thai documentation (bilingual pair)
-        ├── project-example.md
-        ├── reference-example.md
-        └── task-log.example.jsonl
+├── crates/                      ← Rust workspace (the reference implementation)
+│   ├── bwoc-cli/                  • `bwoc` binary — install + workspace + lifecycle
+│   ├── bwoc-agent/                • `bwoc-agent` daemon — control socket + inbox
+│   └── bwoc-core/                 • shared types — manifest, workspace, identity
+├── modules/
+│   └── agent-template/          ← Core template (cloned per agent — see B)
+│       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/GEMINI/CODEX/KIMI.md)
+│       ├── docs/{en,th}/          • PHILOSOPHY · PRD · SRS · SELF-IMPROVEMENT · THREAT-MODEL · OVERVIEW
+│       ├── persona/ · mindsets/ · skills/ · interconnect/ · memories/
+│       └── scripts/               • incarnate.sh · check-agent-neutrality.sh
+├── docs/{en,th}/                ← Framework-level docs (bilingual pair)
+│                                    ARCHITECTURE · INCARNATION · WORKSPACE · NAMING · GLOSSARY · ROADMAP · FAQ
+├── examples/                    ← howto · showcases · usecases (illustrative)
+├── applications/                ← Phase 4 placeholder — reference agents land here
+├── scripts/                     ← install.sh · bump-version.sh
+├── notes/                       ← Development logs — YYYY-MM-DD_<title>.md
+├── .github/                     ← CI (ci.yml, docs.yml) · issue + PR templates
+├── Cargo.toml · Cargo.lock      ← Cargo workspace root
+└── README · VISION · VERSION · CHANGELOG · CONTRIBUTING · SECURITY · CODE_OF_CONDUCT · LICENSE · CLAUDE.md
 ```
+
+### B. A user workspace (what `bwoc init` creates)
+
+The CLI operates against a **workspace** the user designates — independent of any git repository. Full spec in [`docs/en/WORKSPACE.en.md`](docs/en/WORKSPACE.en.md) (Thai: [`docs/th/WORKSPACE.th.md`](docs/th/WORKSPACE.th.md)).
+
+```
+<workspace>/                    ← any directory the user picks
+├── .bwoc/                        • workspace marker (REQUIRED)
+│   ├── workspace.toml              · name, version, defaults (backend, lang)
+│   ├── agents.toml                 · auto-maintained agent index
+│   └── memory/                     · workspace-scoped memory (OPTIONAL)
+├── agents/                       • incarnated agents live here (RECOMMENDED)
+│   ├── alpha/                      · one BWOC agent — clone of `modules/agent-template/`
+│   └── beta/
+└── ...                           • user's other files coexist freely
+
+~/.bwoc/                        ← central per-user memory (independent of workspace)
+├── config.toml                   • user defaults — backend, lang, default workspace
+├── memory/                       • shared by every agent this user runs
+├── workspaces.toml               • known-workspaces registry
+└── logs/                         • CLI invocation logs
+```
+
+**Workspace resolution** (first match wins): `--workspace <path>` flag → `BWOC_WORKSPACE` env → nearest ancestor with `.bwoc/` → cwd if it has `.bwoc/` → fail with exit code 2 + `bwoc init` hint.
 
 ---
 
@@ -270,7 +303,7 @@ BWOC is specification-first. The reference implementation is a native, cross-pla
 | `bwoc-agent` runtime (ships with each incarnated agent) | Rust, single static binary | **macOS · Linux · Windows** |
 | CLI i18n (output strings) | Project Fluent (`.ftl` per locale) | **Ships with TH · EN**; pluggable for any future language |
 | Backend integration | Subprocess of the LLM's own CLI — Claude Code, Gemini CLI, Codex CLI, Kimi CLI | Whatever the backend supports |
-| Distribution | `cargo install bwoc-cli` + GitHub Release binaries (signed) | — |
+| Distribution | GitHub Release binaries with SHA-256 checksums; `cargo install --git` from source (crates.io publish targeted for 1.0) | — |
 | License | MIT (see [`LICENSE`](LICENSE)) | — |
 
 The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, no Docker required to incarnate or run an agent.

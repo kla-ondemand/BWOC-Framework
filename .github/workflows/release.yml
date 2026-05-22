@@ -1,21 +1,28 @@
 name: Release
 
-# Triggered on tag push matching `v*` (e.g. `v0.1.0`, `v1.0.0-rc1`).
-# Builds release binaries for all 3 advertised platforms, packages
-# them into archives, and attaches them to the auto-created GitHub
-# Release. Maintainers push the tag manually:
+# Release identity uses CalVer: v<YYYY>.<M>.<D>-<patch>
+# Examples: v2026.5.22-0, v2026.5.22-1, v2026.12.31-9
 #
-#   git tag v0.1.0
-#   git push origin v0.1.0
+# Cargo.toml continues to use SemVer for development (auto-bumped by
+# .claude/hooks/auto-version.sh). The two coexist intentionally — see
+# VERSION.md "Dual Versioning" for the why. Cargo SemVer = internal dev
+# checkpoint; Git tag CalVer = public release identity.
 #
-# Code-signing is NOT done yet — binaries are unsigned. Adding
-# signing requires per-platform cert setup (Apple Developer for
-# macOS, Windows Authenticode); deferred to a follow-up iter when
-# the user authorizes the certs and storage location.
+# Maintainers push the tag manually:
+#
+#   git tag v2026.5.22-0
+#   git push origin v2026.5.22-0
+#
+# Code-signing is NOT done yet — binaries are unsigned, distributed with
+# SHA-256 checksums. Adding signing requires per-platform cert setup
+# (Apple Developer for macOS, Windows Authenticode); deferred until the
+# user authorizes the certs and storage location.
 on:
   push:
     tags:
-      - 'v*'
+      # CalVer-shaped tags only — refuses ad-hoc semver tags like v0.1.0.
+      # If a pre-CalVer fallback is ever needed, widen this glob carefully.
+      - 'v[0-9][0-9][0-9][0-9].*'
 
 permissions:
   contents: write  # required to create / upload to GitHub Release
@@ -82,8 +89,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          # Auto-detect prerelease from tag suffix (`v0.1.0-rc1` etc).
-          prerelease: ${{ contains(github.ref, '-') }}
-          # Auto-generate release notes from commit history between this
-          # tag and the previous tag. The maintainer can edit afterwards.
+          # CalVer tags always contain `-<patch>` so `contains(ref, '-')` cannot
+          # distinguish stable from prerelease. Treat every CalVer release as
+          # stable; flip the GH Release "Set as a pre-release" toggle by hand
+          # if a given build is genuinely experimental.
           generate_release_notes: true
+          fail_on_unmatched_files: true

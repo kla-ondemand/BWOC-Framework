@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-The **BWOC framework** (Buddhist Way of Coding) — a backend-neutral specification for AI coding agents. This repo contains no application code: only Markdown documentation, an agent template under `modules/agent-template/`, and shell scripts that live inside that template.
+The **BWOC framework** (Buddhist Way of Coding) — a backend-neutral specification for AI coding agents, plus the native Rust implementation that incarnates and runs them.
 
 Distinguish two scopes when reading or editing:
 
-- **Framework root** (this directory) — versioned framework docs, license, contribution guide. No `scripts/` here.
+- **Framework root** (this directory) — framework spec docs (`docs/en/`, `docs/th/`, root-level `README.md` / `VISION.md` / `VERSION.md` / `CONTRIBUTING.md`), the Rust workspace (`crates/bwoc-cli`, `crates/bwoc-agent`, `crates/bwoc-core`, `Cargo.toml`), and helper scripts (`scripts/install.sh`, `scripts/bump-version.sh`).
 - **Agent template** (`modules/agent-template/`) — the cloneable artifact. Has its own `AGENTS.md`, `CLAUDE.md`, `docs/`, `scripts/`, `interconnect/`, `memories/`, `persona/`, `mindsets/`, `skills/`.
 
 The template's `CLAUDE.md` is for incarnated agents reading themselves; this file is for Claude editing the framework.
@@ -36,10 +36,10 @@ Existing template doc pairs: `OVERVIEW`, `PHILOSOPHY`, `PRD`, `SELF-IMPROVEMENT`
 
 ## Repo State Quirks
 
-- **Not yet `git init`'d.** No remote, no commits. `gh` is installed but useless until init.
-- **Framework-level `applications/`, `examples/`, `docs/en/`, `docs/th/`** are empty placeholders for Phase 4.
-- **Referenced but not present**: `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/CODEOWNERS` — `CONTRIBUTING.md` links them. Do not pretend they exist.
-- **`.claude/` exists but is empty** — `.claude/settings.local.json`, `.claude/cache/`, `.claude/.local/` are gitignored.
+- **The framework repo is itself a BWOC workspace** (`.bwoc/workspace.toml` at root) used for end-to-end CLI testing. Its `.gitignore` therefore ignores `.bwoc/`, `agents/`, `projects/` entirely — the **opposite** of what `bwoc init` writes for user workspaces. See `.gitignore` lines 176-196 and `crates/bwoc-cli/src/init.rs::GITIGNORE_TEMPLATE` for the contrast.
+- **`applications/` is an empty placeholder** for Phase 4. `examples/` and `docs/{en,th}/` now have real content — check before assuming empty.
+- **Referenced but not present**: `.github/CODEOWNERS` — `CONTRIBUTING.md` links it. Do not pretend it exists.
+- **Auto-version hook** (`.claude/hooks/auto-version.sh`) bumps `Cargo.toml` patch on `.rs`/`.toml` writes and `VERSION.md` `Document-Version` on `.md` writes. Expect those files to appear in your working tree after edits — that's the hook, not drift.
 
 ## Template Scripts (used inside an incarnated agent, not from this root)
 

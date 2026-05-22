@@ -30,6 +30,8 @@ pub struct ListArgs {
     pub status_filter: Option<String>,
     /// Filter to agents whose `backend` field exactly matches (e.g. "claude", "gemini").
     pub backend_filter: Option<String>,
+    /// Filter to agents whose daemon is actually running (PID file + signal-0 check).
+    pub running_only: bool,
 }
 
 pub struct PruneArgs {
@@ -180,6 +182,9 @@ pub fn run_list(args: ListArgs) -> i32 {
                 return false;
             }
         }
+        if args.running_only && !is_running(&root, a) {
+            return false;
+        }
         true
     };
     let filtered: Vec<&bwoc_core::workspace::AgentEntry> =
@@ -196,6 +201,7 @@ pub fn run_list(args: ListArgs) -> i32 {
                 "backend": a.backend,
                 "status": a.status,
                 "incarnated": a.incarnated,
+                "running": is_running(&root, a),
             })).collect::<Vec<_>>(),
         });
         match serde_json::to_string_pretty(&value) {
@@ -248,9 +254,39 @@ pub fn run_list(args: ListArgs) -> i32 {
         "─".repeat(20),
     );
     for a in &filtered {
-        println!("{:<32} {:<10} {:<10} {}", a.id, a.status, a.backend, a.path);
+        let mark = if is_running(&root, a) { "●" } else { "○" };
+        println!(
+            "{mark} {:<30} {:<10} {:<10} {}",
+            a.id, a.status, a.backend, a.path
+        );
     }
     0
+}
+
+/// Liveness probe — true if the agent has a PID file AND the pid is
+/// alive. Mirror of `status.rs::running_pid` / `doctor.rs` signal-0
+/// check. With this third caller, the small unsafe libc::kill helper
+/// is now ripe for promotion to a shared module — flagged for the
+/// next refactor pass.
+fn is_running(root: &Path, a: &bwoc_core::workspace::AgentEntry) -> bool {
+    let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
+    let Ok(raw) = std::fs::read_to_string(&pid_path) else {
+        return false;
+    };
+    let Ok(pid) = raw.trim().parse::<u32>() else {
+        return false;
+    };
+    signal_zero_alive(pid)
+}
+
+#[cfg(unix)]
+fn signal_zero_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn signal_zero_alive(_pid: u32) -> bool {
+    false
 }
 
 /// Format a one-phrase summary of the active filters for the empty-set

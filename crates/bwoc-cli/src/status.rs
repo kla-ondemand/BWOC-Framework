@@ -20,6 +20,7 @@ use bwoc_core::workspace::{AgentEntry, AgentsRegistry};
 pub struct StatusArgs {
     pub name: Option<String>,
     pub workspace: Option<PathBuf>,
+    pub json: bool,
 }
 
 const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
@@ -41,9 +42,74 @@ pub fn run(args: StatusArgs) -> i32 {
         }
     };
 
+    // JSON branch — single shape for both "all" and "one" cases.
+    if args.json {
+        return emit_json(&root, &registry, args.name.as_deref());
+    }
+
     match args.name {
         Some(name) => print_one(&root, &registry, &name),
         None => print_all(&root, &registry),
+    }
+}
+
+fn emit_json(root: &Path, registry: &AgentsRegistry, name: Option<&str>) -> i32 {
+    let agents: Vec<serde_json::Value> = registry
+        .agents
+        .iter()
+        .filter(|a| {
+            name.is_none_or(|n| {
+                let lookup = if n.starts_with("agent-") {
+                    n.to_string()
+                } else {
+                    format!("agent-{n}")
+                };
+                a.id == lookup
+            })
+        })
+        .map(|a| {
+            let health = probe(root, a);
+            let (health_str, health_detail) = match &health {
+                Health::Ok => ("ok", None),
+                Health::Warn(m) => ("warn", Some(m.as_str())),
+                Health::Fail(m) => ("fail", Some(m.as_str())),
+            };
+            let primary_model = read_primary_model(root, a);
+            serde_json::json!({
+                "id": a.id,
+                "path": a.path,
+                "backend": a.backend,
+                "status": a.status,
+                "incarnated": a.incarnated,
+                "primary_model": primary_model,
+                "health": health_str,
+                "health_detail": health_detail,
+            })
+        })
+        .collect();
+
+    if name.is_some() && agents.is_empty() {
+        eprintln!(
+            "bwoc status: no agent named '{}' in workspace {}",
+            name.unwrap_or(""),
+            root.display()
+        );
+        return 2;
+    }
+
+    let value = serde_json::json!({
+        "workspace": root.display().to_string(),
+        "agents": agents,
+    });
+    match serde_json::to_string_pretty(&value) {
+        Ok(s) => {
+            println!("{s}");
+            0
+        }
+        Err(e) => {
+            eprintln!("bwoc status: failed to serialize JSON: {e}");
+            1
+        }
     }
 }
 

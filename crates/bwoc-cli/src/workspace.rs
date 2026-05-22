@@ -23,6 +23,7 @@ pub struct ValidateArgs {
 pub struct ListArgs {
     pub path: Option<PathBuf>,
     pub lang: String,
+    pub json: bool,
 }
 
 pub struct PruneArgs {
@@ -86,6 +87,31 @@ pub fn run_list(args: ListArgs) -> i32 {
             return 1;
         }
     };
+
+    // JSON branch — stable machine-readable output, no decorative text,
+    // no Fluent (locale doesn't affect machine consumers).
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "agents": registry.agents.iter().map(|a| serde_json::json!({
+                "id": a.id,
+                "path": a.path,
+                "backend": a.backend,
+                "status": a.status,
+                "incarnated": a.incarnated,
+            })).collect::<Vec<_>>(),
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => {
+                println!("{s}");
+                return 0;
+            }
+            Err(e) => {
+                eprintln!("bwoc list: failed to serialize JSON: {e}");
+                return 1;
+            }
+        }
+    }
 
     let root_display = root.display().to_string();
     if registry.agents.is_empty() {

@@ -108,6 +108,9 @@ struct StatusArgs {
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
+    /// Emit JSON to stdout instead of the human-readable layout.
+    #[arg(long)]
+    json: bool,
 }
 
 impl From<StatusArgs> for status::StatusArgs {
@@ -115,6 +118,7 @@ impl From<StatusArgs> for status::StatusArgs {
         Self {
             name: a.name,
             workspace: a.workspace,
+            json: a.json,
         }
     }
 }
@@ -191,6 +195,9 @@ struct ListArgs {
     /// Workspace root path. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     path: Option<PathBuf>,
+    /// Emit JSON to stdout instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
 }
 
 impl ListArgs {
@@ -198,6 +205,7 @@ impl ListArgs {
         workspace::ListArgs {
             path: self.path,
             lang,
+            json: self.json,
         }
     }
 }

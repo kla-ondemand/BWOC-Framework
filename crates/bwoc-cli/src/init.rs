@@ -113,7 +113,23 @@ fn init(args: InitArgs) -> Result<PathBuf, InitError> {
         write_readme_if_missing(&p, readme)?;
     }
 
+    // Write a sensible .gitignore if one doesn't exist. Idempotent —
+    // don't clobber user edits.
+    write_gitignore_if_missing(&root)?;
+
     Ok(root)
+}
+
+/// Write a `.gitignore` at the workspace root if none exists. Excludes
+/// daemon ephemerals (`agent.pid`/`agent.sock`/`inbox.cursor`) that
+/// regenerate on every `bwoc start`. `inbox.jsonl` is left tracked by
+/// default — users may want message-log history checked in.
+fn write_gitignore_if_missing(root: &Path) -> io::Result<()> {
+    let path = root.join(".gitignore");
+    if path.exists() {
+        return Ok(());
+    }
+    fs::write(path, GITIGNORE_TEMPLATE)
 }
 
 /// Write `README.md` into `dir` if it doesn't already exist. Idempotent —
@@ -125,6 +141,27 @@ fn write_readme_if_missing(dir: &Path, content: &str) -> io::Result<()> {
     }
     fs::write(readme, content)
 }
+
+const GITIGNORE_TEMPLATE: &str = "\
+# BWOC workspace — daemon ephemerals
+#
+# These files regenerate on every `bwoc start` and shouldn't be
+# committed. `bwoc doctor --auto` sweeps stale ones if a crash leaves
+# them behind.
+agents/*/.bwoc/agent.pid
+agents/*/.bwoc/agent.sock
+agents/*/.bwoc/inbox.cursor
+
+# bwoc inbox messages — uncomment if you'd rather not track them.
+# Most teams DO want them in history (audit trail / replay), so the
+# default is to keep them tracked.
+# agents/*/.bwoc/inbox.jsonl
+
+# Generic local state — match the framework repo's own .gitignore.
+.DS_Store
+*.swp
+*~
+";
 
 /// Standard sub-directories scaffolded by `bwoc init` (paired with the
 /// README content written into each). The configured `agents_dir`

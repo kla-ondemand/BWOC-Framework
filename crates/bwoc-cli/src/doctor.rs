@@ -63,6 +63,11 @@ pub fn run(args: DoctorArgs) -> i32 {
                 for r in check_agent_symlinks(&root, args.auto) {
                     results.push(r);
                 }
+                // Stale `agent.pid` cleanup (foundation laid by
+                // `bwoc-agent --serve`).
+                for r in check_stale_pids(&root, args.auto) {
+                    results.push(r);
+                }
             }
         }
         None => results.push(CheckResult {
@@ -205,6 +210,100 @@ fn check_scaffold_dirs(root: &Path, auto: bool) -> CheckResult {
             missing.join(", ")
         )),
     }
+}
+
+/// Detect `<agent>/.bwoc/agent.pid` files whose process is no longer
+/// alive (signal-0 fails). With --auto, remove the stale file.
+///
+/// Mirrors the liveness check in `status.rs::signal_zero_alive`;
+/// duplicated to keep the doctor module self-contained (extract to a
+/// shared helper when a third caller appears).
+fn check_stale_pids(root: &Path, auto: bool) -> Vec<CheckResult> {
+    let Ok(registry) = AgentsRegistry::load(root) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for a in &registry.agents {
+        let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
+        if !pid_path.is_file() {
+            continue; // Not a daemon-mode agent; nothing to clean.
+        }
+        let raw = match std::fs::read_to_string(&pid_path) {
+            Ok(s) => s,
+            Err(e) => {
+                out.push(CheckResult {
+                    name: format!("agent pid: {}", a.id),
+                    status: Status::Warn(format!("could not read {}: {e}", pid_path.display())),
+                });
+                continue;
+            }
+        };
+        let pid: u32 = match raw.trim().parse() {
+            Ok(n) => n,
+            Err(_) => {
+                // Malformed PID file — auto-fix would remove it.
+                if auto {
+                    let _ = std::fs::remove_file(&pid_path);
+                    out.push(CheckResult {
+                        name: format!("agent pid: {}", a.id),
+                        status: Status::Fixed(format!(
+                            "removed malformed PID file: {}",
+                            pid_path.display()
+                        )),
+                    });
+                } else {
+                    out.push(CheckResult {
+                        name: format!("agent pid: {}", a.id),
+                        status: Status::Fail(format!(
+                            "malformed PID file at {} (rerun with --auto to remove)",
+                            pid_path.display()
+                        )),
+                    });
+                }
+                continue;
+            }
+        };
+        if signal_zero_alive(pid) {
+            // Process exists — not stale, skip silently.
+            continue;
+        }
+        // Stale.
+        if auto {
+            if std::fs::remove_file(&pid_path).is_ok() {
+                out.push(CheckResult {
+                    name: format!("agent pid: {}", a.id),
+                    status: Status::Fixed(format!("removed stale PID file (pid {pid} not alive)")),
+                });
+            } else {
+                out.push(CheckResult {
+                    name: format!("agent pid: {}", a.id),
+                    status: Status::Fail(format!(
+                        "stale PID {pid} but couldn't remove {}",
+                        pid_path.display()
+                    )),
+                });
+            }
+        } else {
+            out.push(CheckResult {
+                name: format!("agent pid: {}", a.id),
+                status: Status::Fail(format!(
+                    "stale PID file at {} (pid {pid} not alive; rerun with --auto to remove)",
+                    pid_path.display()
+                )),
+            });
+        }
+    }
+    out
+}
+
+#[cfg(unix)]
+fn signal_zero_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn signal_zero_alive(_pid: u32) -> bool {
+    false
 }
 
 fn check_agent_symlinks(root: &Path, auto: bool) -> Vec<CheckResult> {

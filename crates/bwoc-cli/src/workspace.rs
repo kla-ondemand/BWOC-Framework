@@ -35,6 +35,10 @@ pub struct ListArgs {
     /// Filter to agents with at least one pending inbox envelope.
     /// Pairs with `bwoc inbox <agent>` for the "what needs attention" flow.
     pub inbox_pending_only: bool,
+    /// Optional sort key. None = registry insertion order (default).
+    /// Accepted: "id" (alphabetical), "inbox" (descending count),
+    /// "incarnated" (oldest first), "backend" (alphabetical).
+    pub sort: Option<String>,
 }
 
 pub struct PruneArgs {
@@ -198,8 +202,33 @@ pub fn run_list(args: ListArgs) -> i32 {
         }
         true
     };
-    let filtered: Vec<&bwoc_core::workspace::AgentEntry> =
+    let mut filtered: Vec<&bwoc_core::workspace::AgentEntry> =
         registry.agents.iter().filter(|a| matches(a)).collect();
+
+    // Optional --sort. Stable sort so secondary order = registry order.
+    if let Some(field) = args.sort.as_deref() {
+        match field {
+            "id" => filtered.sort_by(|a, b| a.id.cmp(&b.id)),
+            "backend" => filtered.sort_by(|a, b| a.backend.cmp(&b.backend)),
+            "incarnated" => filtered.sort_by(|a, b| a.incarnated.cmp(&b.incarnated)),
+            "inbox" => {
+                // Descending — biggest backlog first; that's what the user
+                // wants when scanning for "what needs attention next".
+                filtered.sort_by(|a, b| {
+                    let ca = crate::livecheck::inbox_count(&root, a);
+                    let cb = crate::livecheck::inbox_count(&root, b);
+                    cb.cmp(&ca)
+                });
+            }
+            other => {
+                eprintln!(
+                    "bwoc list --sort: unknown field '{other}'. \
+                     Accepted: id | inbox | incarnated | backend"
+                );
+                return 2;
+            }
+        }
+    }
 
     // JSON branch — stable machine-readable output, no decorative text,
     // no Fluent (locale doesn't affect machine consumers).

@@ -581,6 +581,9 @@ struct ListArgs {
     /// Filter to agents with at least one pending inbox envelope.
     #[arg(long = "inbox-pending")]
     inbox_pending: bool,
+    /// Sort key. Default: registry insertion order. One of: id, inbox, incarnated, backend.
+    #[arg(long)]
+    sort: Option<String>,
 }
 
 impl ListArgs {
@@ -593,6 +596,7 @@ impl ListArgs {
             backend_filter: self.backend.map(|b| b.cli_name().to_string()),
             running_only: self.running,
             inbox_pending_only: self.inbox_pending,
+            sort: self.sort,
         }
     }
 }

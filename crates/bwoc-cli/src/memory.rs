@@ -39,6 +39,11 @@ pub enum MemoryAction {
     },
     /// Substring search across all memory entries. Case-insensitive.
     Search(String),
+    /// Delete an entry. `yes` skips the TTY confirm.
+    Remove {
+        name: String,
+        yes: bool,
+    },
 }
 
 /// Where `put` reads the new entry's content from.
@@ -77,6 +82,73 @@ pub fn run(args: MemoryArgs) -> i32 {
             force,
         } => put(&memory_dir, &name, source, force),
         MemoryAction::Search(query) => search(&memory_dir, &query, args.json),
+        MemoryAction::Remove { name, yes } => remove(&memory_dir, &name, yes),
+    }
+}
+
+/// Delete a memory entry. Refuses traversal + dot-prefix (same rule as
+/// `show` / `put`). On a TTY without `--yes`, prompts for confirmation
+/// before unlinking; non-TTY or `--yes` deletes immediately. `README.md`
+/// is rejected (slot doc — not a removable entry).
+fn remove(memory_dir: &Path, name: &str, yes: bool) -> i32 {
+    let filename = if name.ends_with(".md") {
+        name.to_string()
+    } else {
+        format!("{name}.md")
+    };
+    if filename.contains('/') || filename.contains('\\') || filename.starts_with('.') {
+        eprintln!(
+            "bwoc memory rm: invalid name '{name}' — must be a flat *.md filename, \
+             no path separators, no dot-prefix."
+        );
+        return 2;
+    }
+    if filename == "README.md" {
+        eprintln!(
+            "bwoc memory rm: refusing to remove README.md (it's the slot documentation, \
+             scaffolded by `bwoc init`; not a memory entry)."
+        );
+        return 2;
+    }
+    let target = memory_dir.join(&filename);
+    if !target.is_file() {
+        eprintln!(
+            "bwoc memory rm: no entry named '{filename}' in {}. \
+             Try `bwoc memory list`.",
+            memory_dir.display()
+        );
+        return 2;
+    }
+
+    // Confirm on TTY when --yes not given. Same UX as `bwoc retire`.
+    use std::io::IsTerminal;
+    if !yes && std::io::stdin().is_terminal() {
+        use std::io::{Write as _, stdin, stdout};
+        let size = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+        print!(
+            "Remove {} ({size} byte{})? [y/N] ",
+            target.display(),
+            if size == 1 { "" } else { "s" }
+        );
+        let _ = stdout().flush();
+        let mut line = String::new();
+        let _ = stdin().read_line(&mut line);
+        let answer = line.trim().to_lowercase();
+        if answer != "y" && answer != "yes" {
+            eprintln!("bwoc memory rm: aborted (answer was '{}')", line.trim());
+            return 2;
+        }
+    }
+
+    match std::fs::remove_file(&target) {
+        Ok(_) => {
+            println!("Removed {}.", target.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("bwoc memory rm: failed to remove {}: {e}", target.display());
+            1
+        }
     }
 }
 

@@ -159,6 +159,17 @@ enum MemoryAction {
         #[arg(long)]
         json: bool,
     },
+    /// Delete a memory entry. Prompts on TTY unless `--yes` is given.
+    Rm {
+        /// Entry name (with or without `.md` extension).
+        name: String,
+        /// Skip the TTY confirmation prompt.
+        #[arg(long, short)]
+        yes: bool,
+        /// Workspace root. Resolution chain same as `memory list`.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
 }
 
 impl MemoryAction {
@@ -218,6 +229,15 @@ impl MemoryAction {
                 action: memory::MemoryAction::Search(query),
                 workspace,
                 json,
+            },
+            MemoryAction::Rm {
+                name,
+                yes,
+                workspace,
+            } => memory::MemoryArgs {
+                action: memory::MemoryAction::Remove { name, yes },
+                workspace,
+                json: false,
             },
         }
     }

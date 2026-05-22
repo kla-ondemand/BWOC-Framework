@@ -369,23 +369,40 @@ impl ChatArgs {
 }
 
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("body").required(true).args(["message", "file"])))]
 struct SendArgs {
     /// Recipient agent. Matches by id ("agent-foo") or bare name ("foo").
     to: String,
-    /// Message text (everything after the agent name; quote multi-word).
-    message: String,
+    /// Message text (quote multi-word). Mutually exclusive with `--file`.
+    message: Option<String>,
+    /// Source file. The file's full contents (minus trailing newlines) becomes
+    /// the message body. Mutually exclusive with `<message>`.
+    #[arg(long)]
+    file: Option<PathBuf>,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
 }
 
-impl From<SendArgs> for send::SendArgs {
-    fn from(a: SendArgs) -> Self {
-        Self {
-            to: a.to,
-            message: a.message,
-            workspace: a.workspace,
-        }
+impl SendArgs {
+    /// Resolve the message body — file content or inline arg. clap's
+    /// ArgGroup already guarantees exactly one is set.
+    fn resolve_message(self) -> Result<send::SendArgs, String> {
+        let body = match (self.message, self.file) {
+            (Some(m), _) => m,
+            (None, Some(p)) => std::fs::read_to_string(&p)
+                .map_err(|e| format!("failed to read {}: {e}", p.display()))?
+                // Trim trailing newlines (a vim/EOF newline shouldn't bloat
+                // the JSONL envelope; explicit content stays preserved).
+                .trim_end_matches('\n')
+                .to_string(),
+            (None, None) => unreachable!("clap ArgGroup enforces one of (message, file)"),
+        };
+        Ok(send::SendArgs {
+            to: self.to,
+            message: body,
+            workspace: self.workspace,
+        })
     }
 }
 
@@ -889,7 +906,14 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Send(args)) => {
-            let code = send::run(args.into());
+            let runtime = match args.resolve_message() {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("bwoc send: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let code = send::run(runtime);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Chat(args)) => {

@@ -583,12 +583,21 @@ impl From<CompletionArgs> for completion::CompletionArgs {
 #[derive(Args, Debug)]
 struct HelpArgs {
     /// Topic name. Run `bwoc help` (no arg) to list available topics.
+    /// Mutually exclusive with `--all`.
+    #[arg(conflicts_with = "all")]
     topic: Option<String>,
+    /// Print every topic concatenated (with `# === <name> ===` separators).
+    /// Useful for offline reading or piping into a docs generator.
+    #[arg(long)]
+    all: bool,
 }
 
 impl From<HelpArgs> for help::HelpArgs {
     fn from(a: HelpArgs) -> Self {
-        Self { topic: a.topic }
+        Self {
+            topic: a.topic,
+            all: a.all,
+        }
     }
 }
 

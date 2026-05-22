@@ -11,6 +11,10 @@ use std::io::{self, IsTerminal};
 
 pub struct HelpArgs {
     pub topic: Option<String>,
+    /// Print every topic concatenated (with separators). Useful for
+    /// offline reading or piping into a docs generator. Mutually
+    /// exclusive with `<topic>`.
+    pub all: bool,
 }
 
 const TOPICS: &[(&str, &str, &str)] = &[
@@ -76,6 +80,21 @@ pub fn run(args: HelpArgs) -> i32 {
     let topic = args.topic.as_deref();
     let colored = io::stdout().is_terminal();
     let c = Colors::for_tty(colored);
+
+    // --all: print every topic concatenated. Skips the index/colors for
+    // grep-ability and pipe-friendliness. Separators between topics so
+    // a docs builder can split on the `# === <name> ===` line.
+    if args.all {
+        for (name, summary, body) in TOPICS {
+            println!();
+            println!("# === {name} ===");
+            println!("# {summary}");
+            println!();
+            print!("{body}");
+            println!();
+        }
+        return 0;
+    }
 
     let Some(name) = topic else {
         print_index(&c);
@@ -809,6 +828,7 @@ mod tests {
     fn unknown_topic_returns_exit_2() {
         let args = HelpArgs {
             topic: Some("nonexistent-zzz".to_string()),
+            all: false,
         };
         // Can't easily assert exit code without capturing stdout/stderr,
         // but we can at least invoke without panicking.

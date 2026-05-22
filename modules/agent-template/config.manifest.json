@@ -1,0 +1,28 @@
+{
+  "agentId": "agent-{{name}}",
+  "version": "2.0",
+  "requiredConfig": {
+    "name":           { "type": "string",   "description": "Agent name (kebab-case)", "required": true },
+    "agentId":        { "type": "string",   "description": "Derived from name: agent-{name}", "required": true },
+    "agentRole":      { "type": "string",   "description": "One-line role description", "required": true },
+    "primaryModel":   { "type": "model-id", "description": "Primary LLM model identifier", "required": true },
+    "fallbackModel":  { "type": "model-id", "description": "Fallback LLM model identifier", "required": false },
+    "memoryPath":     { "type": "path",     "description": "File-based memory directory", "required": true, "default": "memories/" },
+    "sessionsPath":   { "type": "path",     "description": "Session data directory for Tier 2 mining", "required": false },
+    "deepMemoryCmd":  { "type": "command",  "description": "Tier 2 memory CLI command", "required": false },
+    "lintCmd":        { "type": "command",  "description": "Lint command for verification gate", "required": true },
+    "formatCmd":      { "type": "command",  "description": "Format command for verification gate", "required": true },
+    "testCmd":        { "type": "command",  "description": "Test command for verification gate", "required": true },
+    "buildCmd":       { "type": "command",  "description": "Build command for verification gate", "required": true },
+    "worktreeBase":   { "type": "path",     "description": "Base directory for worktrees", "required": false, "default": "/tmp" }
+  },
+  "defaults": {
+    "maxConcurrentTasks": 3,
+    "worktreeIsolation": true,
+    "worktreeBase": "/tmp",
+    "memory": {
+      "wakeUpOnStart": true,
+      "maxMemoryIndexLines": 200
+    }
+  }
+}

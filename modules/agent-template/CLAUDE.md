@@ -1,0 +1,62 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Agent Instructions
+
+The agent's behavioral instructions are in `AGENTS.md`. All other LLM backends (Gemini, Codex, Kimi) read the same file via symlinks. Read `AGENTS.md` for the full agent protocol including memory system, session lifecycle, git branching, and verification gates.
+
+## What This Repo Is
+
+A **backend-neutral agent template** (BWOC — Buddhist Way of Coding). The philosophical foundation is in `docs/en/PHILOSOPHY.en.md`. This repo contains no application code — only Markdown documentation, shell scripts, and symlinks.
+
+This `CLAUDE.md` is a **standalone file**, not a symlink. It contains template-repo-specific guidance for Claude Code. When agents clone this template, their own `CLAUDE.md` becomes a symlink to their `AGENTS.md`.
+
+## Validation
+
+```bash
+./scripts/check-agent-neutrality.sh      # validates backend neutrality
+./scripts/incarnate.sh <agent-name>      # clones template to new agent
+```
+
+## Architecture
+
+### Two-Tier Document Format
+
+| Tier | Format | Files |
+|---|---|---|
+| Instructions | Plain Markdown (no YAML, no wikilinks, no callouts) | `AGENTS.md` and its backend symlinks |
+| Documentation | Obsidian Markdown (YAML frontmatter, wikilinks, callouts) | All other `.md` files |
+
+`AGENTS.md` must stay plain Markdown so any LLM backend can read it without Obsidian parsing.
+
+### Backend Symlink Pattern
+
+```
+GEMINI.md → AGENTS.md
+CODEX.md  → AGENTS.md
+KIMI.md   → AGENTS.md
+```
+
+`CLAUDE.md` is the exception — a real file with Claude Code-specific guidance.
+
+## Key Design Constraints
+
+- **Backend neutrality** — all configurable values use `{{camelCase}}` placeholder syntax. Never hardcode model IDs or tool names in `AGENTS.md`.
+- **Philosophy grounding** — every structural decision maps to one of the 22 Buddhist frameworks in `docs/en/PHILOSOPHY.en.md`. When conflicts arise, the philosophy document wins on the principle.
+- **Format separation** — `AGENTS.md` is plain Markdown. Documentation files use Obsidian format.
+- **Approved callout types** — `abstract`, `tip`, `warning`, `example`, `note`, `danger` only.
+
+## File Roles
+
+| File | Role |
+|---|---|
+| `AGENTS.md` | Agent instructions — single source of truth for all backends |
+| `CLAUDE.md` | This file — Claude Code guidance for the template repo itself |
+| `neutrality.md` | Why and how to keep profiles backend-neutral |
+| `trust-model.md` | T0–T3 trust pipeline for cloned agent security |
+| `conventions.md` | Naming rules, placeholder table, YAML schemas, validation checklist |
+| `interconnect/` | Multi-agent coordination: capabilities, consensus, self-improvement |
+| `memories/memory.md` | Two-tier memory system spec |
+| `docs/en/PHILOSOPHY.en.md` | 22 Buddhist frameworks — conceptual core |
+| `docs/en/SRS.en.md` | Requirements structured by Magga 8 |

@@ -363,26 +363,34 @@ pub fn run_list(args: ListArgs) -> i32 {
     // from display width).
     use crate::livecheck::pad_visual;
     println!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {}",
         pad_visual(&i18n::t(&bundle, "list-col-id"), 32),
         pad_visual(&i18n::t(&bundle, "list-col-status"), 10),
         pad_visual(&i18n::t(&bundle, "list-col-backend"), 10),
+        pad_visual("UPTIME", 9),
         pad_visual("INBOX", 7),
         i18n::t(&bundle, "list-col-path"),
     );
     println!(
-        "{} {} {} {} {}",
+        "{} {} {} {} {} {}",
         "─".repeat(32),
         "─".repeat(10),
         "─".repeat(10),
+        "─".repeat(9),
         "─".repeat(7),
         "─".repeat(20),
     );
     for a in &filtered {
-        let mark = if crate::livecheck::running_pid(&root, a).is_some() {
-            "●"
-        } else {
-            "○"
+        // Daemon liveness + uptime. Running daemons get "● 5m12s",
+        // stopped agents get "○      —". Uptime probe goes through
+        // the same STATUS socket query `bwoc status` uses, so the
+        // two surfaces stay aligned.
+        let (mark, uptime) = match crate::livecheck::running_pid(&root, a) {
+            Some(_) => match crate::livecheck::query_uptime(&root, a) {
+                Some(secs) => ("●", crate::livecheck::format_uptime(secs)),
+                None => ("●", "?".to_string()),
+            },
+            None => ("○", "—".to_string()),
         };
         let count = crate::livecheck::inbox_count(&root, a);
         let inbox_cell = if count == 0 {
@@ -391,10 +399,11 @@ pub fn run_list(args: ListArgs) -> i32 {
             count.to_string()
         };
         println!(
-            "{mark} {} {} {} {} {}",
+            "{mark} {} {} {} {} {} {}",
             pad_visual(&a.id, 30),
             pad_visual(&a.status, 10),
             pad_visual(&a.backend, 10),
+            pad_visual(&uptime, 9),
             pad_visual(&inbox_cell, 7),
             a.path,
         );

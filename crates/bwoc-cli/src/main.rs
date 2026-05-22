@@ -11,6 +11,7 @@ use std::process::ExitCode;
 
 mod banner;
 mod check;
+mod completion;
 mod doctor;
 mod help;
 mod i18n;
@@ -71,6 +72,21 @@ enum Commands {
     Status(StatusArgs),
     /// Topic-specific help (backends, workspace, manifest, arc, getting-started).
     Help(HelpArgs),
+    /// Emit a shell completion script (bash, zsh, fish, powershell, elvish).
+    Completion(CompletionArgs),
+}
+
+#[derive(Args, Debug)]
+struct CompletionArgs {
+    /// Target shell. Pipe the output to your shell's completion install path.
+    #[arg(value_enum)]
+    shell: clap_complete::Shell,
+}
+
+impl From<CompletionArgs> for completion::CompletionArgs {
+    fn from(a: CompletionArgs) -> Self {
+        Self { shell: a.shell }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -366,6 +382,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Help(args)) => {
             let code = help::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Completion(args)) => {
+            let code = completion::run::<Cli>(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

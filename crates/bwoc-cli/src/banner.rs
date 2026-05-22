@@ -46,6 +46,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "help",
         "Topic-specific help (backends, workspace, manifest, arc, getting-started)",
     ),
+    (
+        "completion",
+        "Emit a shell completion script (bash, zsh, fish, powershell, elvish)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

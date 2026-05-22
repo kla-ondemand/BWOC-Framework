@@ -1,0 +1,99 @@
+# Contributing to BWOC Framework
+
+Thank you for considering a contribution. BWOC is a framework for building AI coding agents grounded in Buddhist philosophy as an engineering discipline — contributions should be technical, kind, and verifiable.
+
+By participating in this project, you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+---
+
+## How You Can Contribute
+
+- **Report a bug** — open an issue using the *Bug report* template.
+- **Suggest an enhancement** — open an issue using the *Feature request* template.
+- **Improve documentation** — typos, clarifications, additional examples, bilingual (English/Thai) parity.
+- **Add or refine a framework mapping** — see the 22 frameworks in [README.md](README.md).
+- **Add a reference agent** — see [`modules/agent-template/`](modules/agent-template/).
+
+---
+
+## Development Workflow
+
+1. **Fork** the repository and create a topic branch from `main`:
+   ```bash
+   git checkout -b feat/<short-name>     # for features
+   git checkout -b fix/<short-name>      # for bug fixes
+   git checkout -b docs/<short-name>     # for documentation
+   ```
+2. **Make your changes** — keep diffs focused. One concern per PR.
+3. **Verify** before committing:
+   - Documentation renders correctly (Markdown lint, link check).
+   - Examples actually work when copy-pasted.
+   - English and Thai docs stay in pair when both are touched.
+4. **Commit** with a descriptive message — see [Commit Style](#commit-style) below.
+5. **Open a Pull Request** against `main` using the PR template.
+
+---
+
+## Commit Style
+
+We follow a lightweight [Conventional Commits](https://www.conventionalcommits.org/) style:
+
+```
+<type>(<scope>): <short summary>
+
+[optional body — explain *why*, not *what*]
+[optional footer — refs/closes #issue]
+```
+
+**Types:** `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `style`, `ci`.
+
+**Examples:**
+- `docs(philosophy): clarify Yoniso Manasikāra example`
+- `feat(agent-template): add neutrality check hook`
+- `fix(srs): correct cross-reference to Magga 8`
+
+---
+
+## Pull Request Checklist
+
+Before requesting review, ensure:
+
+- [ ] Branch is up to date with `main`
+- [ ] PR title follows commit style
+- [ ] Description explains *why* the change is needed
+- [ ] Related issues are linked (`Closes #123`)
+- [ ] Documentation is updated where applicable
+- [ ] Bilingual EN/TH pair preserved (if applicable)
+- [ ] No secrets, credentials, or personal paths committed
+
+---
+
+## Documentation Principles (BWOC-aligned)
+
+When writing or reviewing docs, apply these principles from the framework itself:
+
+1. **Yoniso Manasikāra** — verify references against the current code/state, not from memory.
+2. **Mattaññutā (Right Amount)** — concise is kind. If `MEMORY.md` is capped at 200 lines, your section probably can be too.
+3. **Samānattatā** — treat all LLM backends equally. No vendor-specific phrasing in core docs.
+4. **Sīla** — never include secrets, internal hostnames, or personal identifiers in examples.
+
+---
+
+## Reporting Security Issues
+
+**Do not open public issues for security vulnerabilities.** See [SECURITY.md](SECURITY.md) for the private disclosure process.
+
+---
+
+## Questions
+
+- General questions → open a [Discussion](https://github.com/bmt-bwol-ops/bwoc-framwork/discussions) (or an issue tagged `question` if discussions are not enabled).
+- Sensitive matters → email **info@bemind.tech**.
+
+---
+
+## Recognition
+
+Contributors are credited in commit history and release notes. Significant contributors may be invited to the maintainer team — see [CODEOWNERS](.github/CODEOWNERS).
+
+Thank you for helping the framework grow.

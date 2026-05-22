@@ -12,7 +12,7 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::i18n;
 use bwoc_core::manifest::Manifest;
@@ -71,12 +71,20 @@ pub fn run(args: DashboardArgs) -> i32 {
 
 // --- app state ------------------------------------------------------------
 
+/// How often the dashboard auto-refreshes the agents registry. Live-
+/// changing data (runtime indicators, uptime, inbox counts) re-reads
+/// on every draw regardless — this only controls how often we re-load
+/// agents.toml itself. 2s is fast enough to feel live without thrashing
+/// the disk for huge registries.
+const AUTO_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
 struct App {
     workspace: Option<PathBuf>,
     agents: Vec<AgentEntry>,
     table_state: TableState,
     last_refresh_error: Option<String>,
     bundle: FluentBundle<FluentResource>,
+    last_refresh_at: Instant,
 }
 
 impl App {
@@ -88,12 +96,14 @@ impl App {
             table_state: TableState::default(),
             last_refresh_error: None,
             bundle: i18n::bundle_for(&lang),
+            last_refresh_at: Instant::now(),
         };
         app.refresh();
         app
     }
 
     fn refresh(&mut self) {
+        self.last_refresh_at = Instant::now();
         if let Some(root) = &self.workspace {
             match AgentsRegistry::load(root) {
                 Ok(r) => {
@@ -173,6 +183,14 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                 (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
                 _ => {}
             }
+        }
+
+        // Auto-tick: re-read agents.toml every AUTO_REFRESH_INTERVAL.
+        // Live data (runtime/uptime/inbox) re-reads on every draw —
+        // this only refreshes the agents Vec itself, so additions/
+        // removals appear without the user pressing `r`.
+        if app.last_refresh_at.elapsed() >= AUTO_REFRESH_INTERVAL {
+            app.refresh();
         }
     }
 }

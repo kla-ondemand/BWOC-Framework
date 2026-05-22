@@ -202,7 +202,7 @@ mod tests {
         root
     }
 
-    fn write_inbox(root: &PathBuf, lines: &[&str]) {
+    fn write_inbox(root: &std::path::Path, lines: &[&str]) {
         let p = root.join("agents/agent-alpha/.bwoc/inbox.jsonl");
         let mut f = fs::File::create(p).unwrap();
         for l in lines {

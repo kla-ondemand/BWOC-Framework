@@ -56,10 +56,10 @@
 | Daemon `bwoc-agent --serve` | Unix-only (`.bwoc/agent.pid` + `.bwoc/agent.sock`; stub cfg-gated บน Windows) |
 | IPC control socket — protocol แบบ line-text | `PING`/`STATUS`/`STOP` ผ่าน Unix domain socket; debug ได้ด้วย `nc -U` |
 | `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query |
-| `bwoc list` | registry view + runtime indicator + INBOX count; filter `--running` / `--status` / `--backend` / `--inbox-pending` (รวมกันได้); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); ใช้ทั้ง human + `--json` |
+| `bwoc list` | registry view + runtime indicator + INBOX count; filter `--running` / `--status` / `--backend` / `--inbox-pending` (รวมกันได้); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (เฉพาะจำนวนแถว) / `--names-only` (bare ids สำหรับ shell loop); ใช้ทั้ง human + `--json` |
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
 | `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale; WARN กรณี `agent.log` ใหญ่ (10 MiB, `--auto` truncate) + `inbox.jsonl` ใหญ่ (5 MiB, WARN-only — user data); `--json` สำหรับ shape stable ใช้ CI gating |
-| `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn |
+| `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn; `--all` mass-start agent ที่ stopped ทั้งหมด |
 | `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
 | `bwoc chat <name>` (+ `--tmux`) | resolve backend จาก registry; exec `bwoc spawn` |
 | `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + auto-refresh 2s + hotkey tmux `t/l/i` (chat / log -f / inbox --watch); transient `last_action` feedback ใน footer |
@@ -96,7 +96,7 @@
 
 | รายการ | หมายเหตุ |
 |---|---|
-| `bwoc stop <name>` | escalation ladder 3 ขั้น: socket `STOP` → SIGTERM → SIGKILL (รอ ~3s ระหว่างขั้น); idempotent; รายงานว่าขั้นไหนทำให้ daemon จบ |
+| `bwoc stop <name>` | escalation ladder 3 ขั้น: socket `STOP` → SIGTERM → SIGKILL (รอ ~3s ระหว่างขั้น); idempotent; รายงานว่าขั้นไหนทำให้ daemon จบ `--all` mass-stop agent ที่ไม่ stopped ทั้งหมด (clap บังคับ mutex กับ `name`) |
 | `bwoc retire <name>` | ลบจาก registry; `--keep-files` เก็บ agent dir ไว้ |
 | `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย |
 | User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |

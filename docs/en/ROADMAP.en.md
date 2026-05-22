@@ -56,10 +56,10 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc-agent --serve` daemon | Unix-only (`.bwoc/agent.pid` + `.bwoc/agent.sock`; cfg-gated stub on Windows) |
 | IPC control socket — line-text protocol | `PING`/`STATUS`/`STOP` over Unix domain socket; debuggable with `nc -U` |
 | `bwoc status [name]` | Per-agent health + runtime indicator (●/○) + uptime via socket query |
-| `bwoc list` | Registry view with runtime indicator + INBOX count; filters `--running` / `--status` / `--backend` / `--inbox-pending` (combinable); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); honored by both human + `--json` |
+| `bwoc list` | Registry view with runtime indicator + INBOX count; filters `--running` / `--status` / `--backend` / `--inbox-pending` (combinable); `--sort id\|inbox\|incarnated\|backend` (stable; default = registry order); `--count` (just the row count) / `--names-only` (bare ids for shell iteration); honored by both human + `--json` |
 | `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox at `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
 | `bwoc doctor` | Env + workspace diagnostic; `--auto` sweeps stale `agent.pid` / `agent.sock` / `inbox.cursor`; WARNs on oversize `agent.log` (10 MiB, `--auto` truncates) + oversize `inbox.jsonl` (5 MiB, WARN-only — user data); `--json` for stable CI-gating shape |
-| `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out |
+| `bwoc start <name>` (idempotent) | Flips registry + spawns `bwoc-agent --serve` if not running; `--no-daemon` opt-out; `--all` to mass-start every stopped agent |
 | `bwoc ping <name>` | CLI client for the daemon's PING command |
 | `bwoc chat <name>` (+ `--tmux`) | Auto-resolves backend from registry; exec's `bwoc spawn` |
 | `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + 2s auto-refresh + `t/l/i` tmux hotkeys (chat / log -f / inbox --watch); transient `last_action` feedback in footer |
@@ -96,7 +96,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 
 | Item | Notes |
 |---|---|
-| `bwoc stop <name>` | 3-step escalation ladder: socket `STOP` → SIGTERM → SIGKILL (~3s wait between steps); idempotent; reports which step ended the daemon. |
+| `bwoc stop <name>` | 3-step escalation ladder: socket `STOP` → SIGTERM → SIGKILL (~3s wait between steps); idempotent; reports which step ended the daemon. `--all` to mass-stop every non-stopped agent (clap-enforced mutex with `name`). |
 | `bwoc retire <name>` | Removes from registry; `--keep-files` retains the agent dir. |
 | `bwoc workspace prune` | Reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift. |
 | User → agent inbox (sammā-vācā Phase 0) | `bwoc send` + `bwoc inbox` ship as JSONL envelopes; foundation for agent → agent messaging. |

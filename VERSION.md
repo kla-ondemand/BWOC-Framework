@@ -4,7 +4,7 @@
 
 **Software-Version:** `0.1.405`   *(canonical in `Cargo.toml` — bumped on `.rs` / `.toml` edits)*
 **Document-Version:** `1.0.135`   *(canonical here — bumped on `.md` edits)*
-**Phase:** Phase 1 v2.0 — *in progress*
+**Phase:** Phase 2 — *ṭhiti operations*, in progress *(Phase 1 v2.0 DoD met)*
 **Specification:** [`AGENTS.md`](modules/agent-template/AGENTS.md) v2.0
 **Last-Updated:** `2026-05-22T14:27:58Z`   *(UTC, ISO 8601 — stamped on every edit)*
 

@@ -59,7 +59,17 @@ enum Commands {
     /// Verify backend neutrality of an agent or the template (read-only audit).
     Check {
         /// Path to the agent or template to audit. Defaults to current directory.
+        /// Mutually exclusive with `--all`.
+        #[arg(conflicts_with = "all")]
         path: Option<PathBuf>,
+        /// Audit every incarnated agent in the workspace (fleet-wide audit).
+        /// Mutually exclusive with `<path>`.
+        #[arg(long)]
+        all: bool,
+        /// Workspace root (only used with `--all`). Defaults follow standard
+        /// resolution: --workspace > BWOC_WORKSPACE env > ancestor walk.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
         /// Emit JSON to stdout instead of the human-readable report.
         #[arg(long)]
         json: bool,
@@ -836,9 +846,18 @@ fn main() -> ExitCode {
     }
 
     match cli.command {
-        Some(Commands::Check { path, json }) => {
-            let target = path.unwrap_or_else(|| PathBuf::from("."));
-            let code = check::run(&target, &lang, json);
+        Some(Commands::Check {
+            path,
+            all,
+            workspace,
+            json,
+        }) => {
+            let code = if all {
+                check::run_all(workspace.as_deref(), &lang, json)
+            } else {
+                let target = path.unwrap_or_else(|| PathBuf::from("."));
+                check::run(&target, &lang, json)
+            };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::New(args)) => {

@@ -331,6 +331,141 @@ pub fn run(target: &Path, lang: &str, json: bool) -> i32 {
     if report.violations.is_empty() { 0 } else { 1 }
 }
 
+/// Fleet-wide audit. Iterates the workspace's `agents.toml`, runs
+/// `audit()` per agent, aggregates findings. Exit 0 only if every
+/// agent passes; 1 if any has violations; 2 if the workspace itself
+/// can't be located.
+pub fn run_all(workspace_path: Option<&Path>, lang: &str, json: bool) -> i32 {
+    use bwoc_core::workspace::AgentsRegistry;
+
+    // Resolve workspace root: explicit path > BWOC_WORKSPACE env > ancestor walk.
+    let root = match workspace_path {
+        Some(p) => p.to_path_buf(),
+        None => {
+            if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+                if !env_path.is_empty() {
+                    std::path::PathBuf::from(env_path)
+                } else {
+                    let Some(p) = find_workspace_root_local() else {
+                        eprintln!(
+                            "bwoc check --all: no workspace found. Pass --workspace, set \
+                             BWOC_WORKSPACE, or run from a workspace directory."
+                        );
+                        return 2;
+                    };
+                    p
+                }
+            } else {
+                let Some(p) = find_workspace_root_local() else {
+                    eprintln!(
+                        "bwoc check --all: no workspace found. Pass --workspace, set \
+                         BWOC_WORKSPACE, or run from a workspace directory."
+                    );
+                    return 2;
+                };
+                p
+            }
+        }
+    };
+    let registry = match AgentsRegistry::load(&root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("bwoc check --all: failed to read agents.toml: {e}");
+            return 1;
+        }
+    };
+    if registry.agents.is_empty() {
+        eprintln!(
+            "bwoc check --all: no agents registered in {}. \
+             Run `bwoc new <name>` to incarnate one.",
+            root.display()
+        );
+        return 0;
+    }
+
+    let mut total_violations = 0u32;
+    let mut total_warnings = 0u32;
+    let mut total_passes = 0u32;
+    let mut per_agent_reports: Vec<(String, AuditReport)> = Vec::new();
+    for entry in &registry.agents {
+        let path = root.join(&entry.path);
+        let report = audit(&path);
+        total_violations += report.violations.len() as u32;
+        total_warnings += report.warnings.len() as u32;
+        total_passes += report.passes.len() as u32;
+        per_agent_reports.push((entry.id.clone(), report));
+    }
+
+    if json {
+        let agents: Vec<serde_json::Value> = per_agent_reports
+            .iter()
+            .map(|(id, r)| {
+                serde_json::json!({
+                    "agent": id,
+                    "target": r.target,
+                    "passes": r.passes,
+                    "warnings": r.warnings,
+                    "violations": r.violations,
+                    "summary": {
+                        "passes": r.passes.len(),
+                        "warnings": r.warnings.len(),
+                        "violations": r.violations.len(),
+                    },
+                })
+            })
+            .collect();
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "agents": agents,
+            "summary": {
+                "agents_checked": per_agent_reports.len(),
+                "total_passes": total_passes,
+                "total_warnings": total_warnings,
+                "total_violations": total_violations,
+            },
+        });
+        match serde_json::to_string_pretty(&value) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("bwoc check --all: failed to serialize JSON: {e}");
+                return 1;
+            }
+        }
+    } else {
+        let bundle = i18n::bundle_for(lang);
+        for (id, report) in &per_agent_reports {
+            println!();
+            println!("=== {id} ===");
+            print_report(report, &bundle);
+        }
+        println!();
+        println!(
+            "=== Fleet summary ===\n  {} agent(s): {} pass, {} warn, {} violation(s)",
+            per_agent_reports.len(),
+            total_passes,
+            total_warnings,
+            total_violations,
+        );
+        println!();
+    }
+
+    if total_violations > 0 { 1 } else { 0 }
+}
+
+/// Local ancestor-walk helper (kept here to avoid pulling in
+/// workspace.rs::find_workspace_root which threads Fluent bundles).
+fn find_workspace_root_local() -> Option<std::path::PathBuf> {
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

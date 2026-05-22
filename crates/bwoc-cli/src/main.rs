@@ -894,6 +894,11 @@ struct NewArgs {
     /// `.md` per name.
     #[arg(long)]
     skills: Option<String>,
+    /// Emit JSON `{ agent_id, target, registered_in, symlinks, mindset_stubs,
+    /// skill_stubs, persona_filled }` instead of the human-readable report.
+    /// Useful for scripted multi-agent setup.
+    #[arg(long)]
+    json: bool,
 }
 
 impl NewArgs {
@@ -919,6 +924,7 @@ impl NewArgs {
             out_of_scope: self.out_of_scope,
             mindsets: self.mindsets,
             skills: self.skills,
+            json: self.json,
         }
     }
 }

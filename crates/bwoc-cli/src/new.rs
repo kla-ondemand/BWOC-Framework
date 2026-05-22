@@ -55,6 +55,10 @@ pub struct NewArgs {
     pub mindsets: Option<String>,
     /// Comma-separated names of initial skills — one stub `.md` per name.
     pub skills: Option<String>,
+    /// Emit JSON `{ agent_id, target, registered_in, symlinks, mindset_stubs,
+    /// skill_stubs, persona_filled }` instead of the human-readable
+    /// incarnation report. Useful for scripted multi-agent setup.
+    pub json: bool,
 }
 
 /// All required fields resolved to concrete strings; ready for incarnate.
@@ -83,9 +87,28 @@ struct Resolved {
 /// Entry point — returns the process exit code.
 pub fn run(args: NewArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
+    let json = args.json;
     match incarnate(args, &bundle) {
         Ok(report) => {
-            print_report(&report, &bundle);
+            if json {
+                let value = serde_json::json!({
+                    "agent_id": report.agent_id,
+                    "target": report.target.display().to_string(),
+                    "registered_in": report.registered_in
+                        .as_ref()
+                        .map(|p| p.display().to_string()),
+                    "symlinks": report.symlinks,
+                    "mindset_stubs": report.mindset_stubs,
+                    "skill_stubs": report.skill_stubs,
+                    "persona_filled": report.persona_filled,
+                });
+                println!(
+                    "{}",
+                    serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+                );
+            } else {
+                print_report(&report, &bundle);
+            }
             0
         }
         Err(e) => {
@@ -1169,6 +1192,7 @@ mod tests {
             out_of_scope: None,
             mindsets: None,
             skills: None,
+            json: false,
         }
     }
 

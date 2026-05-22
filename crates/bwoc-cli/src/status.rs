@@ -318,7 +318,7 @@ fn query_uptime(root: &Path, a: &AgentEntry) -> Option<u64> {
     let mut line = String::new();
     BufReader::new(&stream).read_line(&mut line).ok()?;
     // Expected response: `OK uptime_secs=<N> pid=<N>\n`
-    for token in line.trim().split_whitespace() {
+    for token in line.split_whitespace() {
         if let Some(rest) = token.strip_prefix("uptime_secs=") {
             return rest.parse().ok();
         }

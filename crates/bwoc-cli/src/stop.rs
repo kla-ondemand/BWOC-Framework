@@ -439,6 +439,7 @@ mod tests {
                 name: "alpha".into(),
                 workspace: Some(root.clone()),
                 yes: true,
+                all: false,
             })
             .is_ok()
         );
@@ -454,12 +455,14 @@ mod tests {
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
+            all: false,
         })
         .unwrap();
         let err = stop(StopArgs {
             name: "alpha".into(),
             workspace: Some(root.clone()),
             yes: true,
+            all: false,
         });
         assert!(matches!(err, Err(StopError::AlreadyStopped { .. })));
         let _ = fs::remove_dir_all(&root);
@@ -472,6 +475,7 @@ mod tests {
             name: "zzz".into(),
             workspace: Some(root.clone()),
             yes: true,
+            all: false,
         });
         assert!(matches!(err, Err(StopError::NotFound { .. })));
         let _ = fs::remove_dir_all(&root);

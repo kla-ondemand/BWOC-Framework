@@ -293,6 +293,40 @@ These three are explicitly **non-policy** (mechanical forms that mirror existing
 - **bwoc-agent**:
   - `--version` / `-V` / `--help` / `-h` flags (was: only `--serve` handled)
 
+**Mass-action verb matrix + shell ergonomics** (latest batch)
+
+- **Six verbs gain `--all`** for fleet-wide operations:
+  - `bwoc stop --all` — signal-escalation per agent (STOP → SIGTERM → SIGKILL)
+  - `bwoc start --all` — flip registry + spawn daemons (`--no-daemon` opt-out)
+  - `bwoc status --all` — full detail block per agent (loop of single-agent view)
+  - `bwoc check --all` — fleet-wide neutrality audit with `{ agents[], summary }` JSON
+  - `bwoc ping --all` — mass liveness probe (not-running labeled but not failed)
+  - (`bwoc list` is already always all-agents; `bwoc retire --all` deliberately omitted — destructive)
+  - Each uses clap `ArgGroup` for the `name`/`--all` mutex; trying neither or both → parse error
+
+- **Script-friendly read flags**:
+  - `bwoc list --count` / `--names-only` — integer or bare ids for shell loops
+  - `bwoc memory list --count` / `--names-only` — same on memory entries
+  - `bwoc inbox <name> --count` — envelope count for `if [ $(...) -gt 0 ]`
+  - `bwoc workspace info --path-only` — for `cd "$(bwoc workspace info --path-only)"`
+
+- **List filters + sort**:
+  - `--inbox-pending` (agents with unread envelopes), combinable with --running/--status/--backend
+  - `--sort id | inbox | incarnated | backend` (stable; default = registry order)
+
+- **`bwoc memory put` write modes**:
+  - 3 sources: inline positional `[content]` > `--file <path>` > stdin
+  - 3 write modes: create (default) / `--force` overwrite / `--append`
+  - All atomic via .tmp staging + rename
+
+- **`bwoc send`**: inline `<msg>` OR `--file <path>` (clap mutex; same UX as memory put)
+
+- **Workspace attention summary** — `bwoc workspace info` + dashboard banner show
+  total pending inbox count across all agents when > 0; cross-link to
+  `bwoc list --inbox-pending` for the "what needs attention?" workflow.
+
+- **`bwoc help` topics 10 → 11**: + `doctor` (status taxonomy + auto-fix policy)
+
 ### Changed
 
 - `modules/agent-template/README.md` — added badges, table of contents, and footer; trimmed the "Incarnating a New Agent" section to a quickstart that points at `docs/en/INCARNATION.en.md`.

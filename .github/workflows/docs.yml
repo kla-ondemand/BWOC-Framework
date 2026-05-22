@@ -1,0 +1,58 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'docs/en/NAMING.en.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - '.github/workflows/docs.yml'
+
+jobs:
+  naming:
+    name: '*.md naming audit (per docs/en/NAMING.en.md §Audit)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Root-level naming
+        run: |
+          violations=$(find . -maxdepth 1 -name '*.md' \
+            | grep -vE '^\./(README|LICENSE|CHANGELOG|CONTRIBUTING|CODE_OF_CONDUCT|SECURITY|VISION|VERSION|CLAUDE|AGENTS)(\.local|\.[a-z]{2,3})?\.md$' \
+            || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Root-level *.md naming violations (expected UPPERCASE.md, UPPERCASE.<lang>.md, or CLAUDE.local.md):"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: docs/<lang>/ naming
+        run: |
+          # mindepth 2 skips files directly under docs/ (those are slot-level
+          # examples like project-example.md, not per-language spec docs).
+          # Slot READMEs are exempt (category 5 in NAMING).
+          violations=$(find docs modules/agent-template/docs -mindepth 2 -type f -name '*.md' 2>/dev/null \
+            | grep -vE '/[A-Z]+(-[A-Z]+)*\.(en|th|[a-z]{2,3})\.md$' \
+            | grep -v '/README' \
+            || true)
+          if [ -n "$violations" ]; then
+            echo "::error::docs/<lang>/ naming violations (expected UPPERCASE.<lang>.md):"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: notes/ naming
+        run: |
+          violations=$(find . -path '*/notes/*.md' 2>/dev/null \
+            | grep -vE '/[0-9]{4}-[0-9]{2}-[0-9]{2}_[a-z0-9-]+\.md$' \
+            || true)
+          if [ -n "$violations" ]; then
+            echo "::error::notes/ naming violations (expected YYYY-MM-DD_<title>.md):"
+            echo "$violations"
+            exit 1
+          fi

@@ -348,13 +348,8 @@ fn resolve(
     }
 
     let role = resolve_one(args.role, "agentRole", &descriptions, tty, bundle)?;
-    let primary_model = resolve_one(
-        args.primary_model,
-        "primaryModel",
-        &descriptions,
-        tty,
-        bundle,
-    )?;
+    let primary_model =
+        resolve_primary_model(args.primary_model, args.backend, &descriptions, tty, bundle)?;
     let lint_cmd = resolve_one(args.lint_cmd, "lintCmd", &descriptions, tty, bundle)?;
     let format_cmd = resolve_one(args.format_cmd, "formatCmd", &descriptions, tty, bundle)?;
     let test_cmd = resolve_one(args.test_cmd, "testCmd", &descriptions, tty, bundle)?;
@@ -410,6 +405,74 @@ fn resolve_one(
         return Err(NewError::MissingFields(vec![key.to_string()]));
     }
     Ok(trimmed)
+}
+
+/// Specialized prompt for `primaryModel` — shows a numbered list of common
+/// models for the chosen `backend` so the user can pick by number, by typed
+/// name, or by hitting Enter to accept the first (recommended) entry.
+fn resolve_primary_model(
+    cur: Option<String>,
+    backend: Backend,
+    descriptions: &HashMap<String, String>,
+    tty: bool,
+    bundle: &fluent_bundle::FluentBundle<fluent_bundle::FluentResource>,
+) -> Result<String, NewError> {
+    if let Some(v) = cur {
+        return Ok(v);
+    }
+    if !tty {
+        return Err(NewError::MissingFields(vec!["primaryModel".to_string()]));
+    }
+
+    let models = backend.models();
+    let mut stdout = io::stdout();
+
+    // Print the picker header + numbered list.
+    let header = i18n::t_with(
+        bundle,
+        "new-model-picker-header",
+        &[("backend", backend.cli_name())],
+    );
+    let default_hint = i18n::t(bundle, "new-model-picker-default-hint");
+    writeln!(stdout, "{header}")?;
+    for (i, m) in models.iter().enumerate() {
+        if i == 0 {
+            writeln!(stdout, "  {}. {m}  {default_hint}", i + 1)?;
+        } else {
+            writeln!(stdout, "  {}. {m}", i + 1)?;
+        }
+    }
+
+    // Use the standard key (desc) prompt format for consistency with other fields.
+    let desc = descriptions
+        .get("primaryModel")
+        .map(|s| s.as_str())
+        .unwrap_or("required field");
+    let prompt = i18n::t_with(
+        bundle,
+        "new-prompt-format",
+        &[("key", "primaryModel"), ("desc", desc)],
+    );
+    write!(stdout, "{prompt}")?;
+    stdout.flush()?;
+
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    let trimmed = line.trim();
+
+    // Empty input → take the first (recommended) entry.
+    if trimmed.is_empty() {
+        return Ok(models[0].to_string());
+    }
+    // Pure number that matches a list index → resolve to that model.
+    if let Ok(n) = trimmed.parse::<usize>()
+        && n >= 1
+        && n <= models.len()
+    {
+        return Ok(models[n - 1].to_string());
+    }
+    // Otherwise treat as a custom model name (free-text fallback).
+    Ok(trimmed.to_string())
 }
 
 /// Read the template's `config.manifest.json` and return a map of

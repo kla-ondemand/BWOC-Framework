@@ -30,6 +30,23 @@ impl Backend {
             Backend::Kimi => "kimi",
         }
     }
+
+    /// Curated catalog of common LLM model identifiers per backend, surfaced
+    /// in the `bwoc new` interactive picker. First entry is the recommended
+    /// default. Free-text input is still accepted for unlisted models — this
+    /// is a convenience, not a whitelist. Update as backends release models.
+    pub fn models(self) -> &'static [&'static str] {
+        match self {
+            Backend::Claude => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+            Backend::Gemini => &[
+                "gemini-2.5-pro",
+                "gemini-2.5-flash",
+                "gemini-2.5-flash-lite",
+            ],
+            Backend::Codex => &["gpt-5", "gpt-5-mini", "o1"],
+            Backend::Kimi => &["kimi-k2", "kimi-k1.5"],
+        }
+    }
 }
 
 pub struct SpawnArgs {

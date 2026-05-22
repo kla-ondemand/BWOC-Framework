@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "bwoc-agent"
-version = "0.1.145"
+version = "0.1.150"
 dependencies = [
  "bwoc-core",
  "fluent-bundle",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "bwoc-cli"
-version = "0.1.145"
+version = "0.1.150"
 dependencies = [
  "bwoc-core",
  "clap",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "bwoc-core"
-version = "0.1.145"
+version = "0.1.150"
 dependencies = [
  "serde",
  "serde_json",

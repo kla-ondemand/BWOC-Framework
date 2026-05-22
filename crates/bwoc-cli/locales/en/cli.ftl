@@ -17,6 +17,8 @@ new-report-step-edit-agents = 2. Edit AGENTS.md Section 1 — fill {"{{"}placeho
 new-report-step-edit-persona = 3. Edit persona/README.md — define identity, domains, boundaries.
 new-report-step-git = 4. git init && git add -A && git commit -m 'feat(agent): incarnate'
 new-prompt-format = { $key } ({ $desc }):{" "}
+new-model-picker-header = Common { $backend } models (pick a number, or type a custom model name):
+new-model-picker-default-hint = (default: 1)
 
 # bwoc check — header + PASS/WARN/FAIL labels + summaries
 check-header = BWOC Agent Neutrality Check

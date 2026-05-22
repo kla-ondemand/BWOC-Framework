@@ -356,6 +356,9 @@ struct ListArgs {
     /// Filter by backend (exact match).
     #[arg(long, value_enum)]
     backend: Option<spawn::Backend>,
+    /// Filter to agents whose daemon is actually running (PID file + signal-0).
+    #[arg(long)]
+    running: bool,
 }
 
 impl ListArgs {
@@ -366,6 +369,7 @@ impl ListArgs {
             json: self.json,
             status_filter: self.status,
             backend_filter: self.backend.map(|b| b.cli_name().to_string()),
+            running_only: self.running,
         }
     }
 }

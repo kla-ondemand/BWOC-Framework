@@ -24,6 +24,10 @@ pub struct LogArgs {
     pub workspace: Option<PathBuf>,
     pub follow: bool,
     pub lines: usize,
+    /// Truncate the log file before printing. Useful when the log has
+    /// grown and you want to start a fresh observation. Mirror of
+    /// `bwoc inbox --clear`.
+    pub clear: bool,
 }
 
 pub fn run(args: LogArgs) -> i32 {
@@ -62,6 +66,38 @@ pub fn run(args: LogArgs) -> i32 {
             log_path.display()
         );
         return 0;
+    }
+
+    // --clear: truncate before printing. Like `bwoc inbox --clear` it
+    // happens with the file in place (preserves inode), so a running
+    // daemon's open stderr handle keeps writing — it just starts at
+    // offset 0 again.
+    if args.clear {
+        let prior_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&log_path)
+        {
+            Ok(_) => {
+                println!(
+                    "Cleared {} ({} byte(s) discarded).",
+                    log_path.display(),
+                    prior_size
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "bwoc log --clear: failed to truncate {}: {e}",
+                    log_path.display()
+                );
+                return 1;
+            }
+        }
+        if !args.follow {
+            return 0;
+        }
+        println!();
     }
 
     // 1. Print the tail.

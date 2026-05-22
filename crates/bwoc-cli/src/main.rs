@@ -117,6 +117,9 @@ struct LogArgs {
     /// Number of trailing lines to print before --follow blocks (or as the whole output).
     #[arg(short = 'n', long, default_value_t = 50)]
     lines: usize,
+    /// Truncate the log file before printing. Useful when starting fresh observation.
+    #[arg(long)]
+    clear: bool,
 }
 
 impl From<LogArgs> for log::LogArgs {
@@ -126,6 +129,7 @@ impl From<LogArgs> for log::LogArgs {
             workspace: a.workspace,
             follow: a.follow,
             lines: a.lines,
+            clear: a.clear,
         }
     }
 }

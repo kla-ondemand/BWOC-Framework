@@ -292,20 +292,16 @@ fn resolve_template(explicit: Option<&Path>) -> Result<PathBuf, NewError> {
 }
 
 fn default_target(template: &Path, name: &str) -> PathBuf {
-    // 1. Framework-developer path: template lives under
-    //    `modules/agent-template/` — drop the new agent next to it.
-    if template.ends_with("modules/agent-template") {
-        if let Some(p) = template.parent().and_then(|p| p.parent()) {
-            return p.join(format!("agent-{name}"));
-        }
-    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // 2. Workspace-aware: if cwd is inside a BWOC workspace, place the new
-    //    agent at <workspace_root>/<defaults.agents_dir>/agent-<name> —
-    //    matches WORKSPACE.en.md spec and the `agents/` directory created
-    //    by `bwoc init`. Workspace load failure falls through to the literal
-    //    "agents" default so we still land in the right place.
+    // 1. Workspace-aware (highest priority): if cwd is inside a BWOC
+    //    workspace, place the new agent at
+    //    `<workspace_root>/<defaults.agents_dir>/agent-<name>` per
+    //    WORKSPACE.en.md. Even when running from inside the framework
+    //    repo (which is itself a workspace), this wins — the previous
+    //    "framework-developer sibling" branch placed agents OUTSIDE
+    //    `agents/` and required users to manually `mv` after, then
+    //    left the registry pointing at the wrong relative path.
     if let Some(ws_root) = find_workspace_root_from(&cwd) {
         let agents_dir = Workspace::load(&ws_root)
             .map(|w| w.defaults.agents_dir)
@@ -313,7 +309,17 @@ fn default_target(template: &Path, name: &str) -> PathBuf {
         return ws_root.join(agents_dir).join(format!("agent-{name}"));
     }
 
-    // 3. Otherwise (no workspace anywhere in ancestors): cwd/agent-<name>.
+    // 2. No workspace anywhere; template lives under
+    //    `modules/agent-template/` — drop the new agent next to it.
+    //    Useful when scaffolding inside a fresh framework clone before
+    //    `bwoc init` has been run.
+    if template.ends_with("modules/agent-template")
+        && let Some(p) = template.parent().and_then(|p| p.parent())
+    {
+        return p.join(format!("agent-{name}"));
+    }
+
+    // 3. Last resort: cwd/agent-<name>.
     cwd.join(format!("agent-{name}"))
 }
 

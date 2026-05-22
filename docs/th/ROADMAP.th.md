@@ -6,7 +6,7 @@
 
 ## สถานะปัจจุบัน
 
-**Phase ที่ active:** Phase 1 v2.0 — *รากฐาน อุปฺปาท* — กำลังดำเนินการ
+**Phase ที่ active:** Phase 2 — *การปฏิบัติ ฐิติ* — กำลังดำเนินการ DoD ของ Phase 1 v2.0 บรรลุแล้ว
 **Software-Version:** ดู [`VERSION.md`](../../VERSION.md)
 **Document-Version:** ดู [`VERSION.md`](../../VERSION.md)
 
@@ -26,16 +26,9 @@
 - เครื่องมือ Claude Code: 4 project skills (`/incarnate`, `/check-neutrality`, `/check-bilingual`, `/task-log`); 2 PostToolUse hooks (`bilingual-reminder`, `auto-version`)
 - shell script `incarnate.sh` และ `check-agent-neutrality.sh` ใน template (ใช้ได้วันนี้; จะถูก port เป็น Rust)
 
-### กำลังทำ
-
-- การ implement คำสั่ง `bwoc-cli`
-- Runtime `bwoc-agent` (Phase 1 DoD: "I am alive" อ่าน `config.manifest.json`)
-- โครงสร้าง workspace บน disk (`.bwoc/workspace.toml`, `.bwoc/agents.toml`)
-- Central memory directory `~/.bwoc/`
-
 ### ส่งมอบใน Phase 1 v2.0 (เสร็จแล้ว)
 
-รายการทั้งหมดด้านล่าง implement แล้ว Definition of Done ของ phase นี้ (uppāda end-to-end สำหรับ backend หนึ่ง) บรรลุ เหลือเฉพาะ HELD policy items (CODEOWNERS · ISSUE_TEMPLATE/config.yml) และการตัดสินใจของผู้ใช้เรื่อง release-tag
+รายการทั้งหมดด้านล่าง implement แล้ว Definition of Done ของ phase นี้ (uppāda end-to-end สำหรับ backend หนึ่ง) **บรรลุ** เหลือเฉพาะ HELD policy items (`CODEOWNERS` · `ISSUE_TEMPLATE/config.yml`) ที่รอ user direction; release pipeline พร้อมใช้แล้ว (ดู Phase 2)
 
 | รายการ | สเปก | สถานะ |
 |---|---|---|
@@ -56,13 +49,41 @@
 
 **นิยามของเสร็จ:** agent ดำเนินงานพร้อม control surface จริง; backend หลายตัวถูกใช้งาน; release ทำซ้ำได้
 
-- Control socket ของ `bwoc-agent` — expose `status`, `log`, `send` ให้ CLI
-- คำสั่ง `bwoc status` · `log` · `send`
-- Process supervision จริง: จัดการ signal, restart-on-crash, health check
-- Memory ระดับ workspace (`<workspace>/.bwoc/memory/`)
-- Validation ข้าม backend: uppāda + ṭhiti เต็มกับ Claude, Gemini, Codex, และ Kimi CLI (สมานัตตตา ในทางปฏิบัติ)
-- Release pipeline GitHub Actions: matrix build สำหรับ macOS · Linux · Windows; binary ที่ sign; checksum; GitHub Release
-- เครื่องมือ memory mining และ interface Tier 2 backend ที่ pluggable
+### ส่งมอบใน Phase 2 (เสร็จแล้ว)
+
+| รายการ | หมายเหตุ |
+|---|---|
+| Daemon `bwoc-agent --serve` | Unix-only (`.bwoc/agent.pid` + `.bwoc/agent.sock`; stub cfg-gated บน Windows) |
+| IPC control socket — protocol แบบ line-text | `PING`/`STATUS`/`STOP` ผ่าน Unix domain socket; debug ได้ด้วย `nc -U` |
+| `bwoc status [name]` | health + runtime indicator (●/○) + uptime ผ่าน socket query |
+| `bwoc list` | registry view + runtime indicator + INBOX count + filter `--running` / `--status` / `--backend` |
+| `bwoc send <to> <msg>` + `bwoc inbox <agent>` | JSONL inbox ที่ `<agent>/.bwoc/inbox.jsonl`; `--watch` / `--clear` / `--limit` / `--json` |
+| `bwoc doctor` | env + workspace diagnostic; `--auto` กวาด `agent.pid` / `agent.sock` / `inbox.cursor` ที่ stale |
+| `bwoc start <name>` (idempotent) | flip registry + spawn `bwoc-agent --serve` ถ้ายังไม่ทำงาน; `--no-daemon` ข้าม spawn |
+| `bwoc ping <name>` | CLI client สำหรับคำสั่ง PING ของ daemon |
+| `bwoc chat <name>` (+ `--tmux`) | resolve backend จาก registry; exec `bwoc spawn` |
+| `bwoc dashboard` (TUI) | ratatui-based; agents pane + detail pane + auto-refresh 2s + hotkey `t` เปิด tmux |
+| Daemon-side inbox watch + cursor | ประกาศ envelope ใหม่ไปยัง stderr; `.bwoc/inbox.cursor` รอด restart |
+| `--json` ครอบคลุม read-only commands | `list`, `status`, `workspace info`, `workspace validate`, `check` |
+| CI matrix | `ubuntu-latest` · `macos-latest` · `windows-latest` เขียวทุก push |
+| Release pipeline (CalVer) | `release.yml` trigger เมื่อ push tag `v<YYYY>.<M>.<D>-<patch>`; 4 binary cross-platform + `.sha256` → GitHub Release ที่สร้างอัตโนมัติ |
+| Help system (ใน binary) | 9 topic: `getting-started`, `backends`, `workspace`, `manifest`, `arc`, `lifecycle`, `daemon`, `messaging`, `persona` |
+| Shell completion | `bwoc completion <bash\|zsh\|fish\|powershell\|elvish>` ผ่าน clap_complete |
+| `bwoc init` เขียน `.gitignore` | exclude daemon ephemerals (PID/socket/cursor) สำหรับ user workspace |
+| `bwoc new --scope / --out-of-scope / --mindsets / --skills` | persona substitution + mindset/skill stub seeding ตอน incarnate |
+| Module `livecheck` ที่ใช้ร่วม | รวม 5 copy ของ `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
+| Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
+
+### ที่เหลือก่อน ship
+
+- **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
+- **`bwoc log <agent>`** — daemon emit ไป stderr ปัจจุบัน; ไม่มี log-tail IPC command
+- **Memory ระดับ workspace** (`<workspace>/.bwoc/memory/`)
+- **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
+- **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
+- **Build Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` ใน release matrix
+- **เครื่องมือ memory mining และ interface Tier 2 backend ที่ pluggable**
+- **Daemon path สำหรับ Windows ผ่าน named-pipe** — แทน stub cfg-gated ด้วย implementation Windows จริง
 
 ---
 
@@ -70,13 +91,23 @@
 
 **นิยามของเสร็จ:** ชีวิตของ agent จบลงอย่างสะอาด; agent ประสานงานโดยไม่มีศูนย์กลาง
 
-- `bwoc stop <name>` — หยุดอย่างนุ่มนวลพร้อม signal escalation
-- `bwoc retire <name>` — vaya เต็มรูปแบบ: ล้าง worktree, ปล่อย branch, ตัด memory, ลบออกจาก registry
-- `bwoc workspace prune` — เก็บกวาด entry ของ agent ที่ลอย
-- Inter-agent messaging — channel สัมมาวาจา; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
-- Trust scoring — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ
-- Config routing ระดับ workspace `.bwoc/interconnect/`
-- Reference implementation ของ Tier 2 memory backend
+### ส่งมอบใน Phase 3 (เสร็จแล้ว)
+
+| รายการ | หมายเหตุ |
+|---|---|
+| `bwoc stop <name>` | ส่ง `STOP` ผ่าน socket (เมื่อ daemon alive) + flip registry status idempotent |
+| `bwoc retire <name>` | ลบจาก registry; `--keep-files` เก็บ agent dir ไว้ |
+| `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย |
+| User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |
+
+### ที่เหลือสำหรับ Phase 3
+
+- **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — ปัจจุบัน registry-only พร้อม optional file delete; ต้องเพิ่ม worktree cleanup + branch release + memory prune + interconnect deregistration
+- **Signal escalation** สำหรับ `bwoc stop` — พฤติกรรมปัจจุบันคือ socket `STOP` → exit; ไม่มี ladder SIGTERM → SIGKILL ถ้า daemon ไม่สนใจ `STOP`
+- **Agent → agent messaging** — channel สัมมาวาจาจริง; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
+- **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ
+- **`.bwoc/interconnect/`** config routing ระดับ workspace
+- **Reference implementation ของ Tier 2 memory backend**
 
 ---
 

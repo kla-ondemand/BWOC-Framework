@@ -312,15 +312,15 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 ## Status
 
-**Current phase:** Phase 1 v2.0 — *uppāda foundation*, in progress.
+**Current phase:** Phase 2 — *ṭhiti operations* — in progress. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend).
 
 | Area | Status |
 |---|---|
 | Specification (Philosophy, PRD, SRS, Threat) | Ready |
 | Lifecycle, Observability, Failure, Improvement | Ready |
 | Coordination, Governance | Ready |
-| `bwoc` CLI (Rust, macOS · Linux · Windows) | **Phase 1 v2.0 — in progress** |
-| `bwoc-agent` runtime (Rust) | **Phase 1 v2.0 — in progress** |
+| `bwoc` CLI (Rust, macOS · Linux · Windows · CI matrix green) | **Phase 1 ✓ · Phase 2 in progress** |
+| `bwoc-agent` runtime (Rust; `--serve` daemon on Unix) | **Phase 1 ✓ · Phase 2 in progress** |
 | Reference agents | Phase 4 |
 | Fleet dashboard | Phase 4 |
 

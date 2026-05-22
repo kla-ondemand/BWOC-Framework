@@ -126,14 +126,26 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     // Daemon start time — used by the STATUS command to report uptime.
     let start = Instant::now();
 
-    // Inbox watching — track the size of `.bwoc/inbox.jsonl` and announce
-    // new envelopes to stderr as they arrive. Starts from current EOF so
-    // a daemon restart doesn't re-announce historical messages.
+    // Inbox watching — track byte offset into `.bwoc/inbox.jsonl` and
+    // announce new envelopes to stderr. Cursor persists across restarts
+    // via `.bwoc/inbox.cursor` so a daemon offline period doesn't skip
+    // messages that arrived while it was down.
     let inbox_path = bwoc_dir.join("inbox.jsonl");
-    let mut inbox_pos: u64 = std::fs::metadata(&inbox_path).map(|m| m.len()).unwrap_or(0);
+    let cursor_path = bwoc_dir.join("inbox.cursor");
+    let inbox_size: u64 = std::fs::metadata(&inbox_path).map(|m| m.len()).unwrap_or(0);
+    let mut inbox_pos: u64 = match load_cursor(&cursor_path) {
+        Some(c) if c <= inbox_size => c,
+        Some(c) => {
+            eprintln!(
+                "bwoc-agent --serve: cursor ({c}) > inbox size ({inbox_size}) — resetting to EOF (file truncated)"
+            );
+            inbox_size
+        }
+        None => inbox_size, // first run; start at EOF (don't replay history)
+    };
     if inbox_path.is_file() {
         eprintln!(
-            "bwoc-agent --serve: watching inbox → {} (starting at offset {inbox_pos})",
+            "bwoc-agent --serve: watching inbox → {} (cursor {inbox_pos} / size {inbox_size})",
             inbox_path.display()
         );
     } else {
@@ -150,7 +162,11 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
             Ok((stream, _addr)) => handle_client(stream, &running, &start),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 // Idle: check the inbox for new envelopes since last poll.
-                inbox_pos = check_inbox_for_new(&inbox_path, inbox_pos);
+                let new_pos = check_inbox_for_new(&inbox_path, inbox_pos);
+                if new_pos != inbox_pos {
+                    inbox_pos = new_pos;
+                    save_cursor(&cursor_path, inbox_pos);
+                }
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => {
@@ -175,6 +191,26 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     }
     eprintln!("bwoc-agent --serve: stopped cleanly");
     ExitCode::SUCCESS
+}
+
+/// Load the persisted inbox cursor (byte offset into inbox.jsonl).
+/// Returns None if the file is missing, unreadable, or malformed —
+/// callers treat that as "first run; start at current EOF".
+fn load_cursor(path: &std::path::Path) -> Option<u64> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    raw.trim().parse::<u64>().ok()
+}
+
+/// Save the inbox cursor. Best-effort — failure logs to stderr but
+/// doesn't bring down the daemon (cursor staleness costs at-most one
+/// redundant message announcement on next restart).
+fn save_cursor(path: &std::path::Path, pos: u64) {
+    if let Err(e) = std::fs::write(path, format!("{pos}\n")) {
+        eprintln!(
+            "bwoc-agent --serve: warning — failed to save cursor {}: {e}",
+            path.display()
+        );
+    }
 }
 
 /// Read everything past `from_offset` in the inbox file and print any

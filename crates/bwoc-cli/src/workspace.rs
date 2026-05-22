@@ -202,6 +202,7 @@ pub fn run_list(args: ListArgs) -> i32 {
                 "status": a.status,
                 "incarnated": a.incarnated,
                 "running": is_running(&root, a),
+                "inbox_count": inbox_count(&root, a),
             })).collect::<Vec<_>>(),
         });
         match serde_json::to_string_pretty(&value) {
@@ -240,27 +241,46 @@ pub fn run_list(args: ListArgs) -> i32 {
     }
 
     println!(
-        "{:<32} {:<10} {:<10} {}",
+        "{:<32} {:<10} {:<10} {:<7} {}",
         i18n::t(&bundle, "list-col-id"),
         i18n::t(&bundle, "list-col-status"),
         i18n::t(&bundle, "list-col-backend"),
+        "INBOX",
         i18n::t(&bundle, "list-col-path"),
     );
     println!(
-        "{:<32} {:<10} {:<10} {}",
+        "{:<32} {:<10} {:<10} {:<7} {}",
         "─".repeat(32),
         "─".repeat(10),
         "─".repeat(10),
+        "─".repeat(7),
         "─".repeat(20),
     );
     for a in &filtered {
         let mark = if is_running(&root, a) { "●" } else { "○" };
+        let count = inbox_count(&root, a);
+        let inbox_cell = if count == 0 {
+            "—".to_string()
+        } else {
+            count.to_string()
+        };
         println!(
-            "{mark} {:<30} {:<10} {:<10} {}",
-            a.id, a.status, a.backend, a.path
+            "{mark} {:<30} {:<10} {:<10} {:<7} {}",
+            a.id, a.status, a.backend, inbox_cell, a.path
         );
     }
     0
+}
+
+/// Count complete envelope lines in `<agent>/.bwoc/inbox.jsonl`. Returns
+/// 0 when the file is missing or unreadable — same shape as a real empty
+/// inbox, which keeps the table cell calm.
+fn inbox_count(root: &Path, a: &bwoc_core::workspace::AgentEntry) -> usize {
+    let path = root.join(&a.path).join(".bwoc/inbox.jsonl");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    content.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
 /// Liveness probe — true if the agent has a PID file AND the pid is

@@ -12,7 +12,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use bwoc_core::manifest::Manifest;
-use bwoc_core::workspace::{AgentEntry, AgentsRegistry};
+use bwoc_core::workspace::{AgentEntry, AgentsRegistry, Workspace};
 use include_dir::{Dir, include_dir};
 
 use crate::i18n;
@@ -292,17 +292,45 @@ fn resolve_template(explicit: Option<&Path>) -> Result<PathBuf, NewError> {
 }
 
 fn default_target(template: &Path, name: &str) -> PathBuf {
-    // If the template lives under `modules/agent-template/` (framework-developer
-    // workflow), drop the new agent next to it (so it lands in the framework
-    // tree). Otherwise default to cwd + `agent-<name>` — the natural place
-    // when running `bwoc new` from an arbitrary workspace.
+    // 1. Framework-developer path: template lives under
+    //    `modules/agent-template/` — drop the new agent next to it.
     if template.ends_with("modules/agent-template") {
         if let Some(p) = template.parent().and_then(|p| p.parent()) {
             return p.join(format!("agent-{name}"));
         }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // 2. Workspace-aware: if cwd is inside a BWOC workspace, place the new
+    //    agent at <workspace_root>/<defaults.agents_dir>/agent-<name> —
+    //    matches WORKSPACE.en.md spec and the `agents/` directory created
+    //    by `bwoc init`. Workspace load failure falls through to the literal
+    //    "agents" default so we still land in the right place.
+    if let Some(ws_root) = find_workspace_root_from(&cwd) {
+        let agents_dir = Workspace::load(&ws_root)
+            .map(|w| w.defaults.agents_dir)
+            .unwrap_or_else(|_| "agents".to_string());
+        return ws_root.join(agents_dir).join(format!("agent-{name}"));
+    }
+
+    // 3. Otherwise (no workspace anywhere in ancestors): cwd/agent-<name>.
     cwd.join(format!("agent-{name}"))
+}
+
+/// Walk up from `start` looking for `.bwoc/workspace.toml`. Unlike
+/// `find_workspace` (which starts from `target.parent()`), this starts
+/// from any given path — used by `default_target` to consult the
+/// enclosing workspace's `defaults.agents_dir`.
+fn find_workspace_root_from(start: &Path) -> Option<PathBuf> {
+    let mut cur = start.to_path_buf();
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
 }
 
 /// Fill in any missing required fields by interactive prompt (TTY) or fail

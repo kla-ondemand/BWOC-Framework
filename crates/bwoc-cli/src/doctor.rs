@@ -534,17 +534,20 @@ fn check_single_agent(root: &Path, a: &AgentEntry, auto: bool) -> CheckResult {
         };
     }
     if auto {
-        let mut fixed = Vec::new();
+        // Explicit element type because the only `push` site is cfg(unix);
+        // on Windows the Vec would have no inferred type.
+        let mut fixed: Vec<&&str> = Vec::new();
         for link in &missing {
-            let target = agent_path.join(link);
+            let _target = agent_path.join(link);
             #[cfg(unix)]
-            if std::os::unix::fs::symlink("AGENTS.md", &target).is_ok() {
-                fixed.push(*link);
+            if std::os::unix::fs::symlink("AGENTS.md", &_target).is_ok() {
+                fixed.push(link);
             }
         }
+        let body = fixed.iter().map(|s| **s).collect::<Vec<&str>>().join(", ");
         return CheckResult {
             name,
-            status: Status::Fixed(format!("recreated symlinks: {}", fixed.join(", "))),
+            status: Status::Fixed(format!("recreated symlinks: {body}")),
         };
     }
     CheckResult {

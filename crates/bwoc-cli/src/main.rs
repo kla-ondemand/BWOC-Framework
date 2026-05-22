@@ -20,6 +20,7 @@ mod init;
 mod new;
 mod ping;
 mod retire;
+mod send;
 mod spawn;
 mod start;
 mod status;
@@ -89,6 +90,29 @@ enum Commands {
     Start(StartArgs),
     /// Ping a `bwoc-agent --serve`'d agent over its Unix socket (PING → PONG).
     Ping(PingArgs),
+    /// Append a message to an agent's inbox (`.bwoc/inbox.jsonl`).
+    Send(SendArgs),
+}
+
+#[derive(Args, Debug)]
+struct SendArgs {
+    /// Recipient agent. Matches by id ("agent-foo") or bare name ("foo").
+    to: String,
+    /// Message text (everything after the agent name; quote multi-word).
+    message: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<SendArgs> for send::SendArgs {
+    fn from(a: SendArgs) -> Self {
+        Self {
+            to: a.to,
+            message: a.message,
+            workspace: a.workspace,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -519,6 +543,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Ping(args)) => {
             let code = ping::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Send(args)) => {
+            let code = send::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

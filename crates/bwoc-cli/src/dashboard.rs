@@ -279,6 +279,45 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::styled("incarnated  ", key_style),
         Span::raw(entry.incarnated.clone()),
     ]));
+
+    // Runtime (live process state) + inbox count — surfaces Phase 2/3
+    // data inside the dashboard. Best-effort: missing files / no daemon
+    // render as "○ not running" / "0 messages".
+    let (runtime_mark, runtime_color, runtime_text) = match running_pid(root, entry) {
+        Some(pid) => match query_uptime(root, entry) {
+            Some(secs) => (
+                "●",
+                Color::Green,
+                format!("running (pid {pid}, uptime {})", format_uptime(secs)),
+            ),
+            None => ("●", Color::Green, format!("running (pid {pid})")),
+        },
+        None => ("○", Color::DarkGray, "not running".to_string()),
+    };
+    lines.push(Line::from(vec![
+        Span::styled("runtime     ", key_style),
+        Span::styled(
+            runtime_mark,
+            Style::default()
+                .fg(runtime_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(runtime_text, Style::default().fg(runtime_color)),
+    ]));
+    let count = inbox_count(root, entry);
+    let inbox_color = if count == 0 {
+        Color::DarkGray
+    } else {
+        Color::Yellow
+    };
+    lines.push(Line::from(vec![
+        Span::styled("inbox       ", key_style),
+        Span::styled(
+            format!("{count} message(s)"),
+            Style::default().fg(inbox_color),
+        ),
+    ]));
     lines.push(Line::from(""));
 
     // Manifest fields (load on demand; failures shown gracefully).
@@ -344,12 +383,83 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
     f.render_widget(p, area);
 }
 
-// --- health probe (mirror of status.rs::probe / doctor.rs's per-agent
-// checks; kept duplicated here to avoid promoting probe to a shared
-// module just for this one consumer — when a third caller appears,
-// promote to bwoc-cli::health or similar) -----------------------------------
+// --- health probe + runtime helpers (mirror of status.rs / workspace.rs;
+// duplicated for now — 4 callers exist now, the shared `livecheck` module
+// promotion is genuinely overdue and flagged for a focused refactor iter) --
 
 const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+
+#[cfg(unix)]
+fn signal_zero_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn signal_zero_alive(_pid: u32) -> bool {
+    false
+}
+
+fn running_pid(root: &std::path::Path, a: &AgentEntry) -> Option<u32> {
+    let pid_path = root.join(&a.path).join(".bwoc/agent.pid");
+    let raw = std::fs::read_to_string(&pid_path).ok()?;
+    let pid: u32 = raw.trim().parse().ok()?;
+    if signal_zero_alive(pid) {
+        Some(pid)
+    } else {
+        None
+    }
+}
+
+#[cfg(unix)]
+fn query_uptime(root: &std::path::Path, a: &AgentEntry) -> Option<u64> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration as StdDuration;
+    let sock_path = root.join(&a.path).join(".bwoc/agent.sock");
+    if !sock_path.exists() {
+        return None;
+    }
+    let mut stream = UnixStream::connect(&sock_path).ok()?;
+    let _ = stream.set_read_timeout(Some(StdDuration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(StdDuration::from_millis(300)));
+    stream.write_all(b"STATUS\n").ok()?;
+    let mut line = String::new();
+    BufReader::new(&stream).read_line(&mut line).ok()?;
+    for token in line.split_whitespace() {
+        if let Some(rest) = token.strip_prefix("uptime_secs=") {
+            return rest.parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(unix))]
+fn query_uptime(_root: &std::path::Path, _a: &AgentEntry) -> Option<u64> {
+    None
+}
+
+fn format_uptime(secs: u64) -> String {
+    let (d, rem) = (secs / 86400, secs % 86400);
+    let (h, rem) = (rem / 3600, rem % 3600);
+    let (m, s) = (rem / 60, rem % 60);
+    if d > 0 {
+        format!("{d}d{h:02}h")
+    } else if h > 0 {
+        format!("{h}h{m:02}m")
+    } else if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+fn inbox_count(root: &std::path::Path, a: &AgentEntry) -> usize {
+    let path = root.join(&a.path).join(".bwoc/inbox.jsonl");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    content.lines().filter(|l| !l.trim().is_empty()).count()
+}
 
 #[derive(Debug)]
 enum Health {

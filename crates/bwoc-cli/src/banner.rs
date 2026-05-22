@@ -64,6 +64,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "Ping a --serve'd agent over its Unix socket (PING → PONG)",
     ),
     (
+        "supervise",
+        "Supervise an agent's daemon — restart on crash, exit cleanly when stopped",
+    ),
+    (
         "send",
         "Append a message to an agent's inbox (.bwoc/inbox.jsonl)",
     ),

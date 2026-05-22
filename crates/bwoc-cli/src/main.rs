@@ -30,6 +30,7 @@ mod spawn;
 mod start;
 mod status;
 mod stop;
+mod supervise;
 mod user_home;
 mod util;
 mod workspace;
@@ -105,6 +106,8 @@ enum Commands {
     Start(StartArgs),
     /// Ping a `bwoc-agent --serve`'d agent over its Unix socket (PING → PONG).
     Ping(PingArgs),
+    /// Supervise an agent's daemon — restart on crash, exit cleanly when stopped.
+    Supervise(SuperviseArgs),
     /// Append a message to an agent's inbox (`.bwoc/inbox.jsonl`).
     Send(SendArgs),
     /// Chat with an agent — exec backend CLI with manifest-driven model.
@@ -450,6 +453,29 @@ impl From<PingArgs> for ping::PingArgs {
             name: a.name.unwrap_or_default(), // clap group ensures one of (name, all)
             workspace: a.workspace,
             all: a.all,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct SuperviseArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Max restarts within a rolling 60s window. Default 10. Beyond this,
+    /// the supervisor gives up rather than burn CPU on a crash loop.
+    #[arg(long = "max-restarts-per-min", default_value_t = 10)]
+    max_restarts_per_min: usize,
+}
+
+impl From<SuperviseArgs> for supervise::SuperviseArgs {
+    fn from(a: SuperviseArgs) -> Self {
+        Self {
+            agent: a.agent,
+            workspace: a.workspace,
+            max_restarts_per_min: a.max_restarts_per_min,
         }
     }
 }
@@ -957,6 +983,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Ping(args)) => {
             let code = ping::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Supervise(args)) => {
+            let code = supervise::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Send(args)) => {

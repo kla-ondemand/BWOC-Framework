@@ -118,6 +118,12 @@ enum MemoryAction {
         /// Emit JSON instead of the human table.
         #[arg(long)]
         json: bool,
+        /// Print just the entry count (integer or `{"count": N}` with --json).
+        #[arg(long)]
+        count: bool,
+        /// Print bare entry filenames, one per line (or `{"names": [...]}` with --json).
+        #[arg(long = "names-only")]
+        names_only: bool,
     },
     /// Print one memory entry's contents to stdout, or `--all` for every entry concatenated.
     Show {
@@ -175,10 +181,17 @@ enum MemoryAction {
 impl MemoryAction {
     fn into_runtime(self) -> memory::MemoryArgs {
         match self {
-            MemoryAction::List { workspace, json } => memory::MemoryArgs {
+            MemoryAction::List {
+                workspace,
+                json,
+                count,
+                names_only,
+            } => memory::MemoryArgs {
                 action: memory::MemoryAction::List,
                 workspace,
                 json,
+                count_only: count,
+                names_only,
             },
             MemoryAction::Show {
                 name,
@@ -199,6 +212,8 @@ impl MemoryAction {
                     action,
                     workspace,
                     json,
+                    count_only: false,
+                    names_only: false,
                 }
             }
             MemoryAction::Put {
@@ -219,6 +234,8 @@ impl MemoryAction {
                     },
                     workspace,
                     json: false,
+                    count_only: false,
+                    names_only: false,
                 }
             }
             MemoryAction::Search {
@@ -229,6 +246,8 @@ impl MemoryAction {
                 action: memory::MemoryAction::Search(query),
                 workspace,
                 json,
+                count_only: false,
+                names_only: false,
             },
             MemoryAction::Rm {
                 name,
@@ -238,6 +257,8 @@ impl MemoryAction {
                 action: memory::MemoryAction::Remove { name, yes },
                 workspace,
                 json: false,
+                count_only: false,
+                names_only: false,
             },
         }
     }

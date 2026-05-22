@@ -24,6 +24,12 @@ pub struct MemoryArgs {
     pub action: MemoryAction,
     pub workspace: Option<PathBuf>,
     pub json: bool,
+    /// Only used by `list`: emit just the entry count (integer or
+    /// `{"count": N}` with --json). Wins over `names_only`.
+    pub count_only: bool,
+    /// Only used by `list`: emit bare entry filenames, one per line
+    /// (or `{"names": [...]}` with --json).
+    pub names_only: bool,
 }
 
 pub enum MemoryAction {
@@ -73,7 +79,7 @@ pub fn run(args: MemoryArgs) -> i32 {
     }
 
     match args.action {
-        MemoryAction::List => list(&memory_dir, args.json),
+        MemoryAction::List => list(&memory_dir, args.json, args.count_only, args.names_only),
         MemoryAction::Show(name) => show(&memory_dir, &name),
         MemoryAction::ShowAll => show_all(&memory_dir, args.json),
         MemoryAction::Put {
@@ -396,8 +402,12 @@ fn put(memory_dir: &Path, name: &str, source: PutSource, force: bool) -> i32 {
 }
 
 /// List user-authored memory entries. Skips `README.md` (the slot doc
-/// scaffolded by `bwoc init`); only `.md` files counted.
-fn list(memory_dir: &Path, json: bool) -> i32 {
+/// scaffolded by `bwoc init`); only `.md` files counted. Honors two
+/// stripped-output modes — same precedence as `bwoc list`:
+///   1. `count_only` → single integer or `{"count": N}` (wins if both)
+///   2. `names_only` → bare names per line or `{"names": [...]}`
+///   3. default → human table or full `{ workspace_memory_dir, entries }`
+fn list(memory_dir: &Path, json: bool, count_only: bool, names_only: bool) -> i32 {
     let mut entries: Vec<(String, u64)> = Vec::new();
     let Ok(read) = std::fs::read_dir(memory_dir) else {
         eprintln!("bwoc memory: failed to read {}", memory_dir.display());
@@ -412,6 +422,49 @@ fn list(memory_dir: &Path, json: bool) -> i32 {
         entries.push((name, size));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // --count: short-circuit before any other formatting. Same precedence
+    // as `bwoc list` (count wins over names_only).
+    if count_only {
+        if json {
+            let value = serde_json::json!({ "count": entries.len() });
+            match serde_json::to_string(&value) {
+                Ok(s) => {
+                    println!("{s}");
+                    return 0;
+                }
+                Err(e) => {
+                    eprintln!("bwoc memory list --count --json: serialize failed: {e}");
+                    return 1;
+                }
+            }
+        }
+        println!("{}", entries.len());
+        return 0;
+    }
+
+    // --names-only: bare filenames, one per line.
+    if names_only {
+        if json {
+            let value = serde_json::json!({
+                "names": entries.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            });
+            match serde_json::to_string(&value) {
+                Ok(s) => {
+                    println!("{s}");
+                    return 0;
+                }
+                Err(e) => {
+                    eprintln!("bwoc memory list --names-only --json: serialize failed: {e}");
+                    return 1;
+                }
+            }
+        }
+        for (name, _) in &entries {
+            println!("{name}");
+        }
+        return 0;
+    }
 
     if json {
         let value = serde_json::json!({

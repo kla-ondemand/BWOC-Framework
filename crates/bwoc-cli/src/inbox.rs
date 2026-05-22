@@ -119,11 +119,8 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
         messages.iter().collect()
     };
 
-    if args.json {
-        if args.watch {
-            eprintln!("bwoc inbox: --watch is not supported with --json (tail mode is human-only)");
-            return Ok(());
-        }
+    if args.json && !args.watch {
+        // Snapshot mode — pretty-printed full envelope set.
         let value = serde_json::json!({
             "agent": entry.id,
             "inbox": inbox_path.display().to_string(),
@@ -133,6 +130,15 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
         });
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
+    }
+    if args.json && args.watch {
+        // Streaming mode — emit historical envelopes (last `view`) as
+        // compact JSON lines, then block tailing for new ones (also
+        // emitted as JSON lines). Consumers can `jq -c '.'` per line.
+        for m in &view {
+            println!("{}", serde_json::to_string(m)?);
+        }
+        return watch_inbox_json(&inbox_path);
     }
 
     println!();
@@ -317,6 +323,62 @@ fn inbox_all(
     }
     println!();
     Ok(())
+}
+
+/// JSON streaming tail. Same poll loop as `watch_inbox`, but each new
+/// envelope is printed as a single compact-JSON line — no header, no
+/// numbering, no decoration. Designed for `bwoc inbox alpha --watch
+/// --json | jq -c '.'` or piping into a log aggregator.
+fn watch_inbox_json(inbox_path: &std::path::Path) -> Result<(), InboxError> {
+    use std::time::Duration;
+    let mut offset: u64 = std::fs::metadata(inbox_path).map(|m| m.len()).unwrap_or(0);
+    loop {
+        let Ok(meta) = std::fs::metadata(inbox_path) else {
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        };
+        let size = meta.len();
+        if size < offset {
+            offset = size;
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        if size == offset {
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(inbox_path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        let mut consumed: u64 = 0;
+        for line in buf.split_inclusive('\n') {
+            if !line.ends_with('\n') {
+                break;
+            }
+            let trimmed = line.trim();
+            consumed += line.len() as u64;
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Pass through verbatim if it parses as JSON; otherwise emit
+            // a one-shot error envelope so consumers see something rather
+            // than silently dropping malformed lines.
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(v) => println!("{}", serde_json::to_string(&v)?),
+                Err(e) => {
+                    let err = serde_json::json!({
+                        "error": "malformed_envelope",
+                        "detail": e.to_string(),
+                        "raw": trimmed,
+                    });
+                    println!("{}", serde_json::to_string(&err)?);
+                }
+            }
+        }
+        offset += consumed;
+    }
 }
 
 fn watch_inbox(inbox_path: &std::path::Path, mut idx: usize) -> Result<(), InboxError> {

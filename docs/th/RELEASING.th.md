@@ -10,25 +10,38 @@ tags:
 
 # การปล่อย Release BWOC
 
-> [!abstract] วิธีปล่อยรีลีสของชุดเครื่องมือ bwoc (`bwoc` CLI + `bwoc-agent` daemon) — Release ใช้ tag เป็นตัวกระตุ้น: push tag ที่ตรงตามรูปแบบ `v*` แล้ว build pipeline จะทำการ build ทุก platform แล้ว upload ไปยัง GitHub Release โดยอัตโนมัติ
+> [!abstract] วิธีปล่อยรีลีสของชุดเครื่องมือ bwoc (`bwoc` CLI + `bwoc-agent` daemon) — Release ใช้ tag เป็นตัวกระตุ้น: push tag แบบ CalVer เช่น `v2026.5.22-0` แล้ว pipeline จะ build ทุก platform และ upload ไปยัง GitHub Release โดยอัตโนมัติ
+
+## Dual versioning — ต้องอ่านก่อน
+
+BWOC ใช้ **เวอร์ชัน 2 ระบบโดยตั้งใจ**:
+
+| Namespace | รูปแบบ | อยู่ที่ไหน | บทบาท |
+|---|---|---|---|
+| Cargo SemVer | `0.1.405` | `Cargo.toml` workspace + `Software-Version` | จุดตรวจระหว่างพัฒนา (internal dev checkpoint) auto-bump ทุกครั้งที่ Claude Code แก้ `.rs` / `.toml` |
+| Release CalVer | `v2026.5.22-0` | Git tag, GitHub Release, ชื่อ asset | **public release identity** Tag กระตุ้น `release.yml` |
+
+นโยบายเต็มดู [`VERSION.md`](../../VERSION.md) §"Versioning Policy — Dual Namespaces" — สรุป: Cargo SemVer คือจุดตรวจระหว่างพัฒนา ชื่อ release สำหรับสาธารณะคือ CalVer
 
 ## ก่อน tag
 
 ก่อนกด tag — ผู้ดูแลควรตรวจสอบ:
 
 - [ ] **CI ผ่าน** บน `main` ของ commit ล่าสุด — ดูที่ [Actions → CI](https://github.com/bemindlabs/BWOC-Framework/actions/workflows/ci.yml)
-- [ ] **`CHANGELOG.md`** มี section สำหรับเวอร์ชันที่จะปล่อย — เปลี่ยน `[Unreleased]` block เป็น `[X.Y.Z] — YYYY-MM-DD` แล้วเพิ่ม `[Unreleased]` ใหม่ที่ว่างเปล่าไว้ด้านบน
-- [ ] **`VERSION.md`** `Software-Version` ตรงกับ tag (auto-bump โดย hook ทุกครั้งที่แก้โค้ด ควรจะตรงกับ workspace `Cargo.toml` อยู่แล้ว)
-- [ ] **`Cargo.toml`** workspace version ตรงกับ tag
+- [ ] **`CHANGELOG.md`** มี section สำหรับ CalVer tag ที่จะกด เปลี่ยน `[Unreleased]` เป็น `[v2026.5.22-0] — 2026-05-22` แล้วสร้าง `[Unreleased]` ใหม่ที่ว่างเปล่าด้านบน
+- [ ] **`VERSION.md`** auto-update ทุกครั้งที่แก้ไฟล์อยู่แล้ว ไม่ต้องแก้เอง
+- [ ] **ไม่มีการแก้ที่ยัง uncommit** — release artifact ควรสะท้อน tree ที่สะอาด
 
 ## กด tag
 
+เลือก CalVer tag สำหรับวันนี้ — `vYYYY.M.D-<patch>` โดย patch เริ่มที่ 0 และเพิ่มขึ้นทุกครั้งที่ re-issue ในวันเดียวกัน:
+
 ```bash
-git tag v0.1.0            # หรือ v0.2.0-rc1
-git push origin v0.1.0
+git tag v2026.5.22-0
+git push origin v2026.5.22-0
 ```
 
-Tag จะกระตุ้น [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
+Tag จะตรงกับ filter ของ workflow (`v[0-9][0-9][0-9][0-9].*`) และกระตุ้น [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
 
 1. **Build แบบ matrix** — 4 target ทำงานพร้อมกัน:
    - `x86_64-unknown-linux-gnu`
@@ -38,44 +51,46 @@ Tag จะกระตุ้น [`.github/workflows/release.yml`](../../.github/
 2. **Package** แต่ละตัวเป็น `bwoc-<tag>-<target>.{tar.gz|zip}` มี `bwoc`, `bwoc-agent`, `README.md`, `LICENSE`, `CHANGELOG.md`
 3. **Sidecar** ไฟล์ `.sha256` ข้าง archive แต่ละตัว
 4. **สร้าง GitHub Release อัตโนมัติ** พร้อม note จาก commit range ตั้งแต่ tag ก่อนหน้า
-5. **Upload** artifact ทั้งหมดไปยัง release
+5. **Upload** artifact ทั้งหมด — `fail_on_unmatched_files: true` ทำให้ workflow ล้มเหลวถ้ามี archive ขาด — release ที่ไม่ครบไม่ปล่อย
 
-## Pre-release vs final
+## Re-issue วันเดียวกัน
 
-Tag ที่มีเครื่องหมาย `-` จะถูกทำเครื่องหมายเป็น **prerelease** อัตโนมัติ:
+เพิ่มเลข patch ไม่ใช่วัน:
 
-| Tag | ประเภท |
-|---|---|
-| `v0.1.0` | final |
-| `v0.1.0-rc1` | prerelease (release candidate) |
-| `v0.2.0-beta.3` | prerelease (beta) |
+```
+v2026.5.22-0    # release แรกของวัน
+v2026.5.22-1    # re-issue (เช่น artifact เสีย แก้ forward)
+v2026.5.22-2    # re-issue ที่สอง
+```
 
-GitHub ใช้ flag prerelease กับเครื่องมือ auto-update และป้าย "Latest release"
+วิธีนี้ทำให้วันคงที่ในขณะที่ iteration ชัดเจน
 
-## นโยบายเวอร์ชัน
+## Prerelease vs stable
 
-BWOC ใช้ [SemVer 2.0.0](https://semver.org/) สำหรับ binary ของ bwoc toolkit ดู [`VERSION.md`](../../VERSION.md) สำหรับนโยบายฉบับเต็มและความแตกต่างระหว่าง phase กับ version (Phase 1 / Phase 2 / ... เป็นแนวคิด roadmap ไม่ใช่แกนเวอร์ชัน)
+CalVer tag **มี** `-<patch>` เสมอ ดังนั้น workflow ตรวจจับ prerelease จากรูปร่าง tag อัตโนมัติไม่ได้ (อย่างที่ SemVer tag เช่น `v0.1.0-rc1` ทำได้) ทุก CalVer release จึงถูกถือว่า **stable** เป็น default — กดสวิตช์ "Set as a pre-release" ของ GitHub Release ด้วยมือสำหรับ build ที่ทดลองจริง ๆ
+
+ในทางปฏิบัติแทบไม่ต้องทำ — same-day patch bump ครอบคลุมเคส "ปล่อยอะไรเร็ว ๆ" ส่วนใหญ่โดยไม่ต้อง label prerelease
 
 ## สิ่งที่ยังไม่อยู่ใน pipeline
 
-- **Code signing** — Apple notarization (macOS) และ Windows Authenticode ยังไม่ได้ตั้งค่า binary ปล่อยแบบไม่ signed ผู้ใช้จะเห็น prompt "untrusted developer" ตอน launch ครั้งแรก การเพิ่ม signing ต้องให้ maintainer จัดการ cert และเก็บ signing key ไว้ใน GitHub Actions secrets
-- **Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` ARM Linux (`aarch64-unknown-linux-gnu`) และ musl-libc (`x86_64-unknown-linux-musl`) เพิ่มเข้า matrix ได้เมื่อมีความต้องการจริงจากผู้ใช้
+- **Code signing** — Apple notarization (macOS) และ Windows Authenticode ยังไม่ได้ตั้งค่า binary ปล่อยแบบไม่ signed พร้อม SHA-256 checksum ผู้ใช้จะเห็น prompt "untrusted developer" ตอน launch ครั้งแรก การเพิ่ม signing ต้องให้ maintainer จัดการ cert และเก็บ key ใน GitHub Actions secrets
+- **Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` `aarch64-unknown-linux-gnu` และ `x86_64-unknown-linux-musl` เพิ่มเข้า matrix ได้เมื่อมีความต้องการจริง
 - **Homebrew formula / Scoop manifest / cargo binstall metadata** — distribution อยู่ใน ecosystem ของตัวเอง
 
 ## Rolling back
 
 ถ้า release ที่ tag ไปแล้วมี artifact เสีย:
 
-1. **อย่าลบ** tag — GitHub Release ยังเก็บ binary ที่เสียอยู่ และผู้ใช้อาจดาวน์โหลดไปแล้ว
-2. กด patch tag ใหม่ที่มีการแก้ (เช่น `v0.1.1` หลังจาก `v0.1.0`)
+1. **อย่าลบ** tag — GitHub Release ยังเก็บ binary ที่เสียอยู่ และผู้ใช้อาจดาวน์โหลดไปแล้ว same-day re-issue มีอยู่เพื่อให้ timeline ตรวจสอบได้
+2. กด same-day patch ใหม่ (เช่น `v2026.5.22-1` หลังจาก `v2026.5.22-0`) ที่มีการแก้
 3. แก้ release note ของ release ที่เสียให้ชี้ไปยังตัวที่มาทดแทน
 
-แบบนี้สอดคล้องกับนโยบาย SemVer: patch ไม่ย้อนกลับ
+การเรียง CalVer แบบ monotonic ทำให้ rollback ง่าย — patch suffix สูงสุดของวันล่าสุดคือ build "ปัจจุบัน" canonical
 
 ## ดูเพิ่ม
 
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — workflow ที่เอกสารนี้อธิบาย
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — gate ของแต่ละ commit ต้องเป็นสีเขียวก่อนกด tag
 - [`CHANGELOG.md`](../../CHANGELOG.md) — สิ่งที่ต้อง update ก่อน tag
-- [`VERSION.md`](../../VERSION.md) — เวอร์ชันปัจจุบัน + นโยบาย SemVer
+- [`VERSION.md`](../../VERSION.md) — เวอร์ชันปัจจุบัน, dual-namespace policy, กฎ manual bump
 - [`ROADMAP.th.md`](ROADMAP.th.md) — phase (ไม่กำหนดเวอร์ชัน)

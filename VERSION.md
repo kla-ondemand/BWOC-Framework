@@ -3,10 +3,10 @@
 > **Auto-maintained header.** The hook `.claude/hooks/auto-version.sh` bumps the patch number and stamps `Last-Updated` on every Claude Code edit. Software-Version is canonical in `Cargo.toml`; Document-Version is canonical here.
 
 **Software-Version:** `0.1.405`   *(canonical in `Cargo.toml` — bumped on `.rs` / `.toml` edits)*
-**Document-Version:** `1.0.120`   *(canonical here — bumped on `.md` edits)*
+**Document-Version:** `1.0.124`   *(canonical here — bumped on `.md` edits)*
 **Phase:** Phase 1 v2.0 — *in progress*
 **Specification:** [`AGENTS.md`](modules/agent-template/AGENTS.md) v2.0
-**Last-Updated:** `2026-05-22T14:10:00Z`   *(UTC, ISO 8601 — stamped on every edit)*
+**Last-Updated:** `2026-05-22T14:14:42Z`   *(UTC, ISO 8601 — stamped on every edit)*
 
 ---
 
@@ -41,9 +41,23 @@ UTC, ISO 8601. Updated on every edit regardless of file type. Tracks last activi
 
 ---
 
-## Versioning Policy
+## Versioning Policy — Dual Namespaces
 
-BWOC follows [Semantic Versioning 2.0.0](https://semver.org/):
+BWOC uses **two version namespaces** intentionally:
+
+| Namespace | Scheme | Where it lives | Role |
+|---|---|---|---|
+| **Cargo SemVer** | `MAJOR.MINOR.PATCH` (e.g. `0.1.405`) | `Cargo.toml` `[workspace.package].version`, mirrored to `Software-Version` above | Internal development checkpoint. Auto-bumped on every Claude Code `.rs` / `.toml` edit by the hook. Tracks micro-revision granularity, not release identity. |
+| **Release CalVer** | `vYYYY.M.D-<patch>` (e.g. `v2026.5.22-0`) | Git tag, GitHub Release name, release asset filename | **Public release identity.** Tag triggers [`release.yml`](.github/workflows/release.yml) to build cross-platform binaries with SHA-256 checksums. |
+
+This is **deliberate**, not a workaround:
+
+- Cargo SemVer with auto-bump captures every edit as a checkpoint — useful for the auto-version hook and for `bwoc --version` during development.
+- Release CalVer captures *when* and *which iteration* a public artifact represents — far more legible to users than `0.1.405`.
+
+Same-day reissues bump the patch number: `v2026.5.22-0`, `v2026.5.22-1`. CalVer alone does not encode breakage — breaking changes are still documented in `CHANGELOG.md` and bumped on the Cargo SemVer side.
+
+### Cargo SemVer bump rules
 
 | Bump | When |
 |---|---|
@@ -51,7 +65,23 @@ BWOC follows [Semantic Versioning 2.0.0](https://semver.org/):
 | **MINOR** | New capability that does not break existing agents — new CLI command, new optional manifest field, new specification section. |
 | **PATCH** | Backward-compatible fix or clarification — auto-bumped by the hook on every edit. |
 
-Pre-1.0 (`0.x.y`) means the public surface is not yet stable. Breaking changes may land in any minor release until `1.0.0` is tagged.
+Pre-1.0 (`0.x.y`) on the Cargo side means the public Rust API is not yet stable. Crates.io publish is targeted for the `1.0.0` Cargo milestone; the CalVer release scheme on Git tags is independent of that.
+
+### Cutting a release (maintainer recipe)
+
+```bash
+# 1. Decide the CalVer tag for today's release iteration
+git tag v2026.5.22-0
+
+# 2. Push the tag — release.yml takes over from here
+git push origin v2026.5.22-0
+
+# 3. release.yml builds the matrix (Linux x86_64, macOS aarch64 + x86_64,
+#    Windows x86_64), packages each as <archive>.{tar.gz,zip} with
+#    .sha256 sidecar, and uploads them to the auto-created GitHub Release.
+```
+
+Same-day reissue? `v2026.5.22-1`, `v2026.5.22-2`, etc.
 
 ## Phase vs Version
 

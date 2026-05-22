@@ -10,25 +10,38 @@ tags:
 
 # Releasing BWOC
 
-> [!abstract] How to cut a release of the bwoc toolkit (`bwoc` CLI + `bwoc-agent` daemon). Releases are tag-driven: pushing a `v*` tag triggers the cross-platform build + GitHub Release upload pipeline.
+> [!abstract] How to cut a release of the bwoc toolkit (`bwoc` CLI + `bwoc-agent` daemon). Releases are tag-driven: pushing a CalVer tag like `v2026.5.22-0` triggers the cross-platform build + GitHub Release upload pipeline.
+
+## Dual versioning — what to read first
+
+BWOC uses **two version namespaces deliberately**:
+
+| Namespace | Scheme | Where | Role |
+|---|---|---|---|
+| Cargo SemVer | `0.1.405` | `Cargo.toml` workspace + `Software-Version` | Internal dev checkpoint. Auto-bumped on every Claude Code `.rs` / `.toml` edit. |
+| Release CalVer | `v2026.5.22-0` | Git tag, GitHub Release, asset filenames | **Public release identity.** Tag triggers `release.yml`. |
+
+Full policy in [`VERSION.md`](../../VERSION.md) §"Versioning Policy — Dual Namespaces". The short version: Cargo SemVer is a dev checkpoint; the public release name is CalVer.
 
 ## Pre-flight
 
 Before tagging, the maintainer should verify:
 
 - [ ] **CI is green** on `main` for the most recent commit — see [Actions → CI](https://github.com/bemindlabs/BWOC-Framework/actions/workflows/ci.yml).
-- [ ] **`CHANGELOG.md`** has a section for the version being released. The current `[Unreleased]` block can be renamed to `[X.Y.Z] — YYYY-MM-DD`; a new empty `[Unreleased]` heading goes above it.
-- [ ] **`VERSION.md`** `Software-Version` matches the tag (auto-bumped by the hook on every code edit; should already track the workspace `Cargo.toml`).
-- [ ] **`Cargo.toml`** workspace version matches the tag.
+- [ ] **`CHANGELOG.md`** has a section for the CalVer tag you're about to push. Rename the existing `[Unreleased]` to `[v2026.5.22-0] — 2026-05-22` and create a new empty `[Unreleased]` above it.
+- [ ] **`VERSION.md`** auto-updates on edits; nothing to manually bump for a release.
+- [ ] **No uncommitted changes** — release artifacts should reflect a clean tree.
 
 ## Cut the tag
 
+Choose today's CalVer tag — `vYYYY.M.D-<patch>`, where patch starts at 0 and increments for same-day re-issues:
+
 ```bash
-git tag v0.1.0            # or v0.2.0-rc1, etc.
-git push origin v0.1.0
+git tag v2026.5.22-0
+git push origin v2026.5.22-0
 ```
 
-The tag triggers [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
+The tag matches the workflow's filter (`v[0-9][0-9][0-9][0-9].*`) and triggers [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
 
 1. **Matrix build** — 4 release-mode targets in parallel:
    - `x86_64-unknown-linux-gnu`
@@ -38,44 +51,46 @@ The tag triggers [`.github/workflows/release.yml`](../../.github/workflows/relea
 2. **Package** each as `bwoc-<tag>-<target>.{tar.gz|zip}` containing `bwoc`, `bwoc-agent`, `README.md`, `LICENSE`, `CHANGELOG.md`.
 3. **Sidecar** a `.sha256` next to each archive.
 4. **Auto-create GitHub Release** with notes generated from the commit range since the previous tag.
-5. **Upload** all artifacts to the release.
+5. **Upload** all artifacts. `fail_on_unmatched_files: true` aborts the workflow if any archive is missing — partial releases never ship.
 
-## Pre-release vs final
+## Same-day re-issue
 
-Tags containing a hyphen are auto-marked as **prerelease**:
+Bump the patch number, not the date:
 
-| Tag | Type |
-|---|---|
-| `v0.1.0` | final |
-| `v0.1.0-rc1` | prerelease (release candidate) |
-| `v0.2.0-beta.3` | prerelease (beta) |
+```
+v2026.5.22-0    # first release of the day
+v2026.5.22-1    # re-issue (e.g. broken artifact pulled, fix forward)
+v2026.5.22-2    # second re-issue
+```
 
-GitHub's prerelease flag affects auto-update tooling and "Latest release" badges.
+This keeps the date stable while making the iteration explicit.
 
-## Versioning policy
+## Prerelease vs stable
 
-BWOC uses [SemVer 2.0.0](https://semver.org/) for the `bwoc` toolkit binaries. See [`VERSION.md`](../../VERSION.md) for the full policy and the phase-vs-version distinction (Phase 1 / Phase 2 / etc. is a roadmap concept, not a version axis).
+CalVer tags **always** contain `-<patch>`, so the workflow can't auto-detect prerelease from the tag shape (the way SemVer tags like `v0.1.0-rc1` do). Every CalVer release is treated as **stable** by default; flip the GitHub Release's "Set as a pre-release" toggle by hand for genuinely experimental builds.
+
+In practice you rarely need this — same-day patch bumps cover most "release something quickly" cases without the prerelease label.
 
 ## What's NOT in the pipeline yet
 
-- **Code signing** — Apple notarization (macOS) and Windows Authenticode are not configured. Binaries ship unsigned; users see "untrusted developer" prompts on first launch. Adding signing requires the maintainer to provision certs and store the signing keys in GitHub Actions secrets.
-- **Linux ARM / musl** — only `x86_64-unknown-linux-gnu` builds. ARM Linux (`aarch64-unknown-linux-gnu`) and musl-libc (`x86_64-unknown-linux-musl`) variants can be added to the matrix when there's user demand.
+- **Code signing** — Apple notarization (macOS) and Windows Authenticode are not configured. Binaries ship unsigned with SHA-256 checksums; users see "untrusted developer" prompts on first launch. Adding signing requires the maintainer to provision certs and store keys in GitHub Actions secrets.
+- **Linux ARM / musl** — only `x86_64-unknown-linux-gnu` builds. `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-musl` can be added when there's user demand.
 - **Homebrew formula / Scoop manifest / cargo binstall metadata** — distribution-system integrations live in their own ecosystems.
 
 ## Rolling back
 
 If a tagged release ships broken artifacts:
 
-1. **Don't** delete the tag — the GitHub Release retains the broken binaries, and users may already have downloaded them.
-2. Cut a new patch tag with the fix (e.g. `v0.1.1` after `v0.1.0`).
+1. **Don't** delete the tag — the GitHub Release retains the broken binaries, and users may already have downloaded them. Same-day re-issues exist so the timeline is auditable.
+2. Cut a new same-day patch (e.g. `v2026.5.22-1` after `v2026.5.22-0`) with the fix.
 3. Edit the broken release's notes to point at the replacement.
 
-This matches the SemVer policy: patches never go backwards.
+CalVer's monotonic ordering keeps the rollback simple: the highest patch suffix on the latest date is the canonical "current" build.
 
 ## See also
 
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the workflow this doc explains.
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml) — the per-commit gate that should be green before tagging.
 - [`CHANGELOG.md`](../../CHANGELOG.md) — what to update before tagging.
-- [`VERSION.md`](../../VERSION.md) — current version + SemVer policy.
+- [`VERSION.md`](../../VERSION.md) — current version, dual-namespace policy, manual-bump rules.
 - [`ROADMAP.en.md`](ROADMAP.en.md) — phases (does not determine version).

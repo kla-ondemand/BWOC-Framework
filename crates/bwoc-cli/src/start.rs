@@ -149,16 +149,29 @@ fn start(args: StartArgs) -> Result<(), StartError> {
     Ok(())
 }
 
-/// Spawn `bwoc-agent --serve` in `agent_path`. Stdio is silenced — the
-/// daemon's own files (PID, socket, inbox.cursor) are the durable
-/// evidence it's alive. Returns the child PID.
+/// Spawn `bwoc-agent --serve` in `agent_path`. Stderr is redirected to
+/// `<agent_path>/.bwoc/agent.log` (append) so `bwoc log <agent>` has
+/// something to tail. Stdin + stdout still go to /dev/null — the daemon
+/// prints all useful output to stderr and never reads stdin in --serve
+/// mode. Returns the child PID.
 fn spawn_daemon(agent_path: &Path) -> Result<u32, StartError> {
+    let bwoc_dir = agent_path.join(".bwoc");
+    std::fs::create_dir_all(&bwoc_dir)?;
+    let log_path = bwoc_dir.join("agent.log");
+    // Open append-mode so multiple start/stop cycles accumulate history
+    // rather than truncating prior runs. Truncate via `bwoc log --clear`
+    // (future) if it ever grows unwieldy.
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
     let child = Command::new("bwoc-agent")
         .arg("--serve")
         .current_dir(agent_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(log_file))
         .spawn()
         .map_err(|e| {
             io::Error::other(format!(

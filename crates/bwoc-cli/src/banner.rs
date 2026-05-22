@@ -75,6 +75,10 @@ const COMMANDS: &[(&str, &str)] = &[
         "inbox",
         "Read messages from an agent's inbox (--limit N, --json supported)",
     ),
+    (
+        "log",
+        "Tail an agent's daemon log (.bwoc/agent.log) — daemon stderr (-f / -n N)",
+    ),
 ];
 
 const BACKENDS: &str = "claude · gemini · codex · kimi";

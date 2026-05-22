@@ -20,6 +20,7 @@ mod i18n;
 mod inbox;
 mod init;
 mod livecheck;
+mod log;
 mod new;
 mod ping;
 mod retire;
@@ -99,6 +100,34 @@ enum Commands {
     Chat(ChatArgs),
     /// Read messages from an agent's inbox (`.bwoc/inbox.jsonl`).
     Inbox(InboxArgs),
+    /// Tail an agent's daemon log (`.bwoc/agent.log`) — daemon stderr.
+    Log(LogArgs),
+}
+
+#[derive(Args, Debug)]
+struct LogArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Block + stream new lines as they arrive (Ctrl-C to stop).
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// Number of trailing lines to print before --follow blocks (or as the whole output).
+    #[arg(short = 'n', long, default_value_t = 50)]
+    lines: usize,
+}
+
+impl From<LogArgs> for log::LogArgs {
+    fn from(a: LogArgs) -> Self {
+        Self {
+            agent: a.agent,
+            workspace: a.workspace,
+            follow: a.follow,
+            lines: a.lines,
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -649,6 +678,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Inbox(args)) => {
             let code = inbox::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Log(args)) => {
+            let code = log::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

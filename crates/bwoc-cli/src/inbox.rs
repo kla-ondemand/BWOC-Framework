@@ -15,6 +15,9 @@ pub struct InboxArgs {
     pub workspace: Option<PathBuf>,
     pub json: bool,
     pub limit: Option<usize>,
+    /// Tail mode: print historical messages then block, printing new
+    /// envelopes as they arrive. Exit with Ctrl-C.
+    pub watch: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,6 +78,10 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
     };
 
     if args.json {
+        if args.watch {
+            eprintln!("bwoc inbox: --watch is not supported with --json (tail mode is human-only)");
+            return Ok(());
+        }
         let value = serde_json::json!({
             "agent": entry.id,
             "inbox": inbox_path.display().to_string(),
@@ -103,19 +110,92 @@ fn inbox(args: InboxArgs) -> Result<(), InboxError> {
         return Ok(());
     }
     for (i, m) in view.iter().enumerate() {
-        let ts = m.get("ts").and_then(|v| v.as_str()).unwrap_or("—");
-        let from = m.get("from").and_then(|v| v.as_str()).unwrap_or("—");
-        let msg = m
-            .get("message")
-            .and_then(|v| v.as_str())
-            .unwrap_or("(no message)");
-        println!("  [{}]  {ts}  ←  {from}", i + 1);
-        for line in msg.lines() {
-            println!("        {line}");
-        }
-        println!();
+        print_envelope(i + 1, m);
+    }
+
+    if args.watch {
+        watch_inbox(&inbox_path, messages.len())?;
     }
     Ok(())
+}
+
+/// Print one envelope as a numbered block (one ts/from header, then
+/// indented message body — multi-line aware).
+fn print_envelope(idx: usize, m: &serde_json::Value) {
+    let ts = m.get("ts").and_then(|v| v.as_str()).unwrap_or("—");
+    let from = m.get("from").and_then(|v| v.as_str()).unwrap_or("—");
+    let msg = m
+        .get("message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no message)");
+    println!("  [{idx}]  {ts}  ←  {from}");
+    for line in msg.lines() {
+        println!("        {line}");
+    }
+    println!();
+}
+
+/// Tail mode — block reading new envelopes from `inbox_path` past the
+/// last known count. Exit with Ctrl-C (default SIGINT terminates the
+/// process; no graceful state to flush since this is read-only).
+fn watch_inbox(inbox_path: &std::path::Path, mut idx: usize) -> Result<(), InboxError> {
+    use std::time::Duration;
+
+    println!("(watching for new messages — Ctrl-C to stop)");
+    println!();
+
+    // Track byte offset rather than line count — robust to lines being
+    // partially flushed. Starts at current EOF so we don't re-print the
+    // historical view.
+    let mut offset: u64 = std::fs::metadata(inbox_path).map(|m| m.len()).unwrap_or(0);
+
+    loop {
+        let Ok(meta) = std::fs::metadata(inbox_path) else {
+            // File might be missing if no one has sent yet — keep polling.
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        };
+        let size = meta.len();
+        if size < offset {
+            // Truncation — reset.
+            eprintln!("(inbox truncated; resuming from new EOF)");
+            offset = size;
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+        if size == offset {
+            std::thread::sleep(Duration::from_millis(300));
+            continue;
+        }
+
+        // Read past-offset and print complete lines.
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(inbox_path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = String::new();
+        file.read_to_string(&mut buf)?;
+        let mut consumed: u64 = 0;
+        for line in buf.split_inclusive('\n') {
+            if !line.ends_with('\n') {
+                break; // partial — wait for the rest
+            }
+            let trimmed = line.trim();
+            consumed += line.len() as u64;
+            if trimmed.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(trimmed) {
+                Ok(v) => {
+                    idx += 1;
+                    print_envelope(idx, &v);
+                }
+                Err(e) => {
+                    eprintln!("bwoc inbox: warning — malformed JSON skipped ({e})");
+                }
+            }
+        }
+        offset += consumed;
+    }
 }
 
 /// Read the inbox file line-by-line. Malformed lines warn-and-skip;

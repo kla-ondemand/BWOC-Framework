@@ -110,6 +110,9 @@ struct InboxArgs {
     /// Show only the last N messages.
     #[arg(long)]
     limit: Option<usize>,
+    /// Tail mode — block and print new envelopes as they arrive (Ctrl-C to stop).
+    #[arg(long)]
+    watch: bool,
 }
 
 impl From<InboxArgs> for inbox::InboxArgs {
@@ -119,6 +122,7 @@ impl From<InboxArgs> for inbox::InboxArgs {
             workspace: a.workspace,
             json: a.json,
             limit: a.limit,
+            watch: a.watch,
         }
     }
 }

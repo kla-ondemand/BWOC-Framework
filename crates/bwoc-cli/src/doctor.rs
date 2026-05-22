@@ -76,6 +76,12 @@ pub fn run(args: DoctorArgs) -> i32 {
                 for r in check_inbox_cursors(&root, args.auto) {
                     results.push(r);
                 }
+                // Per-agent daemon log size — append-only, can grow unbounded
+                // across many start/stop cycles. WARN when bloated; --auto
+                // truncates in place.
+                for r in check_oversize_logs(&root, args.auto) {
+                    results.push(r);
+                }
             }
         }
         None => results.push(CheckResult {
@@ -486,6 +492,67 @@ fn check_inbox_cursors(root: &Path, auto: bool) -> Vec<CheckResult> {
             Some(_) => {
                 // In bounds — silently OK.
             }
+        }
+    }
+    out
+}
+
+/// Detect `<agent>/.bwoc/agent.log` files that have grown past
+/// `LOG_BLOAT_BYTES`. Logs are append-mode and survive across
+/// `bwoc start` / `bwoc stop` cycles; for a long-lived agent this
+/// can accumulate megabytes of diagnostic chatter that's mostly
+/// duplicate startup banners.
+///
+/// Without `--auto`, emits WARN with a hint pointing at
+/// `bwoc log --clear`. With `--auto`, truncates in place
+/// (preserves inode + daemon's open handle keeps writing).
+const LOG_BLOAT_BYTES: u64 = 10 * 1024 * 1024; // 10 MiB — generous
+
+fn check_oversize_logs(root: &Path, auto: bool) -> Vec<CheckResult> {
+    let Ok(registry) = AgentsRegistry::load(root) else {
+        return vec![];
+    };
+    let mut out = Vec::new();
+    for a in &registry.agents {
+        let log_path = root.join(&a.path).join(".bwoc/agent.log");
+        let Ok(meta) = std::fs::metadata(&log_path) else {
+            continue; // No log yet — nothing to check.
+        };
+        let size = meta.len();
+        if size <= LOG_BLOAT_BYTES {
+            continue;
+        }
+        let size_mib = size as f64 / (1024.0 * 1024.0);
+        if auto {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&log_path)
+            {
+                Ok(_) => out.push(CheckResult {
+                    name: format!("agent log: {}", a.id),
+                    status: Status::Fixed(format!(
+                        "truncated {} (was {size_mib:.1} MiB)",
+                        log_path.display(),
+                    )),
+                }),
+                Err(e) => out.push(CheckResult {
+                    name: format!("agent log: {}", a.id),
+                    status: Status::Fail(format!(
+                        "log at {} is {size_mib:.1} MiB but couldn't truncate: {e}",
+                        log_path.display()
+                    )),
+                }),
+            }
+        } else {
+            out.push(CheckResult {
+                name: format!("agent log: {}", a.id),
+                status: Status::Warn(format!(
+                    "{size_mib:.1} MiB at {} — `bwoc log {} --clear` to truncate, or rerun doctor with --auto",
+                    log_path.display(),
+                    a.id.strip_prefix("agent-").unwrap_or(&a.id),
+                )),
+            });
         }
     }
     out

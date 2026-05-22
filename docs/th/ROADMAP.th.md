@@ -74,12 +74,13 @@
 | Module `livecheck` ที่ใช้ร่วม | รวม 5 copy ของ `signal_zero_alive` / `running_pid` / `query_uptime` / `format_uptime` / `inbox_count` |
 | Stub `bwoc-agent --serve` สำหรับ Windows | build + run default mode ได้; `--serve` exit 2 พร้อมข้อความ "Unix-only" |
 | `bwoc log <agent>` | Tail daemon stderr จาก `<agent>/.bwoc/agent.log`; `-f`/`--follow` สำหรับ live stream; `-n N` สำหรับ N บรรทัดล่าสุด; `--clear` truncate ในที่ |
-| Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) directory + convention ship แล้ว; mining + retrieval tooling เลื่อนไปก่อน |
+| Per-workspace memory scaffold | `bwoc init` สร้าง `.bwoc/memory/` พร้อม README อธิบาย 4-tier scope hierarchy (per-agent / per-workspace / per-user / Tier 2) |
+| `bwoc memory list \| show` | อ่าน workspace memory จาก CLI: `list` (table + `--json`), `show <name>` (พร้อม refuse traversal); write/search CLI ยังค้างอยู่ |
 
 ### ที่เหลือก่อน ship
 
 - **Supervision restart-on-crash** — daemon ปัจจุบัน exit เมื่อมี signal; auto-respawn / health-check loop ยังไม่ทำ
-- **Memory tooling ระดับ workspace** — directory + spec ship แล้ว (ดูด้านบน); CLI สำหรับ retrieval / write (`bwoc memory get/put/search`) ยังค้างอยู่
+- **CLI write + search ของ memory** — `bwoc memory list / show` ship แล้ว; `bwoc memory put <name>` (เขียนจาก stdin หรือ `--file`) และ `bwoc memory search <query>` (substring ทั่วทุก entry) ยังค้างอยู่
 - **Cross-backend validation** — uppāda + ṭhiti เต็มกับ 4 backend CLI ใน CI (พิสูจน์ Samānattatā)
 - **Code signing** — Apple notarization + Windows Authenticode สำหรับ release artifact (ต้องการ user-cert authorization)
 - **Build Linux ARM / musl** — มีเฉพาะ `x86_64-unknown-linux-gnu` ใน release matrix

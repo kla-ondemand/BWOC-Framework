@@ -12,21 +12,69 @@
 # Requires: a Rust toolchain (https://rustup.rs/).
 #
 # Usage (from a clone of bwoc-framwork):
-#   ./scripts/install.sh           # install or upgrade in place (uses --force)
-#   ./scripts/install.sh --help    # this message
+#   ./scripts/install.sh                # install or upgrade in place (--force)
+#   ./scripts/install.sh --check        # report current install state, no build
+#   ./scripts/install.sh --uninstall    # remove both binaries
+#   ./scripts/install.sh --help         # this message
 #
 # Or one-liner from the repo root (CLI only — won't get bwoc-agent):
 #   cargo install --path crates/bwoc-cli --locked --force
 #
 # Related:
-#   ./scripts/bump-version.sh      # manual major/minor/patch SemVer bumps
-#                                  # (patch is also auto-bumped on every edit by
-#                                  # .claude/hooks/auto-version.sh)
+#   ./scripts/bump-version.sh           # manual major/minor/patch SemVer bumps
+#                                       # (patch also auto-bumped on every edit
+#                                       # by .claude/hooks/auto-version.sh)
 
 set -euo pipefail
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-  sed -n '2,24p' "$0" | sed 's/^# \?//'
+  sed -n '2,26p' "$0" | sed 's/^# \?//'
+  exit 0
+fi
+
+if [ "${1:-}" = "--check" ]; then
+  echo "bwoc toolkit install state:"
+  if command -v bwoc >/dev/null 2>&1; then
+    echo "  bwoc:       $(command -v bwoc) — $(bwoc --version 2>/dev/null | head -1)"
+  else
+    echo "  bwoc:       not installed"
+  fi
+  if command -v bwoc-agent >/dev/null 2>&1; then
+    echo "  bwoc-agent: $(command -v bwoc-agent) — present (no --version flag)"
+  else
+    echo "  bwoc-agent: not installed"
+  fi
+  case ":$PATH:" in
+    *":$HOME/.cargo/bin:"*) echo "  PATH:       \$HOME/.cargo/bin is on PATH ✓" ;;
+    *) echo "  PATH:       \$HOME/.cargo/bin is NOT on PATH (binaries hidden)" ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = "--uninstall" ]; then
+  echo "Uninstalling bwoc toolkit ..."
+  removed=0
+  if command -v bwoc >/dev/null 2>&1; then
+    cargo uninstall bwoc-cli 2>&1 | sed 's/^/  /' || true
+    removed=1
+  else
+    echo "  bwoc:       not installed (skipped)"
+  fi
+  if command -v bwoc-agent >/dev/null 2>&1; then
+    cargo uninstall bwoc-agent 2>&1 | sed 's/^/  /' || true
+    removed=1
+  else
+    echo "  bwoc-agent: not installed (skipped)"
+  fi
+  if [ "$removed" = "0" ]; then
+    echo ""
+    echo "Nothing was installed — nothing to uninstall."
+  else
+    echo ""
+    echo "Uninstall complete."
+    echo "Note: per-workspace state (.bwoc/ dirs) is NOT removed by this script."
+    echo "      Use \`bwoc retire\` per agent or rm -rf the workspace yourself."
+  fi
   exit 0
 fi
 

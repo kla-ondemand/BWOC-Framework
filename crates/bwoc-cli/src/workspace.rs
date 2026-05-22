@@ -14,6 +14,10 @@ pub struct InfoArgs {
     pub path: Option<PathBuf>,
     pub lang: String,
     pub json: bool,
+    /// Print just the resolved workspace root path, one line, no decoration.
+    /// Useful for shell scripts: `cd "$(bwoc workspace info --path-only)"`.
+    /// Wins over `--json` if both are set.
+    pub path_only: bool,
 }
 
 pub struct ValidateArgs {
@@ -65,6 +69,12 @@ pub fn run_info(args: InfoArgs) -> i32 {
         );
         return 2;
     };
+    // --path-only short-circuits: just the resolved root. Wins over --json
+    // (most restrictive output mode).
+    if args.path_only {
+        println!("{}", root.display());
+        return 0;
+    }
     if args.json {
         return info_json(&root);
     }

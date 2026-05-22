@@ -614,6 +614,9 @@ enum WorkspaceCommand {
         /// Emit JSON instead of the human-readable layout.
         #[arg(long)]
         json: bool,
+        /// Print just the resolved workspace path (for `cd "$(bwoc workspace info --path-only)"`).
+        #[arg(long = "path-only")]
+        path_only: bool,
     },
     /// Run validation rules; exit 0 if complete, 2 if violations.
     Validate {
@@ -847,10 +850,15 @@ fn main() -> ExitCode {
         }
         Some(Commands::Workspace { command }) => {
             let code = match command {
-                WorkspaceCommand::Info { path, json } => workspace::run_info(workspace::InfoArgs {
+                WorkspaceCommand::Info {
+                    path,
+                    json,
+                    path_only,
+                } => workspace::run_info(workspace::InfoArgs {
                     path,
                     lang: lang.clone(),
                     json,
+                    path_only,
                 }),
                 WorkspaceCommand::Validate { path, json } => {
                     workspace::run_validate(workspace::ValidateArgs {

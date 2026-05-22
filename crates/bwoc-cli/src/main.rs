@@ -588,6 +588,10 @@ struct ListArgs {
     /// With `--json`, emits `{"count": N}`.
     #[arg(long)]
     count: bool,
+    /// Print bare agent ids, one per line. Combine with filters for `for $name in ...` loops.
+    /// With `--json`, emits `{"names": [...]}`. `--count` wins if both are set.
+    #[arg(long = "names-only")]
+    names_only: bool,
 }
 
 impl ListArgs {
@@ -602,6 +606,7 @@ impl ListArgs {
             inbox_pending_only: self.inbox_pending,
             sort: self.sort,
             count_only: self.count,
+            names_only: self.names_only,
         }
     }
 }

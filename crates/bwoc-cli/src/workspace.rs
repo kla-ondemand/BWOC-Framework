@@ -43,6 +43,12 @@ pub struct ListArgs {
     /// integer to stdout. Useful for shell scripts:
     ///   `if [ $(bwoc list --running --count) -gt 0 ]; then ...`
     pub count_only: bool,
+    /// Print just bare agent names (one per line, no `agent-` prefix
+    /// stripping — keep the canonical id). Pairs with `--running` /
+    /// `--inbox-pending` for iteration:
+    ///   `for n in $(bwoc list --running --names-only); do …; done`
+    /// Mutually-prioritised: `--count` wins if both set.
+    pub names_only: bool,
 }
 
 pub struct PruneArgs {
@@ -237,6 +243,8 @@ pub fn run_list(args: ListArgs) -> i32 {
     // --count: short-circuit before any formatting. With --json, emit
     // `{ "count": N }`; without, just the integer + newline. Filters and
     // sort already applied, so the count reflects the user's view.
+    // Wins over --names-only if both are set (count is the more
+    // restrictive view).
     if args.count_only {
         if args.json {
             let value = serde_json::json!({ "count": filtered.len() });
@@ -252,6 +260,32 @@ pub fn run_list(args: ListArgs) -> i32 {
             }
         }
         println!("{}", filtered.len());
+        return 0;
+    }
+
+    // --names-only: bare agent ids, one per line, no decorative text.
+    // Designed for shell-script iteration with filters/sort:
+    //   `for n in $(bwoc list --running --names-only); do …; done`
+    // Honors --json: `{ "names": ["agent-foo", ...] }`.
+    if args.names_only {
+        if args.json {
+            let value = serde_json::json!({
+                "names": filtered.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            });
+            match serde_json::to_string(&value) {
+                Ok(s) => {
+                    println!("{s}");
+                    return 0;
+                }
+                Err(e) => {
+                    eprintln!("bwoc list --names-only --json: serialize failed: {e}");
+                    return 1;
+                }
+            }
+        }
+        for a in &filtered {
+            println!("{}", a.id);
+        }
         return 0;
     }
 

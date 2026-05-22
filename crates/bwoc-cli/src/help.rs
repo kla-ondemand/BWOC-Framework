@@ -65,6 +65,11 @@ const TOPICS: &[(&str, &str, &str)] = &[
         "Env + workspace diagnostic with auto-fix sweeps and JSON output",
         DOCTOR,
     ),
+    (
+        "script",
+        "Shell-script idioms: --count, --names-only, --json, --path-only",
+        SCRIPT,
+    ),
 ];
 
 pub fn run(args: HelpArgs) -> i32 {
@@ -685,6 +690,80 @@ chatter is fair game; messages are not.
 See: bwoc help daemon     — what generates pid/sock/cursor in the first place
      bwoc help messaging  — inbox.jsonl lifecycle, --clear semantics
      bwoc help lifecycle  — overall state machine doctor diagnoses against
+";
+
+const SCRIPT: &str = "\
+Recipes for driving `bwoc` from shell scripts. Every read-only
+command has flags that strip output to integers, bare names, or
+JSON — pick what your script needs.
+
+Stripped-output flags (output mode precedence: count > names > default):
+
+  bwoc list --count                  N (one integer)
+  bwoc list --count --json           {\"count\": N}
+  bwoc list --names-only             agent-foo\\n agent-bar\\n …
+  bwoc list --names-only --json      {\"names\": [...]}
+  bwoc list --json                   full agent objects + workspace
+
+  bwoc memory list --count           N (memory entries, excluding README.md)
+  bwoc memory list --names-only      filenames one per line
+
+  bwoc inbox <agent> --count         envelope count
+  bwoc inbox --all --json            { agents: [{ id, total, messages }] }
+
+  bwoc workspace info --path-only    workspace root (for `cd \"$(...)\"`)
+  bwoc workspace info --json         { workspace, defaults, agents, resources, attention }
+
+Filters (combinable on `bwoc list`):
+
+  bwoc list --running                ●-marked only
+  bwoc list --status active          exact status match
+  bwoc list --backend claude         exact backend match
+  bwoc list --inbox-pending          agents with at least one envelope
+  bwoc list --sort id|inbox|...      stable sort, registry-order default
+
+Common idioms:
+
+  # Stop everything for end of day
+  bwoc stop --all --yes
+
+  # Restart everyone (or just those that are stopped)
+  bwoc start --all --yes
+
+  # Find agents with unread work; print their counts
+  for n in $(bwoc list --inbox-pending --names-only); do
+    echo \"$n: $(bwoc inbox $n --count) pending\"
+  done
+
+  # CI gate: fail if any agent has a fail-status check
+  bwoc check --all --json | jq -e '.summary.total_violations == 0'
+
+  # CI gate: fail if any health probe fails
+  bwoc doctor --json | jq -e '.exit == 0'
+
+  # cd into workspace from anywhere
+  cd \"$(bwoc workspace info --path-only)\"
+
+  # Mass message inboxes (e.g. broadcast a system note)
+  for n in $(bwoc list --names-only); do
+    bwoc send $n \"system: maintenance window 14:00-15:00\"
+  done
+
+Exit codes (consistent across commands):
+
+  0    success (or empty result, e.g. `bwoc list` with 0 agents)
+  1    runtime error (failed IO, malformed JSON, etc.)
+  2    user error (no workspace, missing agent, invalid arg, aborted)
+
+Most read commands exit 0 even with zero results — \"nothing to show\"
+is not an error. Doctor and check are the exceptions: they exit 2
+if any FAIL / violation persists.
+
+See: bwoc help getting-started  — install + first agent walkthrough
+     bwoc help workspace        — resolution chain that all `--workspace`
+                                  flags follow
+     bwoc help messaging        — inbox flow that the shell loops above
+                                  drive
 ";
 
 #[cfg(test)]

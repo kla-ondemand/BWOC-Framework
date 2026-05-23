@@ -391,8 +391,11 @@ struct ChatArgs {
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
     /// Run inside a new tmux window instead of exec'ing in this shell. Requires $TMUX.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "ghostty")]
     tmux: bool,
+    /// Open a new Ghostty terminal window instead of exec'ing in this shell. macOS-only.
+    #[arg(long)]
+    ghostty: bool,
 }
 
 impl ChatArgs {
@@ -402,6 +405,7 @@ impl ChatArgs {
             workspace: self.workspace,
             lang,
             tmux: self.tmux,
+            ghostty: self.ghostty,
         }
     }
 }

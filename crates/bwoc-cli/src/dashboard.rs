@@ -201,6 +201,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                     (KeyCode::Char('t'), _) => open_in_tmux(app),
                     (KeyCode::Char('l'), _) => open_log_in_tmux(app),
                     (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
+                    (KeyCode::Char('g'), _) => open_in_ghostty(app),
                     (KeyCode::Char('?'), _) => app.show_help = true,
                     (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                     (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
@@ -280,6 +281,66 @@ fn open_in_tmux(app: &mut App) {
         }
         Err(e) => {
             app.last_action = Some(format!("tmux exec failed: {e}"));
+        }
+    }
+}
+
+/// `g` hotkey — spawn `bwoc spawn` for the selected agent in a new
+/// Ghostty terminal window. Mirrors `open_in_tmux` (chat mode) but
+/// targets a fresh Ghostty window instead of a tmux pane. macOS-only
+/// because Ghostty's CLI launcher on macOS is `open -na Ghostty.app`.
+fn open_in_ghostty(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — nothing to talk to)".to_string());
+        return;
+    };
+
+    if !cfg!(target_os = "macos") {
+        app.last_action =
+            Some("(ghostty: macOS-only — run `ghostty -e bwoc spawn …` manually)".to_string());
+        return;
+    }
+
+    let agent_path = root.join(&entry.path);
+    let agent_path_str = agent_path.to_string_lossy().to_string();
+    let wd_arg = format!("--working-directory={agent_path_str}");
+    // `open -na Ghostty.app --args --working-directory=<p> -e bwoc spawn --path <p> --backend <b>`
+    let result = std::process::Command::new("open")
+        .args([
+            "-na",
+            "Ghostty.app",
+            "--args",
+            wd_arg.as_str(),
+            "-e",
+            "bwoc",
+            "spawn",
+            "--path",
+            agent_path_str.as_str(),
+            "--backend",
+            entry.backend.as_str(),
+        ])
+        .status();
+    match result {
+        Ok(s) if s.success() => {
+            app.last_action = Some(format!(
+                "→ Ghostty window for '{}' opened (backend: {})",
+                entry.id, entry.backend
+            ));
+        }
+        Ok(s) => {
+            app.last_action = Some(format!(
+                "ghostty: `open -na Ghostty.app` exited {s} (installed in /Applications?)"
+            ));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("ghostty: `open` exec failed: {e}"));
         }
     }
 }
@@ -479,6 +540,8 @@ fn draw_help_overlay(f: &mut ratatui::Frame, area: Rect) {
               (live tail the daemon log)
   i           open `bwoc inbox --watch` in a new tmux window
               (live tail the inbox)
+  g           open `bwoc spawn` in a new Ghostty window
+              (chat with the selected agent; macOS-only)
 
 Press any key to dismiss.";
 

@@ -7,11 +7,14 @@
 //! its `config.manifest.json`, which `bwoc spawn` already reads —
 //! "chat mode auto-select llm and model" without any extra prompts.
 //!
-//! Two modes:
+//! Three modes:
 //!   - default: exec the backend CLI in this shell (replaces the
 //!     current process via spawn's existing flow)
 //!   - `--tmux`: open `tmux new-window` running spawn; current shell
 //!     stays put. Requires `$TMUX` (caller is inside a tmux session).
+//!   - `--ghostty`: open a new Ghostty terminal window running spawn;
+//!     current shell stays put. macOS-only (Ghostty's CLI entry-point
+//!     on macOS is `open -na Ghostty.app`).
 
 use std::path::PathBuf;
 
@@ -25,6 +28,8 @@ pub struct ChatArgs {
     pub lang: String,
     /// Run inside `tmux new-window` instead of exec'ing in this shell.
     pub tmux: bool,
+    /// Open a new Ghostty terminal window. macOS-only.
+    pub ghostty: bool,
 }
 
 pub fn run(args: ChatArgs) -> i32 {
@@ -71,6 +76,10 @@ pub fn run(args: ChatArgs) -> i32 {
 
     if args.tmux {
         return open_in_tmux(&entry.id, &agent_path, backend);
+    }
+
+    if args.ghostty {
+        return open_in_ghostty(&entry.id, &agent_path, backend);
     }
 
     // Default mode: hand off to spawn::run, which exec's the backend CLI
@@ -121,6 +130,63 @@ fn open_in_tmux(agent_id: &str, agent_path: &std::path::Path, backend: Backend) 
         }
         Err(e) => {
             eprintln!("bwoc chat --tmux: tmux exec failed: {e}");
+            1
+        }
+    }
+}
+
+/// `--ghostty` mode — open a new Ghostty terminal window running
+/// `bwoc spawn` for the agent. macOS-only because Ghostty's CLI
+/// launcher on macOS is `open -na Ghostty.app` (per Ghostty's own
+/// `--help`: "On macOS, launching the terminal emulator from the CLI
+/// is not supported"). On other platforms the call falls through
+/// with an exit-2 explanation rather than silently failing.
+fn open_in_ghostty(agent_id: &str, agent_path: &std::path::Path, backend: Backend) -> i32 {
+    if !cfg!(target_os = "macos") {
+        eprintln!(
+            "bwoc chat --ghostty: macOS-only. Ghostty on Linux/BSD has its own CLI entry — \
+             drop --ghostty and run `ghostty -e bwoc spawn --path <p> --backend <b>` manually."
+        );
+        return 2;
+    }
+    let path_str = agent_path.to_string_lossy().to_string();
+    let wd_arg = format!("--working-directory={path_str}");
+    // `open -na Ghostty.app --args --working-directory=<p> -e bwoc spawn --path <p> --backend <b>`
+    // -n forces a new window even if Ghostty is already running.
+    // --args passes the rest through to Ghostty itself.
+    // -e collects all subsequent tokens as the command to run.
+    match std::process::Command::new("open")
+        .args([
+            "-na",
+            "Ghostty.app",
+            "--args",
+            wd_arg.as_str(),
+            "-e",
+            "bwoc",
+            "spawn",
+            "--path",
+            path_str.as_str(),
+            "--backend",
+            backend.cli_name(),
+        ])
+        .status()
+    {
+        Ok(s) if s.success() => {
+            println!(
+                "Opened Ghostty window for '{agent_id}' (backend: {})",
+                backend.cli_name()
+            );
+            0
+        }
+        Ok(s) => {
+            eprintln!(
+                "bwoc chat --ghostty: `open -na Ghostty.app` exited {s} \
+                 (is Ghostty installed in /Applications?)"
+            );
+            1
+        }
+        Err(e) => {
+            eprintln!("bwoc chat --ghostty: `open` exec failed: {e}");
             1
         }
     }

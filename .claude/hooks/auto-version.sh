@@ -3,11 +3,19 @@
 #
 # On every Claude Code Write|Edit:
 # - If the edited file is *.rs / *.toml under a crate or Cargo workspace,
-#   bump the PATCH component of [workspace.package].version in Cargo.toml,
+#   bump [workspace.package].version in Cargo.toml,
 #   and mirror it into VERSION.md's Software-Version line.
 # - If the edited file is *.md (anywhere except the auto-managed files
-#   themselves), bump the PATCH component of VERSION.md's Document-Version line.
+#   themselves), bump VERSION.md's Document-Version line.
 # - Always update VERSION.md's Last-Updated stamp to current UTC ISO 8601.
+#
+# Bump level — patch by default. To queue a MINOR or MAJOR bump for the
+# NEXT hook fire of a given domain, write a sentinel file:
+#   echo minor > .bwoc/next-bump.software   # next .rs/.toml edit bumps minor
+#   echo major > .bwoc/next-bump.document   # next .md edit bumps major
+# The sentinel is consumed (deleted) by the hook after one bump and the
+# domain reverts to patch on subsequent edits. Use scripts/queue-bump.sh
+# for a friendlier wrapper.
 #
 # Self-modification guard: edits to Cargo.toml, Cargo.lock, VERSION.md, or
 # anything under .claude/ are ignored. The hook itself does not go through
@@ -45,6 +53,35 @@ bump_patch() {
   echo "$maj.$min.$((pat + 1))"
 }
 
+# Apply a SemVer bump at the named level. Patch is the default behavior the
+# hook used to have. Minor zeros the patch; major zeros minor + patch.
+bump_at_level() {
+  local cur="$1" level="$2"
+  local maj min pat
+  IFS='.' read -r maj min pat <<<"$cur"
+  case "$level" in
+    major) echo "$((maj + 1)).0.0" ;;
+    minor) echo "$maj.$((min + 1)).0" ;;
+    patch|*) echo "$maj.$min.$((pat + 1))" ;;
+  esac
+}
+
+# Read a one-line sentinel `.bwoc/next-bump.<domain>` and emit the
+# level it requests (minor|major). Invalid contents fall back to patch.
+# The sentinel is DELETED after read — one-shot consume.
+consume_bump_sentinel() {
+  local domain="$1"
+  local sentinel="$repo_root/.bwoc/next-bump.${domain}"
+  [[ -f "$sentinel" ]] || { echo patch; return; }
+  local requested
+  requested=$(tr -d '[:space:]' <"$sentinel" 2>/dev/null || true)
+  rm -f "$sentinel"
+  case "$requested" in
+    major|minor|patch) echo "$requested" ;;
+    *)                 echo patch ;;
+  esac
+}
+
 # Update a line of the form: **Field:** `X.Y.Z`   *(optional trailing)*
 # Portable sed across BSD (macOS) and GNU (Linux): use -i with .bak suffix.
 replace_version_line() {
@@ -70,7 +107,8 @@ case "$rel" in
     if [[ -f "$cargo" ]]; then
       cur=$(grep -E '^version = "[0-9]+\.[0-9]+\.[0-9]+"' "$cargo" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
       if [[ -n "$cur" ]]; then
-        new=$(bump_patch "$cur")
+        level=$(consume_bump_sentinel software)
+        new=$(bump_at_level "$cur" "$level")
         # Bump Cargo.toml workspace version (portable across BSD and GNU sed).
         # The pattern `^version = "X.Y.Z"$` matches only the workspace.package
         # line because dependency entries have leading whitespace.
@@ -81,6 +119,7 @@ case "$rel" in
           replace_version_line "$repo_root/VERSION.md" "Software-Version" "$new"
         fi
         domain="software"
+        [[ "$level" != patch ]] && domain="software:${level}"
         new_version="$new"
       fi
     fi
@@ -93,12 +132,15 @@ case "$rel" in
     if [[ -f "$repo_root/VERSION.md" ]]; then
       cur=$(grep -E '^\*\*Document-Version:\*\*[[:space:]]+`[0-9]+\.[0-9]+\.[0-9]+`' "$repo_root/VERSION.md" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
       if [[ -n "$cur" ]]; then
-        new=$(bump_patch "$cur")
+        doc_level=$(consume_bump_sentinel document)
+        new=$(bump_at_level "$cur" "$doc_level")
         replace_version_line "$repo_root/VERSION.md" "Document-Version" "$new"
+        doc_label="document"
+        [[ "$doc_level" != patch ]] && doc_label="document:${doc_level}"
         if [[ -n "$domain" ]]; then
-          domain="${domain}+document"
+          domain="${domain}+${doc_label}"
         else
-          domain="document"
+          domain="$doc_label"
         fi
         if [[ -n "$new_version" ]]; then
           new_version="${new_version} (sw) / ${new} (doc)"

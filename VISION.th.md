@@ -51,12 +51,24 @@ BWOC ไม่ได้จำลอง "การเขียน code" แต่
 - รูปแบบ fleet governance ข้าม vendor (Aparihāniya-dhamma 7) อยู่ใน production ขององค์กรมากกว่าหนึ่งแห่ง
 - กรอบนี้ผ่าน refactor ใหญ่ครั้งแรกของตนเองได้ โดย doctrine layer ไม่แตก
 
+## Agent แบบ Self-Hosted และเป็นกลางต่อ Provider
+
+BWOC ถือว่า **LLM แบบ self-hosted เป็นเป้าหมาย deployment ระดับแรก** ไม่ใช่สิ่งที่คิดทีหลัง crate `bwoc-harness` เพิ่ม OpenAI-compatible model-API client และ agentic loop runtime ทำให้ agent สามารถรันบน infrastructure ท้องถิ่นหรือส่วนตัวได้ทั้งหมด (Ollama, vLLM, LM Studio, llama.cpp server หรือ endpoint OpenAI-compatible ใดก็ตาม)
+
+### การแบ่ง Orchestrator กับ Runtime
+
+path `bwoc` เริ่มต้นยังคงเป็น **zero-dep CLI orchestrator**: exec vendor agentic CLI (Claude, Antigravity, Codex, Kimi) และไม่ต้องเรียก model-API ผู้ใช้ที่ทำงานกับ cloud backend เท่านั้นไม่ต้อง pull runtime
+
+path `bwoc-harness` แบบ optional เพิ่ม **model-API client และ agent runtime** ที่มี safety production-grade (guardrails, sandbox, permission system), telemetry, และ offline eval framework dep หนัก (tokio, reqwest, keyring) ถูก **กักตัวไว้ใน `crates/bwoc-harness`** และไม่กระทบ crate graph เริ่มต้น การเพิ่ม self-hosted backend ใช้คำสั่งเดียว: `ln -s AGENTS.md OLLAMA.md`
+
+นี่คือการขยายตัวตนอย่างตั้งใจจาก "pure orchestrator" เป็น "orchestrator + optional runtime" เพราะ self-hosted operation ต้องการการควบคุม safety, telemetry, และ evaluation ที่ third-party agentic CLI ไม่สามารถมอบให้ได้ สเปกที่เล็กกว่ายังคงชนะในทุกที่ที่การขยายตัวนั้นไม่จำเป็น
+
 ## สิ่งที่ไม่ใช่เป้าหมาย
 
 - **ไม่ใช่ศาสนา** ไม่ใช่คู่มือทำสมาธิ ไม่ใช่ยานพาหนะของครู, สายธรรม, หรือสำนักใด ๆ
 - **ไม่ใช่ตัวแทนของ DDD, Clean Architecture, หรือ SOLID** BWOC ขยายกรอบเหล่านั้นไปสู่มิติที่กรอบเหล่านั้นไม่ได้ออกแบบมาเพื่อจัดการ
-- **ไม่ใช่ runtime, SDK, หรือ LLM** BWOC คือ *สเปก* และ *template* agent ที่สร้างจากกรอบนี้เลือก runtime ของตนเอง
-- **ไม่เอนเอียง vendor** ไม่มี backend, hosting provider, vector store, หรือ tool ใด ได้รับการปฏิบัติเป็นพิเศษในเอกสารหลัก
+- **ไม่ใช่ runtime ที่ผูกติด** path `bwoc` เริ่มต้นยังเป็น CLI orchestrator ที่ไม่มี model-API dependency runtime `bwoc-harness` เป็น opt-in ไม่ใช่บังคับ
+- **ไม่เอนเอียง vendor** ไม่มี backend, hosting provider, vector store, หรือ tool ใด ได้รับการปฏิบัติเป็นพิเศษในเอกสารหลัก ความเท่าเทียม self-hosted กับ cloud backend คือเป้าหมายการออกแบบ ไม่ใช่สิ่งที่คิดทีหลัง
 - **ไม่ใช่กรอบเพิ่มผลผลิต** BWOC เพิ่มประสิทธิภาพให้กับ agent ที่ *มีหลักการ, ตรวจสอบได้, กู้คืนได้* ไม่ใช่ time-to-first-token ที่เร็วที่สุด
 
 ## หลักการที่ตัดสินเมื่อสิ่งดีขัดกัน

@@ -49,12 +49,24 @@ Agent systems fail in exactly these dimensions. BWOC adopts Buddhist frameworks 
 - A cross-vendor fleet governance pattern (Aparihāniya-dhamma 7) is in production at more than one organization.
 - The framework has survived its own first major refactor without breaking the doctrine layer.
 
+## Self-Hosted and Provider-Neutral Agents
+
+BWOC treats **self-hosted LLMs as a first-class deployment target**, not an afterthought. The `bwoc-harness` crate adds an OpenAI-compatible model-API client and agentic loop runtime, enabling agents that run entirely on local or private infrastructure (Ollama, vLLM, LM Studio, llama.cpp server, or any OpenAI-compatible endpoint).
+
+### The Orchestrator-vs-Runtime Split
+
+The default `bwoc` path remains a **zero-dep CLI orchestrator**: it exec's a vendor agentic CLI (Claude, Antigravity, Codex, Kimi) and makes no model-API calls. Users who only work with cloud backends never pull a runtime.
+
+The optional `bwoc-harness` path adds a **model-API client and agent runtime** with production-grade safety (guardrails, sandbox, permission system), telemetry, and an offline eval framework. Its heavy dependencies (tokio, reqwest, keyring) are **quarantined inside `crates/bwoc-harness`** and do not affect the default crate graph. Adding a self-hosted backend is one symlink: `ln -s AGENTS.md OLLAMA.md`.
+
+This is a deliberate expansion from "pure orchestrator" to "orchestrator + optional runtime," justified because self-hosted operation requires control over safety, telemetry, and evaluation that a third-party agentic CLI cannot provide. The smaller spec still wins everywhere the expansion is not load-bearing.
+
 ## Non-Goals
 
 - **Not a religion.** Not a meditation guide. Not a vehicle for any teacher, lineage, or tradition.
 - **Not a replacement for DDD, Clean Architecture, or SOLID.** BWOC extends those frameworks into dimensions they were never designed to address.
-- **Not a runtime, SDK, or LLM.** BWOC is a *specification* and a *template*. Agents built from it choose their own runtime.
-- **Not vendor-aligned.** No backend, hosting provider, vector store, or tool gets preferential treatment in the core documents.
+- **Not a locked-in runtime.** The default `bwoc` path is still a CLI orchestrator with no model-API dependency. The `bwoc-harness` runtime is opt-in, not mandatory.
+- **Not vendor-aligned.** No backend, hosting provider, vector store, or tool gets preferential treatment in the core documents. Self-hosted parity with cloud backends is a design goal, not an afterthought.
 - **Not a productivity framework.** BWOC optimizes for *principled, auditable, recoverable* agents — not for the fastest possible time-to-first-token.
 
 ## Principles That Govern Hard Tradeoffs

@@ -6,13 +6,28 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_Trust v2 (signed envelopes, warn-mode), the production Ollama agentic harness, and Tier 2 memory continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+_Trust v2 (signed envelopes, warn-mode) and Tier 2 memory continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
 
 ### Added
 
 - **Inter-workspace routing — Phase 3 Track A** — `.bwoc/interconnect/routes.toml` lets `bwoc send` reach an agent in a *peer* workspace with no central broker. `bwoc-core::routing` adds a `Routes` type (peer-declared `agent` xor `namespace` → workspace root) and a resolve order: exact `agent` → longest `namespace` prefix → `NotFound`. `send` consults it only after a local-registry miss, so the local-delivery path is byte-for-byte unchanged. Composes with the Kalyāṇamitta-7 trust gate — a cross-workspace sender resolves as `unknown_sender` and is refused — so routing ships ahead of Trust v2. Spec: [`modules/agent-template/interconnect/routing.md`](modules/agent-template/interconnect/routing.md) (+ `.th.md`); mapped to **Anattā** (SN 22.59): no central self, no central broker. Delivers the "coordinate without a central authority" half of the Phase 3 DoD.
 - **Worktree lifecycle — Phase 3 Track B** — a `git_worktree` shell-out util (no `git2`/`gitoxide`) plus a `task-claimed` Saṅgha hook that fires `git worktree add <worktreeBase>/<agentId>/<taskId> -b agent/<agentId>/feat/<taskId>` when an agent claims a task. The Saṅgha `Task` struct is **not** extended — worktree location follows the `<worktreeBase>/<agentId>/<taskId>` path convention so retire cleanup is deterministic without parsing any agent log.
 - **`bwoc retire` full vaya — Phase 3** — retire now ends an agent's life cleanly: worktree cleanup (worktrees under `<worktreeBase>/<agentId>/` removed via the git util), branch release (`agent/<agentId>/*` — `-d`, escalating to `-D` with the forced branch names surfaced in human + `--json` output), and interconnect deregister (`Routes::remove_agent_routes` strips routes whose `agent` targets the retiree from `routes.toml`). Idempotent and respects the existing file-mode flags. Completes the "an agent's life ends cleanly" half — **the Phase 3 DoD is now met.**
+
+**`bwoc-harness` — self-hosted agentic runtime (issue #1, P1–P5)**
+
+- **New crate `crates/bwoc-harness`** — OpenAI-compatible model-API client + agentic loop runtime for self-hosted / local LLM backends (Ollama first; any `/v1/chat/completions` endpoint). Heavy deps (tokio, reqwest, keyring) are quarantined inside this crate; `bwoc-cli`/`bwoc-agent`/`bwoc-core` stay dep-lean — the zero-dep orchestrator guarantee holds for the default path. Spec: [`docs/en/HARNESS.en.md`](docs/en/HARNESS.en.md) (+ `.th`).
+- **Safety guardrails (P2)** — hard, non-overridable engine mapping Sīla 5 + Taṇhā 3: blocks `rm -rf` repo/worktree root, secret writes (PEM/PAT/AWS/credential patterns), identity spoofing, `--no-verify`/force-push, `sudo`/`su`. Denials are fed to the model as tool results — the loop never panics on a denial.
+- **Permission system (P2)** — per-tool / per-pattern `allow | ask | deny` from `.bwoc/harness-policy.toml`; `ask` on non-TTY/autonomous fails-safe to `deny`; no policy file = deny-all.
+- **Sandbox (P2)** — worktree-confined fs writes (symlink-escape detection), `run_command` cwd-locked + env-scrub + arg-level scan. OS-level isolation (`sandbox-exec`/landlock) is a **pluggable stub** in v1 — worktree+allowlist only.
+- **Tool-auth broker (P3)** — scoped credentials from the OS keyring injected into the child env at exec only; never in prompt, log, or telemetry.
+- **Task queue (P3)** — async bounded cancellable queue integrating `bwoc-core::team` (Saṅgha); one task in-flight per worktree; `unclaim` rollback on rejection.
+- **Telemetry (P3)** — per-turn metrics → `session-metrics.jsonl` (additive to AGENTS.md §8b); OpenTelemetry behind `--features otel` (stub by default).
+- **Eval framework (P4)** — offline fixture runner (`task.toml` + `seed/` + `expected/`, rubric scoring); CI tests use a mock provider (no live model). Feeds Paññā 3 triggers.
+- **Loop hardening (P4)** — exponential-backoff retry, fallback-model chain, warn-only vetted-model gate, context compaction (truncate-with-marker).
+- **Full tool set** — read/write/edit_file, list_dir, grep, run_command, git, run_gates, bwoc_task, bwoc_send, memory_read/write — every tool routed through the guardrails → permission → sandbox pipeline.
+- **Backend wiring (P5)** — `bwoc spawn --backend ollama` execs the `bwoc-harness` binary; `OLLAMA.md → AGENTS.md` template symlink.
+- **Live-validated 2026-05-23** — end-to-end against real Ollama (`gemma4:latest`): the loop created and ran a correct file; with no policy it correctly denied the write (fail-safe) and fed the denial back to the model. **v1 caveat:** OS-level sandbox is a stub; treat unvetted models + permissive policies with care.
 
 ### Fixed
 

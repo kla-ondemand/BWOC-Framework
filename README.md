@@ -205,15 +205,26 @@ The CLI operates against a **workspace** the user designates — independent of 
 
 ## Getting Started
 
-### Install the toolkit (one command)
+### Install the toolkit
+
+**Homebrew** (macOS + Linux — pre-built binaries, no Rust toolchain needed):
+
+```bash
+brew tap bemindlabs/bwoc https://github.com/bemindlabs/BWOC-Framework
+brew install bwoc
+```
+
+Covers macOS Apple Silicon, macOS Intel, Linux aarch64, and Linux x86_64. Windows users: grab the `.zip` from [GitHub Releases](https://github.com/bemindlabs/BWOC-Framework/releases/latest) directly. Each release tag refreshes the formula's SHA256s.
+
+**From source** (one command, requires a [Rust toolchain](https://rustup.rs/) on PATH):
 
 ```bash
 ./scripts/install.sh
 ```
 
-Installs both binaries (`bwoc` CLI + `bwoc-agent` daemon) to `~/.cargo/bin/`. Requires a [Rust toolchain](https://rustup.rs/) on PATH. The script also warns up front if `~/.cargo/bin` isn't on PATH.
+Installs both binaries (`bwoc` CLI + `bwoc-agent` daemon) to `~/.cargo/bin/`. The script warns up front if `~/.cargo/bin` isn't on PATH.
 
-CLI-only install (skips the daemon, which is required for `bwoc start` to spawn `bwoc-agent --serve`):
+**CLI-only** (skips the daemon, which is required for `bwoc start` to spawn `bwoc-agent --serve`):
 
 ```bash
 cargo install --path crates/bwoc-cli --locked --force

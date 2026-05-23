@@ -6,7 +6,21 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_Trust v2 (signed envelopes, warn-mode), the production Ollama agentic harness, and Phase 3+ items continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+_Trust v2 (signed envelopes, warn-mode), the production Ollama agentic harness, and Tier 2 memory continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+
+### Added
+
+- **Inter-workspace routing — Phase 3 Track A** — `.bwoc/interconnect/routes.toml` lets `bwoc send` reach an agent in a *peer* workspace with no central broker. `bwoc-core::routing` adds a `Routes` type (peer-declared `agent` xor `namespace` → workspace root) and a resolve order: exact `agent` → longest `namespace` prefix → `NotFound`. `send` consults it only after a local-registry miss, so the local-delivery path is byte-for-byte unchanged. Composes with the Kalyāṇamitta-7 trust gate — a cross-workspace sender resolves as `unknown_sender` and is refused — so routing ships ahead of Trust v2. Spec: [`modules/agent-template/interconnect/routing.md`](modules/agent-template/interconnect/routing.md) (+ `.th.md`); mapped to **Anattā** (SN 22.59): no central self, no central broker. Delivers the "coordinate without a central authority" half of the Phase 3 DoD.
+- **Worktree lifecycle — Phase 3 Track B** — a `git_worktree` shell-out util (no `git2`/`gitoxide`) plus a `task-claimed` Saṅgha hook that fires `git worktree add <worktreeBase>/<agentId>/<taskId> -b agent/<agentId>/feat/<taskId>` when an agent claims a task. The Saṅgha `Task` struct is **not** extended — worktree location follows the `<worktreeBase>/<agentId>/<taskId>` path convention so retire cleanup is deterministic without parsing any agent log.
+- **`bwoc retire` full vaya — Phase 3** — retire now ends an agent's life cleanly: worktree cleanup (worktrees under `<worktreeBase>/<agentId>/` removed via the git util), branch release (`agent/<agentId>/*` — `-d`, escalating to `-D` with the forced branch names surfaced in human + `--json` output), and interconnect deregister (`Routes::remove_agent_routes` strips routes whose `agent` targets the retiree from `routes.toml`). Idempotent and respects the existing file-mode flags. Completes the "an agent's life ends cleanly" half — **the Phase 3 DoD is now met.**
+
+### Fixed
+
+- **Windows CI — routing tests** — the routing peer tests built `routes.toml` by interpolating a temp path into a double-quoted TOML basic string; on Windows the backslashes (`C:\…`) parsed as invalid escapes and failed 3 tests. Switched to single-quoted TOML *literal* strings, which preserve paths verbatim on every platform.
+
+### Changed
+
+- **CI — `actions/checkout` v4 → v6** — checkout v6 runs on Node 24 natively; the `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` env still covers the remaining JS actions. Removes the Node 20 deprecation banner ahead of the runner cutover.
 
 ## [v2026.5.23-3] — 2026-05-23 — 2.1.0
 

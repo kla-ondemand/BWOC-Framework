@@ -135,8 +135,12 @@ fn lock_is_stale(path: &Path) -> bool {
 
 fn load_team(workspace: &Path, team_id: &str) -> Result<Team, String> {
     let path = team_toml_path(workspace, team_id);
-    let body = fs::read_to_string(&path)
-        .map_err(|_| format!("no team '{team_id}' in workspace (expected {})", path.display()))?;
+    let body = fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "no team '{team_id}' in workspace (expected {})",
+            path.display()
+        )
+    })?;
     Team::from_toml(&body).map_err(|e| format!("team '{team_id}' is malformed: {e}"))
 }
 
@@ -155,7 +159,8 @@ fn save_tasks(workspace: &Path, team_id: &str, tasks: &[Task]) -> Result<(), Str
     let body = team::render_tasks(tasks).map_err(|e| format!("serialize failed: {e}"))?;
     let tmp = path.with_extension("jsonl.tmp");
     fs::write(&tmp, body).map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("failed to rename into {}: {e}", path.display()))?;
+    fs::rename(&tmp, &path)
+        .map_err(|e| format!("failed to rename into {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -173,7 +178,10 @@ pub fn run_team_create(
     };
     let path = team_toml_path(&ws, &id);
     if path.exists() {
-        eprintln!("bwoc team create: team '{id}' already exists ({})", path.display());
+        eprintln!(
+            "bwoc team create: team '{id}' already exists ({})",
+            path.display()
+        );
         return 2;
     }
     let team = Team::new(&id, members);
@@ -199,7 +207,11 @@ pub fn run_team_create(
             })
         );
     } else {
-        println!("Created team '{}' ({} member(s))", team.id, team.members.len());
+        println!(
+            "Created team '{}' ({} member(s))",
+            team.id,
+            team.members.len()
+        );
         for m in &team.members {
             println!("  - {m}");
         }
@@ -243,7 +255,10 @@ pub fn run_team_list(workspace: Option<PathBuf>, json: bool) -> i32 {
         return 0;
     }
     if teams.is_empty() {
-        println!("(no teams in workspace {} — `bwoc team create <id> --members …`)", ws.display());
+        println!(
+            "(no teams in workspace {} — `bwoc team create <id> --members …`)",
+            ws.display()
+        );
         return 0;
     }
     for t in &teams {
@@ -296,7 +311,10 @@ pub fn run_team_retire(workspace: Option<PathBuf>, id: String, yes: bool, json: 
     let task_dir = team_task_dir(&ws, &id);
     let _ = fs::remove_dir_all(&task_dir); // best-effort (may not exist)
     if let Err(e) = fs::remove_file(&toml_path) {
-        eprintln!("bwoc team retire: failed to remove {}: {e}", toml_path.display());
+        eprintln!(
+            "bwoc team retire: failed to remove {}: {e}",
+            toml_path.display()
+        );
         return 1;
     }
     if json {
@@ -483,9 +501,15 @@ pub fn run_task_claim(
     agent: String,
     json: bool,
 ) -> i32 {
-    mutate_task(workspace, &team_id, &task_id, &agent, json, "claim", |tasks| {
-        team::claim_task(tasks, &task_id, &agent)
-    })
+    mutate_task(
+        workspace,
+        &team_id,
+        &task_id,
+        &agent,
+        json,
+        "claim",
+        |tasks| team::claim_task(tasks, &task_id, &agent),
+    )
 }
 
 pub fn run_task_complete(
@@ -495,9 +519,15 @@ pub fn run_task_complete(
     agent: String,
     json: bool,
 ) -> i32 {
-    mutate_task(workspace, &team_id, &task_id, &agent, json, "complete", |tasks| {
-        team::complete_task(tasks, &task_id, &agent)
-    })
+    mutate_task(
+        workspace,
+        &team_id,
+        &task_id,
+        &agent,
+        json,
+        "complete",
+        |tasks| team::complete_task(tasks, &task_id, &agent),
+    )
 }
 
 /// Shared claim/complete path: resolve workspace, verify the actor is a
@@ -524,7 +554,10 @@ fn mutate_task(
         }
     };
     if let Err(e) = team::ensure_member(&team, agent) {
-        eprintln!("bwoc task {verb}: {e} (members: {})", team.members.join(", "));
+        eprintln!(
+            "bwoc task {verb}: {e} (members: {})",
+            team.members.join(", ")
+        );
         return 2;
     }
     let task_dir = team_task_dir(&ws, team_id);
@@ -600,9 +633,15 @@ pub fn run_task_plan(
             eprintln!("bwoc task plan: --as <agent> is required to submit a plan");
             return 2;
         };
-        return mutate_task(workspace, &team_id, &task_id, &agent, json, "plan", |tasks| {
-            team::submit_plan(tasks, &task_id, &agent, &plan_text)
-        });
+        return mutate_task(
+            workspace,
+            &team_id,
+            &task_id,
+            &agent,
+            json,
+            "plan",
+            |tasks| team::submit_plan(tasks, &task_id, &agent, &plan_text),
+        );
     }
     // Show path: no plan content → print the current plan + verdict.
     let Some(ws) = resolve_workspace(workspace) else {

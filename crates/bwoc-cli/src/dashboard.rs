@@ -452,11 +452,18 @@ fn stop_selected_agent(app: &mut App) {
                         .map(str::to_string)
                 });
             app.last_action = Some(match outcome.as_deref() {
-                Some("not_running") => format!("→ '{}' marked stopped (no daemon running)", entry.id),
+                Some("not_running") => {
+                    format!("→ '{}' marked stopped (no daemon running)", entry.id)
+                }
                 Some("socket_ok") => format!("→ stopped '{}' (graceful STOP)", entry.id),
                 Some("sigterm") => format!("→ stopped '{}' (SIGTERM)", entry.id),
-                Some("sigkill") => format!("→ stopped '{}' (SIGKILL — daemon was unresponsive)", entry.id),
-                Some("could_not_kill") => format!("⚠ '{}' marked stopped but daemon would not die", entry.id),
+                Some("sigkill") => format!(
+                    "→ stopped '{}' (SIGKILL — daemon was unresponsive)",
+                    entry.id
+                ),
+                Some("could_not_kill") => {
+                    format!("⚠ '{}' marked stopped but daemon would not die", entry.id)
+                }
                 _ => format!("→ stopped '{}'", entry.id),
             });
             app.refresh();
@@ -819,9 +826,15 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
         lines.push(Line::from(vec![
             Span::styled("team        ", key_style),
             Span::raw(format!("{}: ", ts.team)),
-            Span::styled(format!("{} mine", ts.claimed_by_me), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("{} mine", ts.claimed_by_me),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw(", "),
-            Span::styled(format!("{} avail", ts.available), Style::default().fg(color)),
+            Span::styled(
+                format!("{} avail", ts.available),
+                Style::default().fg(color),
+            ),
             Span::raw(format!(" / {} total", ts.total)),
         ]));
     }

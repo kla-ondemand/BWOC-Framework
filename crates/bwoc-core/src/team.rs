@@ -167,10 +167,15 @@ pub enum TeamError {
     NotAMember(String),
     #[error("task '{id}' is {state} — a plan can only be submitted for a task you've claimed")]
     NotClaimedForPlan { id: String, state: &'static str },
-    #[error("task '{id}' has no submitted plan to review — the claimant must `bwoc task plan` first")]
+    #[error(
+        "task '{id}' has no submitted plan to review — the claimant must `bwoc task plan` first"
+    )]
     NoPlanSubmitted { id: String },
     #[error("task '{id}' requires plan approval before completion (plan {plan_state})")]
-    PlanNotApproved { id: String, plan_state: &'static str },
+    PlanNotApproved {
+        id: String,
+        plan_state: &'static str,
+    },
 }
 
 /// Append a new task. Rejects a duplicate id and any dependency that
@@ -281,12 +286,7 @@ pub fn complete_task(tasks: &mut [Task], id: &str, agent: &str) -> Result<(), Te
 /// inviting the lead's judgment before proceeding. The task must be
 /// `InProgress` and claimed by `agent`. Resets any prior verdict to
 /// pending (a resubmission after rejection awaits fresh review).
-pub fn submit_plan(
-    tasks: &mut [Task],
-    id: &str,
-    agent: &str,
-    plan: &str,
-) -> Result<(), TeamError> {
+pub fn submit_plan(tasks: &mut [Task], id: &str, agent: &str, plan: &str) -> Result<(), TeamError> {
     let task = tasks
         .iter_mut()
         .find(|t| t.id == id)
@@ -382,7 +382,8 @@ mod tests {
     #[test]
     fn add_rejects_unknown_dependency() {
         let mut tasks = seed();
-        let err = add_task(&mut tasks, Task::new("t2", "second", vec!["ghost".into()])).unwrap_err();
+        let err =
+            add_task(&mut tasks, Task::new("t2", "second", vec!["ghost".into()])).unwrap_err();
         assert!(matches!(err, TeamError::UnknownDependency { .. }));
     }
 

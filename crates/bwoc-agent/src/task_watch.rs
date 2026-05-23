@@ -144,7 +144,9 @@ impl TaskWatch {
                 eprintln!("bwoc-agent: auto-claim {team}/{task} skipped: {first}");
             }
             Err(e) => {
-                eprintln!("bwoc-agent: auto-claim {team}/{task} exec failed: {e} (is bwoc on PATH?)");
+                eprintln!(
+                    "bwoc-agent: auto-claim {team}/{task} exec failed: {e} (is bwoc on PATH?)"
+                );
             }
         }
     }

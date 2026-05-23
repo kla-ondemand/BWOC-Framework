@@ -34,8 +34,8 @@ mod stop;
 mod supervise;
 mod trust;
 mod user_home;
-mod whats_new;
 mod util;
+mod whats_new;
 mod workspace;
 
 #[derive(Parser, Debug)]

@@ -68,7 +68,9 @@ pub fn run(args: StartArgs) -> i32 {
             2
         }
         Err(StartError::NotATerminal) => {
-            eprintln!("bwoc start: not a TTY and --yes not given. Pass --yes to confirm or run from an interactive shell.");
+            eprintln!(
+                "bwoc start: not a TTY and --yes not given. Pass --yes to confirm or run from an interactive shell."
+            );
             2
         }
         Err(e) => {

@@ -133,6 +133,11 @@ fn print_index(c: &Colors) {
         c.dim, c.reset
     );
     println!();
+    println!(
+        "{}Online docs:{} https://bemindlabs.github.io/BWOC-Framework/",
+        c.dim, c.reset
+    );
+    println!();
 }
 
 struct Colors {

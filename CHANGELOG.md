@@ -10,6 +10,8 @@ _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+
 
 ### Added
 
+- **Online docs link in the CLI** — the bare-`bwoc` banner and `bwoc help` index now surface <https://bemindlabs.github.io/BWOC-Framework/>.
+
 **"What's New" surface**
 
 - **Banner** (bare `bwoc`) gains a `✨ What's New` section listing the current release's highlights.

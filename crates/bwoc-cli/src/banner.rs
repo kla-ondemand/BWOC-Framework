@@ -14,6 +14,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const TAGLINE: &str = "Buddhist Way of Coding — an engineering framework for AI coding agents.";
 const REPO_URL: &str = "https://github.com/bemindlabs/BWOC-Framework";
+const DOCS_URL: &str = "https://bemindlabs.github.io/BWOC-Framework/";
 
 // ANSI Shadow font for "BWOC". 6 rows tall, ~36 cols wide.
 const WORDMARK: &str = "\
@@ -133,6 +134,7 @@ pub fn print() {
         "{}Hint:{} run `bwoc <command> --help` for details.",
         c.dim, c.reset
     );
+    println!("{}Docs:{} {DOCS_URL}{}", c.dim, c.dim, c.reset);
     println!("{}Repo:{} {REPO_URL}{}", c.dim, c.dim, c.reset);
     println!();
 }

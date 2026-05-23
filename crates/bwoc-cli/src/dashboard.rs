@@ -203,6 +203,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                     (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
                     (KeyCode::Char('g'), _) => open_in_ghostty(app),
                     (KeyCode::Char('s'), _) => start_selected_agent(app),
+                    (KeyCode::Char('x'), _) => stop_selected_agent(app),
                     (KeyCode::Char('?'), _) => app.show_help = true,
                     (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                     (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
@@ -409,6 +410,68 @@ fn start_selected_agent(app: &mut App) {
     }
 }
 
+/// `x` hotkey — stop the selected agent: send STOP to its daemon (if
+/// alive) and flip its registry status to stopped. Mirror of
+/// `start_selected_agent` — shells out to `bwoc stop <id> --yes --json`
+/// with output captured so the TUI is not corrupted, then refreshes so
+/// the row status + ●/○ runtime indicator flip immediately.
+fn stop_selected_agent(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — nothing to stop)".to_string());
+        return;
+    };
+    let root_str = root.to_string_lossy().to_string();
+
+    let result = std::process::Command::new("bwoc")
+        .args([
+            "stop",
+            entry.id.as_str(),
+            "--yes",
+            "--json",
+            "--workspace",
+            root_str.as_str(),
+        ])
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            // `bwoc stop --json` shape: `{ workspace, agent, daemon_outcome, registry_updated }`.
+            // daemon_outcome ∈ not_running | socket_ok | sigterm | sigkill | could_not_kill.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let outcome = serde_json::from_str::<serde_json::Value>(stdout.trim())
+                .ok()
+                .and_then(|v| {
+                    v.get("daemon_outcome")
+                        .and_then(|o| o.as_str())
+                        .map(str::to_string)
+                });
+            app.last_action = Some(match outcome.as_deref() {
+                Some("not_running") => format!("→ '{}' marked stopped (no daemon running)", entry.id),
+                Some("socket_ok") => format!("→ stopped '{}' (graceful STOP)", entry.id),
+                Some("sigterm") => format!("→ stopped '{}' (SIGTERM)", entry.id),
+                Some("sigkill") => format!("→ stopped '{}' (SIGKILL — daemon was unresponsive)", entry.id),
+                Some("could_not_kill") => format!("⚠ '{}' marked stopped but daemon would not die", entry.id),
+                _ => format!("→ stopped '{}'", entry.id),
+            });
+            app.refresh();
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let first = err.trim().lines().next().unwrap_or("unknown error");
+            app.last_action = Some(format!("stop '{}' failed: {first}", entry.id));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("stop exec failed: {e} (is bwoc on PATH?)"));
+        }
+    }
+}
+
 /// `l` hotkey — open `bwoc log -f <agent>` in a new tmux window for the
 /// selected agent. Live tail of daemon stderr. Mirrors `open_in_tmux`
 /// (chat) — same workspace/tmux/selection guards, same feedback shape.
@@ -608,6 +671,8 @@ fn draw_help_overlay(f: &mut ratatui::Frame, area: Rect) {
               (chat with the selected agent; macOS-only)
   s           start (run) the selected agent
               (flip status active + spawn bwoc-agent --serve)
+  x           stop the selected agent
+              (signal the daemon + flip status stopped)
 
 Press any key to dismiss.";
 
@@ -1099,6 +1164,8 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::raw(" inbox    "),
         Span::styled("s", bold),
         Span::raw(" start    "),
+        Span::styled("x", bold),
+        Span::raw(" stop    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
         Span::styled("?", bold),

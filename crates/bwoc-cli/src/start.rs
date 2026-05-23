@@ -323,7 +323,21 @@ fn spawn_daemon(agent_path: &Path) -> Result<u32, StartError> {
                 agent_path.display()
             ))
         })?;
-    Ok(child.id())
+    let pid = child.id();
+
+    // Close the start-up race: the daemon writes `.bwoc/agent.pid` only
+    // once its `--serve` startup reaches that line, which can lag the
+    // `spawn()` return by milliseconds. A second `bwoc start` arriving in
+    // that window reads no pid file, decides "not running", and spawns a
+    // duplicate daemon. Writing the pid file from the parent *now* — with
+    // the child's pid, which equals the daemon's own `std::process::id()` —
+    // closes the window. The daemon's later write is idempotent (same
+    // value). Best-effort: a write failure here just reopens the race, it
+    // doesn't break the spawn, so we don't propagate the error.
+    let pid_path = bwoc_dir.join("agent.pid");
+    let _ = std::fs::write(&pid_path, format!("{pid}\n"));
+
+    Ok(pid)
 }
 
 /// True iff the agent has a PID file AND the pid is alive (signal-0).

@@ -6,10 +6,10 @@ on:
   pull_request:
     branches: [main]
 
-# Forward-compat for the Node 24 cutover (2026-06-02). `actions/checkout@v4`
-# and other JS actions default to Node 20 which becomes unsupported on
-# 2026-09-16. Opting in early eliminates the deprecation banner now and
-# avoids a forced flip during the cutover window.
+# Forward-compat for the Node 24 cutover (2026-06-02). `actions/checkout@v6`
+# runs on Node 24 natively; the env below forces any other JS actions still
+# defaulting to Node 20 (unsupported 2026-09-16) onto Node 24, so the
+# deprecation banner stays gone through the cutover window.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -21,7 +21,7 @@ jobs:
     name: fmt + clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -46,7 +46,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --workspace --verbose
       - run: cargo test --workspace --verbose

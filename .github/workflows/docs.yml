@@ -18,7 +18,7 @@ jobs:
     name: '*.md naming audit (per docs/en/NAMING.en.md §Audit)'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Root-level naming
         run: |

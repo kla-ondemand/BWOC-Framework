@@ -50,14 +50,31 @@ impl Default for ToolRegistry {
     }
 }
 
-/// Build the default registry with the four core tools.
+/// Build the default registry with the full BWOC tool set.
+///
+/// P1 tools: `read_file`, `write_file`, `list_dir`, `run_command`
+/// Complete tool set (this increment): `edit_file`, `grep`, `git`,
+/// `run_gates`, `bwoc_task`, `bwoc_send`, `memory_read`, `memory_write`
 pub fn default_registry() -> ToolRegistry {
+    use super::extra_tools::{
+        BwocSend, BwocTask, EditFile, Git, Grep, MemoryRead, MemoryWrite, RunGates,
+    };
     use super::impls::{ListDir, ReadFile, RunCommand, WriteFile};
     let mut reg = ToolRegistry::new();
+    // P1 core tools
     reg.register(ReadFile);
     reg.register(WriteFile);
     reg.register(ListDir);
     reg.register(RunCommand);
+    // Complete tool set
+    reg.register(EditFile);
+    reg.register(Grep);
+    reg.register(Git);
+    reg.register(RunGates);
+    reg.register(BwocTask);
+    reg.register(BwocSend);
+    reg.register(MemoryRead);
+    reg.register(MemoryWrite);
     reg
 }
 
@@ -115,14 +132,24 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_four_core_tools() {
+    fn registry_has_full_tool_set() {
         let reg = default_registry();
         let schemas = reg.tool_schemas();
         let names: Vec<&str> = schemas.iter().map(|t| t.function.name.as_str()).collect();
+        // P1 core tools
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"list_dir"));
         assert!(names.contains(&"run_command"));
+        // Complete tool set
+        assert!(names.contains(&"edit_file"));
+        assert!(names.contains(&"grep"));
+        assert!(names.contains(&"git"));
+        assert!(names.contains(&"run_gates"));
+        assert!(names.contains(&"bwoc_task"));
+        assert!(names.contains(&"bwoc_send"));
+        assert!(names.contains(&"memory_read"));
+        assert!(names.contains(&"memory_write"));
     }
 
     #[tokio::test]

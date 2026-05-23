@@ -268,16 +268,21 @@ fn check_identity_spoof(
 
 /// Sīla 4 — Surāmeraya: block gate-bypass flags.
 ///
-/// Applies to `run_command` and `git` tool calls.  Blocked patterns:
+/// Applies to `run_command` and the `git` tool.  Blocked patterns:
 /// - `--no-verify` (skip commit hooks)
 /// - `--force` / `-f` on `git push` (force-push destroys shared history)
 /// - `git push --force-with-lease` is also blocked (it's force-push with a
 ///   thin safety net, still not acceptable in a shared trunk workflow)
 fn check_gate_bypass(tool_name: &str, args: &serde_json::Value) -> Result<(), GuardrailViolation> {
-    if tool_name != "run_command" {
-        return Ok(());
+    match tool_name {
+        "run_command" => check_gate_bypass_run_command(args),
+        "git" => check_gate_bypass_git_tool(args),
+        _ => Ok(()),
     }
+}
 
+/// Check gate-bypass for `run_command` calls (full shell command string).
+fn check_gate_bypass_run_command(args: &serde_json::Value) -> Result<(), GuardrailViolation> {
     let cmd = match args["command"].as_str() {
         Some(c) => c,
         None => return Ok(()),
@@ -312,6 +317,56 @@ fn check_gate_bypass(tool_name: &str, args: &serde_json::Value) -> Result<(), Gu
                 reason: "`git push --force` (or `-f`) rewrites shared history and is blocked. \
                          Use `git push` only on feature branches, or coordinate with the team \
                          before any forced update. (Surāmeraya guardrail)"
+                    .to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Check gate-bypass for the `git` tool (structured subcommand + args array).
+fn check_gate_bypass_git_tool(args: &serde_json::Value) -> Result<(), GuardrailViolation> {
+    let sub = match args["subcommand"].as_str() {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // Collect the args array into a flat token list for scanning.
+    let extra_tokens: Vec<String> = args["args"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let str_tokens: Vec<&str> = extra_tokens.iter().map(String::as_str).collect();
+
+    // ── --no-verify ──────────────────────────────────────────────────────────
+    if str_tokens.contains(&"--no-verify") {
+        return Err(GuardrailViolation {
+            rule: "sila_surameraya",
+            reason: "`--no-verify` skips commit hooks and is blocked by the \
+                     Surāmeraya guardrail. Use the `git` tool without bypassing hooks."
+                .to_string(),
+        });
+    }
+
+    // ── git push --force / -f ────────────────────────────────────────────────
+    if sub == "push" {
+        let has_force = str_tokens.iter().any(|t| {
+            *t == "--force"
+                || *t == "--force-with-lease"
+                || *t == "--force-if-includes"
+                || (t.starts_with('-') && !t.starts_with("--") && t.contains('f'))
+        });
+        if has_force {
+            return Err(GuardrailViolation {
+                rule: "sila_surameraya",
+                reason: "`git push --force` (or `-f`) rewrites shared history and is blocked. \
+                         Use non-force pushes only. (Surāmeraya guardrail)"
                     .to_string(),
             });
         }
@@ -632,6 +687,42 @@ mod tests {
         let cmd = r#"{"command": "doas cargo build"}"#;
         let err = check("run_command", cmd, &wt()).unwrap_err();
         assert_eq!(err.rule, "bhava_tanha_escalation");
+    }
+
+    // ── git tool gate-bypass checks ───────────────────────────────────────────
+
+    #[test]
+    fn git_tool_blocks_no_verify() {
+        let args = r#"{"subcommand": "commit", "args": ["--no-verify", "-m", "skip"]}"#;
+        let err = check("git", args, &wt()).unwrap_err();
+        assert_eq!(err.rule, "sila_surameraya");
+        assert!(err.reason.contains("--no-verify"));
+    }
+
+    #[test]
+    fn git_tool_blocks_force_push() {
+        let args = r#"{"subcommand": "push", "args": ["--force", "origin", "main"]}"#;
+        let err = check("git", args, &wt()).unwrap_err();
+        assert_eq!(err.rule, "sila_surameraya");
+    }
+
+    #[test]
+    fn git_tool_blocks_force_with_lease() {
+        let args = r#"{"subcommand": "push", "args": ["--force-with-lease", "origin", "feat/x"]}"#;
+        let err = check("git", args, &wt()).unwrap_err();
+        assert_eq!(err.rule, "sila_surameraya");
+    }
+
+    #[test]
+    fn git_tool_allows_normal_push() {
+        let args = r#"{"subcommand": "push", "args": ["origin", "feat/my-feature"]}"#;
+        assert!(check("git", args, &wt()).is_ok());
+    }
+
+    #[test]
+    fn git_tool_allows_status() {
+        let args = r#"{"subcommand": "status"}"#;
+        assert!(check("git", args, &wt()).is_ok());
     }
 
     // ── Non-run_command tools are not affected by command-level rules ─────────

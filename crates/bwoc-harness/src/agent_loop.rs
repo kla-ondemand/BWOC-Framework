@@ -308,8 +308,7 @@ pub async fn run_loop(
                 consecutive_malformed = 0;
 
                 // Warn if new active model is unvetted.
-                if !config.vetted_models.is_empty()
-                    && !config.vetted_models.contains(&active_model)
+                if !config.vetted_models.is_empty() && !config.vetted_models.contains(&active_model)
                 {
                     eprintln!(
                         "[bwoc-harness] WARNING: fallback model `{active_model}` \

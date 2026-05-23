@@ -87,10 +87,15 @@ pub fn confine_path(raw: &str, worktree_root: &Path) -> Result<PathBuf, HarnessE
         worktree_root.join(raw)
     };
 
-    // Canonicalize the worktree root so the comparison is consistent across
-    // platforms (e.g. macOS /tmp -> /private/tmp) and resilient to symlinks.
-    let root =
-        std::fs::canonicalize(worktree_root).unwrap_or_else(|_| normalize_path_lex(worktree_root));
+    // Canonicalize the worktree root, then run it through the SAME lexical
+    // normalization as `resolved` below. Both must go through `normalize_path_lex`
+    // so the comparison is apples-to-apples — on Windows `fs::canonicalize`
+    // returns a `\\?\` verbatim prefix, and normalizing only one side made an
+    // inside path look outside. Consistent across platforms (macOS /tmp ->
+    // /private/tmp; Windows verbatim prefix).
+    let root = normalize_path_lex(
+        &std::fs::canonicalize(worktree_root).unwrap_or_else(|_| worktree_root.to_path_buf()),
+    );
 
     // Resolve `p` by canonicalizing its deepest *existing* ancestor — which
     // resolves any symlinks in the real part of the path — then re-appending

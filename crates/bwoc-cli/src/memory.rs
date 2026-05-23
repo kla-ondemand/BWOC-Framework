@@ -512,8 +512,10 @@ fn list(
     // Apply sort. Default = "name" (alphabetical, stable).
     match sort.unwrap_or("name") {
         "name" => entries.sort_by(|a, b| a.0.cmp(&b.0)),
-        "size" => entries.sort_by(|a, b| b.1.cmp(&a.1)), // desc
-        "modified" => entries.sort_by(|a, b| b.2.cmp(&a.2)), // newest first
+        // desc — Reverse on the size field so sort_by_key sorts large-first.
+        "size" => entries.sort_by_key(|e| std::cmp::Reverse(e.1)),
+        // newest first — Reverse on the SystemTime.
+        "modified" => entries.sort_by_key(|e| std::cmp::Reverse(e.2)),
         other => {
             eprintln!(
                 "bwoc memory list --sort: unknown field '{other}'. \

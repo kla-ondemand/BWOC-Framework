@@ -82,7 +82,7 @@
 
 | ID | P | Requirement | V |
 |---|---|---|---|
-| FR-5.1 | M | `AGENTS.md` SHALL เป็นไฟล์ปกติ ; `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` SHALL เป็น symlinks ชี้ที่ `AGENTS.md` | T |
+| FR-5.1 | M | `AGENTS.md` SHALL เป็นไฟล์ปกติ ; `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` SHALL เป็น symlinks ชี้ที่ `AGENTS.md` | T |
 | FR-5.2 | M | ไม่มีไฟล์คำสั่งใด SHALL contain backend-specific content ที่ขัด AGENTS.md | A |
 | FR-5.3 | M | `check-agent-neutrality.sh` SHALL fail ถ้า symlink พังหรือถูกแทนด้วยไฟล์ปกติ | T |
 | FR-5.4 | M | `trust-model.md` SHALL document security posture สำหรับการ clone agent ภายนอก | I |
@@ -247,7 +247,7 @@
 | Backend | Entry File | Mechanism |
 |---|---|---|
 | Claude | `CLAUDE.md` → `AGENTS.md` | Symlink |
-| Gemini | `GEMINI.md` → `AGENTS.md` | Symlink |
+| Antigravity | `AGY.md` → `AGENTS.md` | Symlink |
 | Codex | `CODEX.md` → `AGENTS.md` | Symlink |
 | Kimi | `KIMI.md` → `AGENTS.md` | Symlink |
 | Generic | `AGENTS.md` | Direct |
@@ -344,7 +344,7 @@ updated: <ISO 8601>                  # required
 
 ### 6.1 Automated Checks (`check-agent-neutrality.sh`)
 1. `AGENTS.md` มีอยู่และเป็น regular file
-2. `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` เป็น symlink ชี้ `AGENTS.md`
+2. `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` เป็น symlink ชี้ `AGENTS.md`
 3. Required placeholders ถูกแทนหมด
 4. `config.manifest.json` parse JSON ได้
 5. `task-log.jsonl` เป็น valid JSONL

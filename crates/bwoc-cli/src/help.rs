@@ -187,7 +187,7 @@ const GETTING_STARTED: &str = "\
 
 See also:
   bwoc help workspace    — what each directory means
-  bwoc help backends     — switching between claude/gemini/codex/kimi
+  bwoc help backends     — switching between claude/agy/codex/kimi
   bwoc help arc          — uppāda · ṭhiti · vaya mapping
   examples/howto/        — full walkthroughs
 ";
@@ -195,24 +195,24 @@ See also:
 const BACKENDS: &str = "\
 BWOC supports 4 declared backends (Samānattatā — equal treatment, no lock-in):
 
-  | Backend  | CLI binary | Common models                                          |
-  |----------|------------|--------------------------------------------------------|
-  | Claude   | claude     | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5   |
-  | Gemini   | gemini     | gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite|
-  | Codex    | codex      | gpt-5, gpt-5-mini, o1                                  |
-  | Kimi     | kimi       | kimi-k2, kimi-k1.5                                     |
+  | Backend     | CLI binary | Common models                                          |
+  |-------------|------------|--------------------------------------------------------|
+  | Claude      | claude     | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5   |
+  | Antigravity | agy        | gemini-3.5-flash-*, gemini-3.1-pro-*, claude-*-thinking, gpt-oss-120b-* |
+  | Codex       | codex      | gpt-5, gpt-5-mini, o1                                  |
+  | Kimi        | kimi       | kimi-k2, kimi-k1.5                                     |
 
 Each agent picks ONE backend at incarnation, recorded in its
 config.manifest.json (primaryModel + optional fallbackModel) and in
 .bwoc/agents.toml.
 
-All 4 read the SAME AGENTS.md via symlinks (CLAUDE.md / GEMINI.md /
+All 4 read the SAME AGENTS.md via symlinks (CLAUDE.md / AGY.md /
 CODEX.md / KIMI.md all → AGENTS.md). If your agent's instructions
 assume a specific backend, `bwoc check` flags it as a neutrality
 violation.
 
 Three ways to set the backend:
-  - At incarnation:   bwoc new my-agent --backend gemini
+  - At incarnation:   bwoc new my-agent --backend antigravity
   - Manifest edit:    edit agents/<name>/config.manifest.json then update
                       .bwoc/agents.toml's `backend = \"...\"`
   - Per spawn:        bwoc spawn --path agents/<name> --backend kimi
@@ -662,7 +662,7 @@ Checks (run automatically; no flag selection):
   Environment
     ~/.bwoc/                    Per-user config directory (created on
                                 first run; --auto bootstraps it)
-    backends on PATH            At least one of claude/gemini/codex/kimi
+    backends on PATH            At least one of claude/agy/codex/kimi
                                 discoverable (WARN if none — `bwoc spawn`
                                 will fail without one)
 
@@ -672,7 +672,7 @@ Checks (run automatically; no flag selection):
     scaffold dirs               agents/, projects/, notes/, .bwoc/memory/
 
   Per-agent (when registry parses)
-    agent symlinks              CLAUDE/GEMINI/CODEX/KIMI.md → AGENTS.md
+    agent symlinks              CLAUDE/AGY/CODEX/KIMI.md → AGENTS.md
                                 (--auto recreates missing ones)
     agent.pid                   Stale sweep — PID file present but the
                                 process is dead (signal-0)

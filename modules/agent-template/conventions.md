@@ -19,7 +19,7 @@ tags:
 | Tier | Audience | Format | Files |
 |---|---|---|---|
 | **Documentation** | Humans (Obsidian vault) | Obsidian Markdown | `README.md`, `conventions.md`, `neutrality.md`, `trust-model.md`, `persona/`, `memories/`, `skills/`, `mindsets/`, `projects/`, `docs/` |
-| **Instructions** | LLM backends | Plain Markdown | `AGENTS.md` (and symlinks: `GEMINI.md`, `CODEX.md`, `KIMI.md`) |
+| **Instructions** | LLM backends | Plain Markdown | `AGENTS.md` (and symlinks: `AGY.md`, `CODEX.md`, `KIMI.md`) |
 
 `CLAUDE.md` is an exception — a real file with template-repo-specific guidance for Claude Code, not a symlink.
 
@@ -119,7 +119,7 @@ Never hardcode these in `AGENTS.md` or base template files:
 
 | Placeholder | Anti-Pattern |
 |---|---|
-| `{{primaryModel}}` | `claude-opus-4-6`, `gemini-2.5-pro` |
+| `{{primaryModel}}` | `claude-opus-4-6`, `gemini-3.5-flash-medium` |
 | `{{deepMemoryCmd}}` | `mempalace`, `chromadb` |
 | `{{lintCmd}}` | `oxlint`, `eslint` |
 | `{{testCmd}}` | `vitest`, `cargo test` |
@@ -261,7 +261,7 @@ Before committing agent profile files:
 
 - [ ] No hardcoded LLM model IDs
 - [ ] No hardcoded tool/CLI names
-- [ ] No backend-specific language ("Claude will...", "Gemini supports...")
+- [ ] No backend-specific language ("Claude will...", "Antigravity supports...")
 - [ ] All backend-varying config uses `{{camelCase}}` placeholders
 - [ ] Symlinks point to `AGENTS.md`
 - [ ] Run `scripts/check-agent-neutrality.sh` — 0 violations

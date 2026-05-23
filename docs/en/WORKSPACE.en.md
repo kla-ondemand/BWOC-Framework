@@ -44,7 +44,7 @@ version = "0.1.0"                # required, SemVer of BWOC framework this confo
 created = "2026-05-22T05:50:00Z" # required, ISO 8601 UTC
 
 [defaults]
-backend = "claude"               # optional: claude | gemini | codex | kimi
+backend = "claude"               # optional: claude | agy | codex | kimi
 lang = "en"                      # optional: BCP 47 / ISO 639-1
 agents_dir = "agents"            # optional, default "agents" (relative to workspace root)
 ```
@@ -64,7 +64,7 @@ status = "active"
 [[agent]]
 id = "agent-bar"
 path = "agents/agent-bar"
-backend = "gemini"
+backend = "agy"
 incarnated = "2026-05-22T05:52:00Z"
 status = "active"
 ```

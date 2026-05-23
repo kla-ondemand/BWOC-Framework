@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Agent Instructions
 
-The agent's behavioral instructions are in `AGENTS.md`. All other LLM backends (Gemini, Codex, Kimi) read the same file via symlinks. Read `AGENTS.md` for the full agent protocol including memory system, session lifecycle, git branching, and verification gates.
+The agent's behavioral instructions are in `AGENTS.md`. All other LLM backends (Antigravity, Codex, Kimi) read the same file via symlinks. Read `AGENTS.md` for the full agent protocol including memory system, session lifecycle, git branching, and verification gates.
 
 ## What This Repo Is
 
@@ -33,7 +33,7 @@ This `CLAUDE.md` is a **standalone file**, not a symlink. It contains template-r
 ### Backend Symlink Pattern
 
 ```
-GEMINI.md → AGENTS.md
+AGY.md → AGENTS.md
 CODEX.md  → AGENTS.md
 KIMI.md   → AGENTS.md
 ```

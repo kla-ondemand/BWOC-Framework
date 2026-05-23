@@ -51,7 +51,7 @@ Describe what this agent does in 1–3 sentences. What is its primary function?
 | Backend | Instruction File |
 |---|---|
 | Claude | `CLAUDE.md` → `AGENTS.md` |
-| Gemini | `GEMINI.md` → `AGENTS.md` |
+| Antigravity | `AGY.md` → `AGENTS.md` |
 | Codex  | `CODEX.md` → `AGENTS.md` |
 | Kimi   | `KIMI.md` → `AGENTS.md` |
 

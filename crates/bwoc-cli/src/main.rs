@@ -417,6 +417,13 @@ struct SendArgs {
     /// the message body. Mutually exclusive with `<message>`.
     #[arg(long)]
     file: Option<PathBuf>,
+    /// Sender identity. Default is "user" (human operator). Pass an agent
+    /// name ("foo" or "agent-foo") for agent → agent messaging — the
+    /// named sender must exist in the workspace registry. The recipient's
+    /// trust gate (when on) evaluates against this sender's manifest.
+    /// See modules/agent-template/interconnect/messaging.md.
+    #[arg(long = "from")]
+    from: Option<String>,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -439,6 +446,7 @@ impl SendArgs {
         Ok(send::SendArgs {
             to: self.to,
             message: body,
+            from: self.from,
             workspace: self.workspace,
         })
     }

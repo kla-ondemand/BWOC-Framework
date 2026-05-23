@@ -214,7 +214,7 @@ const AGENTS_README: &str = "# agents/
 
 Incarnated BWOC agents live here. Each subdirectory is one agent with
 its own `AGENTS.md`, `config.manifest.json`, backend symlinks
-(`CLAUDE.md` / `GEMINI.md` / `CODEX.md` / `KIMI.md` → `AGENTS.md`),
+(`CLAUDE.md` / `AGY.md` / `CODEX.md` / `KIMI.md` → `AGENTS.md`),
 and slot dirs (`persona/`, `memories/`, `mindsets/`, `skills/`,
 `interconnect/`).
 

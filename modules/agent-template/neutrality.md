@@ -12,13 +12,13 @@ tags:
 # Neutrality in Agent Cloning
 
 > [!abstract] Design Principle (Samanatatta — Equal Treatment)
-> When an agent profile is cloned from this template, the result must function identically across all supported LLM backends — Claude, Gemini, Codex, Kimi — without modification. This is the technical expression of *samanatatta*: no backend is preferred over another.
+> When an agent profile is cloned from this template, the result must function identically across all supported LLM backends — Claude, Antigravity, Codex, Kimi — without modification. This is the technical expression of *samanatatta*: no backend is preferred over another.
 
 ---
 
 ## Why Neutrality Matters
 
-1. **Portability** — an agent built today for Claude Code must work tomorrow with Gemini CLI or any future harness without editing the profile
+1. **Portability** — an agent built today for Claude Code must work tomorrow with Antigravity CLI or any future harness without editing the profile
 2. **Multi-agent interoperability** — agents in a fleet may run on different backends; a neutral profile lets them collaborate
 3. **Trust** — when cloning from external sources, neutrality prevents hidden assumptions from creating compatibility gaps
 4. **Future-proofing** — new LLM backends emerge; neutral profiles adapt without rewrites
@@ -40,7 +40,7 @@ tags:
 **Symlink pattern:**
 
 ```bash
-ln -s AGENTS.md GEMINI.md
+ln -s AGENTS.md AGY.md
 ln -s AGENTS.md CODEX.md
 ln -s AGENTS.md KIMI.md
 ```
@@ -107,7 +107,7 @@ The script checks:
 
 # 4. Create backend symlinks
 cd agent-{name}
-ln -s AGENTS.md GEMINI.md
+ln -s AGENTS.md AGY.md
 ln -s AGENTS.md CODEX.md
 ln -s AGENTS.md KIMI.md
 # CLAUDE.md -> symlink to AGENTS.md for agent repos (unlike the template itself)

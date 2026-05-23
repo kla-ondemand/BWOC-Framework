@@ -105,7 +105,7 @@ mod tests {
         fs::create_dir_all(tmp.join(".bwoc")).unwrap();
         fs::write(
             tmp.join(".bwoc/config.toml"),
-            "[defaults]\nbackend=\"gemini\"\n",
+            "[defaults]\nbackend=\"agy\"\n",
         )
         .unwrap();
 
@@ -114,7 +114,7 @@ mod tests {
         }
         ensure_initialized().unwrap();
         let content = fs::read_to_string(tmp.join(".bwoc/config.toml")).unwrap();
-        assert!(content.contains("gemini"), "existing content preserved");
+        assert!(content.contains("agy"), "existing content preserved");
 
         let _ = fs::remove_dir_all(&tmp);
     }

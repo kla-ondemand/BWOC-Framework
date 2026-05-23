@@ -33,7 +33,7 @@ agents/
 └── agent-alpha/
     ├── AGENTS.md                   # backend-neutral instruction set
     ├── CLAUDE.md → AGENTS.md       # backend symlinks (4 total)
-    ├── GEMINI.md → AGENTS.md
+    ├── AGY.md → AGENTS.md
     ├── CODEX.md  → AGENTS.md
     ├── KIMI.md   → AGENTS.md
     ├── config.manifest.json        # resolved manifest (machine-readable)

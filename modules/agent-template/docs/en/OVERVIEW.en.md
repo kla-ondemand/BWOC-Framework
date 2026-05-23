@@ -16,7 +16,7 @@
 Agent Base Profile is a **template for creating AI coding agents** designed end-to-end against Buddhist principles.
 
 - **One repo, one agent** — each agent lives in its own repository, cloned from this template
-- **Backend-neutral** — runs on Claude, Gemini, Codex, Kimi
+- **Backend-neutral** — runs on Claude, Antigravity, Codex, Kimi
 - **Remembers and connects** — accumulates knowledge across sessions
 - **Co-operates** — multiple agents in the same repo without collision
 

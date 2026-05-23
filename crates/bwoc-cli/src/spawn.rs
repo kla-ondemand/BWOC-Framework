@@ -16,7 +16,7 @@ use crate::i18n;
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
     Claude,
-    Gemini,
+    Antigravity,
     Codex,
     Kimi,
 }
@@ -25,7 +25,7 @@ impl Backend {
     pub fn cli_name(self) -> &'static str {
         match self {
             Backend::Claude => "claude",
-            Backend::Gemini => "gemini",
+            Backend::Antigravity => "agy",
             Backend::Codex => "codex",
             Backend::Kimi => "kimi",
         }
@@ -35,13 +35,21 @@ impl Backend {
     /// in the `bwoc new` interactive picker. First entry is the recommended
     /// default. Free-text input is still accepted for unlisted models — this
     /// is a convenience, not a whitelist. Update as backends release models.
+    ///
+    /// Antigravity (`agy`) is multi-vendor: it routes Gemini, Claude, and
+    /// GPT-OSS model families through one CLI. Model keys are kebab-case
+    /// slugs of the picker labels Google surfaces in the `agy` chooser.
     pub fn models(self) -> &'static [&'static str] {
         match self {
             Backend::Claude => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
-            Backend::Gemini => &[
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
+            Backend::Antigravity => &[
+                "gemini-3.5-flash-medium",
+                "gemini-3.5-flash-high",
+                "gemini-3.1-pro-low",
+                "gemini-3.1-pro-high",
+                "claude-sonnet-4.6-thinking",
+                "claude-opus-4.6-thinking",
+                "gpt-oss-120b-medium",
             ],
             Backend::Codex => &["gpt-5", "gpt-5-mini", "o1"],
             Backend::Kimi => &["kimi-k2", "kimi-k1.5"],
@@ -138,7 +146,7 @@ mod tests {
     #[test]
     fn backend_cli_names() {
         assert_eq!(Backend::Claude.cli_name(), "claude");
-        assert_eq!(Backend::Gemini.cli_name(), "gemini");
+        assert_eq!(Backend::Antigravity.cli_name(), "agy");
         assert_eq!(Backend::Codex.cli_name(), "codex");
         assert_eq!(Backend::Kimi.cli_name(), "kimi");
     }

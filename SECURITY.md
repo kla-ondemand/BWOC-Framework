@@ -32,7 +32,7 @@ In scope:
 
 Out of scope:
 
-- Vulnerabilities in third-party LLM backends (Claude, Gemini, Codex, Kimi, etc.) — report those to the respective vendor.
+- Vulnerabilities in third-party LLM backends (Claude, Antigravity, Codex, Kimi, etc.) — report those to the respective vendor.
 - Issues in agents incarnated from this template and modified downstream — report to that agent's maintainer.
 - Social-engineering or physical attacks against contributors.
 

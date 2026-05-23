@@ -61,7 +61,7 @@ pub fn run(args: ChatArgs) -> i32 {
         None => {
             eprintln!(
                 "bwoc chat: agent '{}' has unknown backend '{}' in registry — \
-                 edit .bwoc/agents.toml to one of: claude, gemini, codex, kimi",
+                 edit .bwoc/agents.toml to one of: claude, agy, codex, kimi",
                 entry.id, entry.backend
             );
             return 1;
@@ -129,7 +129,7 @@ fn open_in_tmux(agent_id: &str, agent_path: &std::path::Path, backend: Backend) 
 fn parse_backend(s: &str) -> Option<Backend> {
     match s {
         "claude" => Some(Backend::Claude),
-        "gemini" => Some(Backend::Gemini),
+        "agy" => Some(Backend::Antigravity),
         "codex" => Some(Backend::Codex),
         "kimi" => Some(Backend::Kimi),
         _ => None,

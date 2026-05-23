@@ -17,7 +17,7 @@ The template's `CLAUDE.md` is for incarnated agents reading themselves; this fil
 
 | Tier | Format | Files |
 |---|---|---|
-| Instructions | Plain Markdown — **no YAML, no wikilinks, no callouts** | `modules/agent-template/AGENTS.md` and its backend symlinks (`CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md`) |
+| Instructions | Plain Markdown — **no YAML, no wikilinks, no callouts** | `modules/agent-template/AGENTS.md` and its backend symlinks (`CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md`) |
 | Documentation | Obsidian Markdown — YAML frontmatter, wikilinks, callouts allowed | All other `.md` files |
 
 `AGENTS.md` must stay parseable by any LLM backend without Obsidian. Approved callout types in tier 2: `abstract`, `tip`, `warning`, `example`, `note`, `danger` — no others.
@@ -25,7 +25,7 @@ The template's `CLAUDE.md` is for incarnated agents reading themselves; this fil
 ## Backend Neutrality (HARD RULE)
 
 - All configurable values in `AGENTS.md` use `{{camelCase}}` placeholder syntax (e.g., `{{agentId}}`, `{{primaryModel}}`). Never hardcode model IDs, vendor names, or tool names in `AGENTS.md`.
-- Backend-specific phrasing (Claude, Gemini, Codex, Kimi) belongs only in Section 0 "Backend Registration" of `AGENTS.md` or in vendor entry files that symlink to it.
+- Backend-specific phrasing (Claude, Antigravity, Codex, Kimi) belongs only in Section 0 "Backend Registration" of `AGENTS.md` or in vendor entry files that symlink to it.
 - Adding a new backend is one command: `ln -s AGENTS.md <BACKEND>.md`. Do not create separate per-backend content.
 
 ## Bilingual Parity (HARD RULE)

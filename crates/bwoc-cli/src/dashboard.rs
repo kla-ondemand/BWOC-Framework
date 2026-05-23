@@ -722,7 +722,7 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
 // Liveness + inbox helpers (signal_zero_alive, running_pid,
 // query_uptime, format_uptime, inbox_count) moved to crate::livecheck.
 
-const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
 
 #[derive(Debug)]
 enum Health {

@@ -356,7 +356,7 @@
 - ภาวนา 4 → docs/LIFECYCLE.md
 - ปัญญา 3 → docs/SELF-IMPROVEMENT.md
 - พรหมวิหาร 4 → docs/PRD (Error UX section)
-- อปริหานิยธรรม → docs/FLEET-GOVERNANCE.md
+- อปริหานิยธรรม → [`docs/th/FLEET-GOVERNANCE.th.md`](../../../../docs/th/FLEET-GOVERNANCE.th.md) (spec ระดับ framework-root สำหรับ operator ฉบับร่าง 2026-05-23)
 - ตัณหา 3 → docs/THREAT-MODEL.md
 - กัลยาณมิตร → [`interconnect/trust.md`](../../interconnect/trust.md) (spec draft v2026.5.23 — boolean 7 ค่า ประกาศใน `config.manifest.json` ตรวจสอบโดย `bwoc check`)
 - สติปัฏฐาน → docs/OBSERVABILITY.md (ขยายเต็ม)

@@ -89,7 +89,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
 ];
 
-const BACKENDS: &str = "claude · gemini · codex · kimi";
+const BACKENDS: &str = "claude · agy · codex · kimi";
 const LOCALES: &str = "en · th";
 
 /// Print the banner to stdout. Honours TTY/non-TTY for color output.

@@ -16,7 +16,7 @@
 Agent Base Profile คือ **template สำหรับสร้าง AI coding agent** ที่ออกแบบทั้งระบบตามหลักพุทธ
 
 - **หนึ่งรีโป หนึ่ง agent** — แต่ละ agent อยู่ในรีโปของตัวเอง โคลนจาก template นี้
-- **Backend-neutral** — รันได้บน Claude, Gemini, Codex, Kimi
+- **Backend-neutral** — รันได้บน Claude, Antigravity, Codex, Kimi
 - **จำได้ + เชื่อมโยงได้** — สะสมความรู้ข้ามเซสชัน
 - **ทำงานคู่กันได้** — agent หลายตัวในรีโปเดียวกัน ไม่ชน
 

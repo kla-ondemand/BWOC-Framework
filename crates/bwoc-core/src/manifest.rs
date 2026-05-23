@@ -134,6 +134,38 @@ pub struct TrustDeclared {
     pub no_catthana: bool,
 }
 
+impl TrustDeclared {
+    /// Read a quality by its camelCase manifest key. Unknown keys
+    /// resolve to `false` — implements the spec's "missing fields in
+    /// declared → false" rule (interconnect/trust.md §schemaVersion).
+    pub fn has(&self, key: &str) -> bool {
+        match key {
+            "piyo" => self.piyo,
+            "garu" => self.garu,
+            "bhavaniyo" => self.bhavaniyo,
+            "vatta" => self.vatta,
+            "vacanakkhamo" => self.vacanakkhamo,
+            "gambhira" => self.gambhira,
+            "noCatthana" => self.no_catthana,
+            _ => false,
+        }
+    }
+}
+
+impl TrustBlock {
+    /// Given a peer's declaration, return the qualities this block's
+    /// `required_trust` demands that the peer does NOT satisfy. Result
+    /// preserves the order of `required_trust`. Empty result ≡ peer
+    /// satisfies every required quality (no refusal).
+    pub fn missing_in(&self, declared: &TrustDeclared) -> Vec<String> {
+        self.required_trust
+            .iter()
+            .filter(|q| !declared.has(q))
+            .cloned()
+            .collect()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
     #[error("io error reading manifest: {0}")]
@@ -289,5 +321,101 @@ mod tests {
         let d: TrustDeclared = serde_json::from_str(json).unwrap();
         assert!(d.piyo);
         // Unknown fields don't error or attach.
+    }
+
+    // ---- Refusal-helper tests (step 4) --------------------------------------
+
+    #[test]
+    fn has_returns_declared_value_for_known_keys() {
+        let d = TrustDeclared {
+            vatta: true,
+            no_catthana: true,
+            ..Default::default()
+        };
+        assert!(d.has("vatta"));
+        assert!(d.has("noCatthana"));
+        assert!(!d.has("piyo"));
+    }
+
+    #[test]
+    fn has_returns_false_for_unknown_key() {
+        let d = TrustDeclared {
+            piyo: true,
+            ..Default::default()
+        };
+        // Future spec quality not yet known — must be false, not panic.
+        assert!(!d.has("mudu"));
+        assert!(!d.has("")); // empty key
+        assert!(!d.has("PIYO")); // case-sensitive — wrong case is unknown
+    }
+
+    #[test]
+    fn missing_in_empty_required_returns_empty() {
+        let block = TrustBlock::default();
+        let declared = TrustDeclared::default();
+        assert!(block.missing_in(&declared).is_empty());
+    }
+
+    #[test]
+    fn missing_in_all_satisfied_returns_empty() {
+        let block = TrustBlock {
+            schema_version: 1,
+            declared: TrustDeclared::default(),
+            required_trust: vec!["vatta".into(), "noCatthana".into()],
+        };
+        let peer = TrustDeclared {
+            vatta: true,
+            no_catthana: true,
+            ..Default::default()
+        };
+        assert!(block.missing_in(&peer).is_empty());
+    }
+
+    #[test]
+    fn missing_in_partial_returns_only_missing() {
+        let block = TrustBlock {
+            schema_version: 1,
+            declared: TrustDeclared::default(),
+            required_trust: vec!["vatta".into(), "noCatthana".into(), "gambhira".into()],
+        };
+        let peer = TrustDeclared {
+            vatta: true,
+            // no_catthana: false → missing
+            // gambhira: false → missing
+            ..Default::default()
+        };
+        let missing = block.missing_in(&peer);
+        assert_eq!(missing, vec!["noCatthana", "gambhira"]);
+    }
+
+    #[test]
+    fn missing_in_preserves_required_order() {
+        // Order in the required_trust array is the order reported back —
+        // recipient's preferences drive the surfaced diagnostic.
+        let block = TrustBlock {
+            schema_version: 1,
+            declared: TrustDeclared::default(),
+            required_trust: vec!["gambhira".into(), "vatta".into(), "piyo".into()],
+        };
+        let peer = TrustDeclared::default(); // nothing declared
+        assert_eq!(block.missing_in(&peer), vec!["gambhira", "vatta", "piyo"]);
+    }
+
+    #[test]
+    fn missing_in_unknown_quality_is_always_missing() {
+        // A recipient that requires a future-spec quality the sender's
+        // v1 manifest doesn't know about → quality is missing (since
+        // unknown → false). Forward-compat works as expected.
+        let block = TrustBlock {
+            schema_version: 1,
+            declared: TrustDeclared::default(),
+            required_trust: vec!["mudu".into()], // future-spec quality
+        };
+        let peer = TrustDeclared {
+            piyo: true,
+            vatta: true,
+            ..Default::default()
+        };
+        assert_eq!(block.missing_in(&peer), vec!["mudu"]);
     }
 }

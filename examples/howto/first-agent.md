@@ -7,7 +7,7 @@ A working BWOC workspace with one incarnated agent, ready for `bwoc spawn`.
 ## Prerequisites
 
 - `bwoc` CLI installed (`./scripts/install.sh` from a clone, or `cargo install --path crates/bwoc-cli --locked --force`)
-- At least one backend CLI on PATH (`claude`, `gemini`, `codex`, or `kimi`) if you want to actually spawn the backend; not required for incarnation itself
+- At least one backend CLI on PATH (`claude`, `agy`, `codex`, or `kimi`) if you want to actually spawn the backend; not required for incarnation itself
 - An empty directory you can write to
 
 ## Steps
@@ -60,7 +60,7 @@ Incarnated agent: agent-alpha
 Target:           /…/my-workspace/agents/agent-alpha
 
 + CLAUDE.md -> AGENTS.md
-+ GEMINI.md -> AGENTS.md
++ AGY.md -> AGENTS.md
 + CODEX.md -> AGENTS.md
 + KIMI.md -> AGENTS.md
 

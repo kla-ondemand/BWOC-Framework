@@ -945,10 +945,10 @@ fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Force-create `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`
+/// Force-create `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`
 /// in the target directory. Removes any pre-existing file/symlink first.
 fn create_symlinks(target: &Path) -> Result<Vec<String>, NewError> {
-    let backends = ["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+    let backends = ["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
     let mut created = Vec::new();
     for backend in backends {
         let p = target.join(backend);

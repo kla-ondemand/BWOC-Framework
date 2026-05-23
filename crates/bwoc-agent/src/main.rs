@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use bwoc_core::manifest::Manifest;
 
 mod i18n;
+#[cfg(unix)]
+mod trust;
 
 fn main() -> ExitCode {
     // Lightweight arg handling — keeps the daemon binary clap-free (it
@@ -61,7 +63,7 @@ fn main() -> ExitCode {
     println!("{}", liveness_banner(&manifest, &bundle));
 
     if serve {
-        return serve_loop(&cwd);
+        return serve_loop(&cwd, &manifest);
     }
     ExitCode::SUCCESS
 }
@@ -100,7 +102,7 @@ SEE ALSO:
 /// users hitting `bwoc start` on Windows see the right error rather
 /// than a cryptic compile-or-runtime failure.
 #[cfg(not(unix))]
-fn serve_loop(_cwd: &std::path::Path) -> ExitCode {
+fn serve_loop(_cwd: &std::path::Path, _manifest: &Manifest) -> ExitCode {
     eprintln!(
         "bwoc-agent --serve: daemon mode is currently Unix-only \
          (uses Unix domain sockets + signal-0 liveness). \
@@ -121,7 +123,7 @@ fn serve_loop(_cwd: &std::path::Path) -> ExitCode {
 /// they're spec'd. Keeping it line-text instead of binary so it's
 /// debuggable with `nc -U`.
 #[cfg(unix)]
-fn serve_loop(cwd: &std::path::Path) -> ExitCode {
+fn serve_loop(cwd: &std::path::Path, manifest: &Manifest) -> ExitCode {
     use std::io::ErrorKind;
     use std::os::unix::net::UnixListener;
 
@@ -187,6 +189,7 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
     // messages that arrived while it was down.
     let inbox_path = bwoc_dir.join("inbox.jsonl");
     let cursor_path = bwoc_dir.join("inbox.cursor");
+    let refusals_path = bwoc_dir.join("inbox.refusals.jsonl");
     let inbox_size: u64 = std::fs::metadata(&inbox_path).map(|m| m.len()).unwrap_or(0);
     let mut inbox_pos: u64 = match load_cursor(&cursor_path) {
         Some(c) if c <= inbox_size => c,
@@ -210,6 +213,31 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
         );
     }
 
+    // Kalyāṇamitta-7 trust posture. Inert (gating off OR requiredTrust
+    // empty) ≡ pre-step-4 behavior; the evaluate call short-circuits
+    // before parsing any envelopes. Built once here so env reads + the
+    // ancestor workspace walk happen only once per daemon lifetime.
+    let trust_ctx = trust::TrustContext::build(manifest, cwd);
+    if trust_ctx.gating_enabled {
+        if trust_ctx.is_inert() {
+            eprintln!(
+                "bwoc-agent --serve: trust gating ON (BWOC_TRUST_GATING=1) but \
+                 requiredTrust empty → no refusals will fire"
+            );
+        } else {
+            eprintln!(
+                "bwoc-agent --serve: trust gating ON — refusing senders missing {:?}",
+                trust_ctx.required
+            );
+            if trust_ctx.workspace_root.is_none() {
+                eprintln!(
+                    "bwoc-agent --serve: warning — no workspace found in ancestors; \
+                     non-`user` envelopes will refuse with reason=no_workspace"
+                );
+            }
+        }
+    }
+
     // Single-threaded accept loop with poll. Each accept is non-blocking
     // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
@@ -217,7 +245,8 @@ fn serve_loop(cwd: &std::path::Path) -> ExitCode {
             Ok((stream, _addr)) => handle_client(stream, &running, &start),
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
                 // Idle: check the inbox for new envelopes since last poll.
-                let new_pos = check_inbox_for_new(&inbox_path, inbox_pos);
+                let new_pos =
+                    check_inbox_for_new(&inbox_path, inbox_pos, &trust_ctx, &refusals_path);
                 if new_pos != inbox_pos {
                     inbox_pos = new_pos;
                     save_cursor(&cursor_path, inbox_pos);
@@ -276,7 +305,12 @@ fn save_cursor(path: &std::path::Path, pos: u64) {
 /// Tolerant of: missing file (offset stays), file truncation (resets to
 /// EOF), partial last-line (only consumes complete `\n`-terminated lines).
 #[cfg(unix)]
-fn check_inbox_for_new(path: &std::path::Path, from_offset: u64) -> u64 {
+fn check_inbox_for_new(
+    path: &std::path::Path,
+    from_offset: u64,
+    trust_ctx: &trust::TrustContext,
+    refusals_path: &std::path::Path,
+) -> u64 {
     use std::io::{Read, Seek, SeekFrom};
 
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -310,11 +344,62 @@ fn check_inbox_for_new(path: &std::path::Path, from_offset: u64) -> u64 {
         }
         let trimmed = line.trim();
         if !trimmed.is_empty() {
-            announce(trimmed);
+            let envelope_offset = from_offset + consumed;
+            match trust::evaluate(trust_ctx, trimmed, envelope_offset) {
+                None => announce(trimmed),
+                Some(refusal) => {
+                    record_refusal(refusals_path, &refusal);
+                    announce_refused(trimmed, &refusal);
+                }
+            }
         }
         consumed += line.len() as u64;
     }
     from_offset + consumed
+}
+
+/// Append one refusal record to `<agent>/.bwoc/inbox.refusals.jsonl`.
+/// Best-effort — failure logs a warning and continues. The inbox cursor
+/// still advances even if the sidecar write fails, since we'd rather
+/// drop a refusal note than reread the envelope forever.
+#[cfg(unix)]
+fn record_refusal(path: &std::path::Path, refusal: &trust::Refusal) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    let ts = bwoc_core::time::utc_now_iso8601();
+    let line = refusal.to_jsonl(&ts);
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(mut f) => {
+            if let Err(e) = writeln!(f, "{line}") {
+                eprintln!(
+                    "bwoc-agent --serve: warning — failed to write refusal to {}: {e}",
+                    path.display()
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "bwoc-agent --serve: warning — failed to open {}: {e}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Variant of `announce` for refused envelopes — flags REFUSED + lists
+/// missing qualities so the operator sees the policy fire on `bwoc log -f`.
+#[cfg(unix)]
+fn announce_refused(line: &str, refusal: &trust::Refusal) {
+    let from = serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.get("from").and_then(|x| x.as_str()).map(str::to_owned))
+        .unwrap_or_else(|| "?".into());
+    eprintln!(
+        "bwoc-agent: inbox REFUSED ← {from}: reason={} missing={:?}",
+        refusal.reason, refusal.missing
+    );
 }
 
 /// Print one inbox envelope to stderr in a one-line form. Tries to parse

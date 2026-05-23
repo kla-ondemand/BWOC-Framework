@@ -16,7 +16,7 @@ BWOC supports four declared backends (Samānattatā — equal treatment, no vend
 | Backend | CLI binary | Common models |
 |---|---|---|
 | Claude | `claude` | `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
-| Gemini | `gemini` | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+| Antigravity | `agy` | `gemini-3.5-flash-medium`, `gemini-3.1-pro-high`, `claude-sonnet-4.6-thinking`, `gpt-oss-120b-medium` |
 | Codex | `codex` | `gpt-5`, `gpt-5-mini`, `o1` |
 | Kimi | `kimi` | `kimi-k2`, `kimi-k1.5` |
 
@@ -27,10 +27,10 @@ Each agent picks **one** backend at incarnation time, recorded in its `config.ma
 ### Option A — set the backend when you create the agent
 
 ```bash
-bwoc new my-agent --backend gemini --primary-model gemini-2.5-pro
+bwoc new my-agent --backend agy --primary-model gemini-3.5-flash-medium
 ```
 
-Or pass `--backend gemini` and let the interactive picker show you Gemini's models.
+Or pass `--backend agy` and let the interactive picker show you Antigravity's models.
 
 ### Option B — change an existing agent's backend
 
@@ -40,8 +40,8 @@ There's no `bwoc set-backend` yet (Phase 2 work). To switch:
 
    ```json
    {
-     "primaryModel": "gemini-2.5-pro",
-     "fallbackModel": "gemini-2.5-flash",
+     "primaryModel": "gemini-3.5-flash-medium",
+     "fallbackModel": "gemini-3.1-pro-low",
      ...
    }
    ```
@@ -75,7 +75,7 @@ Should print `Neutrality check passed.` regardless of which backend you switch t
 
 ## Caveats
 
-- All four backend CLIs read **the same `AGENTS.md`** via symlinks (`CLAUDE.md` / `GEMINI.md` / `CODEX.md` / `KIMI.md` all point to `AGENTS.md`). If your agent's instructions assume a specific backend, `bwoc check` will flag it as a neutrality violation.
+- All four backend CLIs read **the same `AGENTS.md`** via symlinks (`CLAUDE.md` / `AGY.md` / `CODEX.md` / `KIMI.md` all point to `AGENTS.md`). If your agent's instructions assume a specific backend, `bwoc check` will flag it as a neutrality violation.
 - Model identifiers in the picker are a convenience catalog, not a whitelist — type any model name and it's accepted as-is.
 - Phase 2 adds `bwoc set-backend` and related lifecycle commands; for now manifest editing is the manual path.
 

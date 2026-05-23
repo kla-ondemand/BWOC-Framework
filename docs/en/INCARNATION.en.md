@@ -19,7 +19,7 @@ After incarnation, the agent is a self-contained repository. It can be moved, ve
 - A shell (bash, zsh, or PowerShell with Git Bash on Windows).
 - `git` available on PATH.
 - `rsync`, `ln`, `python3` on PATH (used by `incarnate.sh` and `check-agent-neutrality.sh`).
-- (Optional) The backend CLI of choice — `claude`, `gemini`, `codex`, or `kimi` — installed where you'll operate the agent.
+- (Optional) The backend CLI of choice — `claude`, `agy`, `codex`, or `kimi` — installed where you'll operate the agent.
 
 The `bwoc` Rust CLI is Phase 1 v2.0 in progress; today's canonical path uses the shell scripts shipped with the template. Once `bwoc new` ports the script's logic, the command becomes a single invocation.
 
@@ -39,7 +39,7 @@ Defaults:
 - **`<agent-name>`** — lowercase, hyphen-separated (e.g. `agent-database-schema`).
 - **`[target-path]`** — optional. Default: `../agent-<agent-name>/` relative to the template.
 
-The script copies the template, creates backend symlinks (`CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`), initializes git, makes the first commit, and runs the neutrality check. Output names every step and ends with a "Next steps" block.
+The script copies the template, creates backend symlinks (`CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`), initializes git, makes the first commit, and runs the neutrality check. Output names every step and ends with a "Next steps" block.
 
 ---
 
@@ -82,7 +82,7 @@ Produces:
 
 ```
 + CLAUDE.md -> AGENTS.md
-+ GEMINI.md -> AGENTS.md
++ AGY.md    -> AGENTS.md
 + CODEX.md  -> AGENTS.md
 + KIMI.md   -> AGENTS.md
 + git initialized
@@ -158,7 +158,7 @@ git commit -m "feat(agent): incarnate agent-foo from BWOC template v2"
 
 ## Adding a Backend
 
-The four default backends (Claude, Gemini, Codex, Kimi) ship as symlinks. Adding a fifth is one command:
+The four default backends (Claude, Antigravity, Codex, Kimi) ship as symlinks. Adding a fifth is one command:
 
 ```bash
 ln -s AGENTS.md <BACKEND>.md

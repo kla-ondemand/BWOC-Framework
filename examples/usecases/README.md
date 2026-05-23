@@ -12,7 +12,7 @@ Active how-tos are in [`examples/howto/`](../howto/). Use cases are bigger — t
 |---|---|---|
 | `solo-developer.md` | One person, one machine, multiple projects — `~/.bwoc/`, project per dir, agents share central memory | Planned |
 | `team-monorepo.md` | A team's monorepo with multiple stacks (TS frontend + Rust backend + Python data) — one agent per stack, shared workspace memory | Planned |
-| `multi-backend-comparison.md` | Same agent persona, four backends side-by-side, comparing outputs across claude / gemini / codex / kimi | Planned |
+| `multi-backend-comparison.md` | Same agent persona, four backends side-by-side, comparing outputs across claude / agy / codex / kimi | Planned |
 | `documents-first-greenfield.md` | New project starting from PRD/SRS in `notes/`, agents help translate spec to code, the [Documents-first](../../docs/en/FAQ.en.md) discipline in practice | Planned |
 | `legacy-migration.md` | Bringing a legacy codebase under BWOC piece-by-piece — `bwoc check` as a gate, persona built from existing conventions | Planned |
 | `oss-maintainer.md` | OSS project using BWOC — agent helps triage issues, write release notes, draft PR reviews | Planned |

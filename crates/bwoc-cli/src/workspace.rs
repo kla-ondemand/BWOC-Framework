@@ -32,7 +32,7 @@ pub struct ListArgs {
     pub json: bool,
     /// Filter to agents whose `status` field exactly matches (e.g. "active", "stopped").
     pub status_filter: Option<String>,
-    /// Filter to agents whose `backend` field exactly matches (e.g. "claude", "gemini").
+    /// Filter to agents whose `backend` field exactly matches (e.g. "claude", "agy").
     pub backend_filter: Option<String>,
     /// Filter to agents whose daemon is actually running (PID file + signal-0 check).
     pub running_only: bool,
@@ -432,7 +432,7 @@ pub fn run_list(args: ListArgs) -> i32 {
 
 /// Format a one-phrase summary of the active filters for the empty-set
 /// hint message. Returns e.g. `--status=active`, `--backend=claude`,
-/// or `--status=stopped --backend=gemini`.
+/// or `--status=stopped --backend=agy`.
 fn describe_filters(status: Option<&str>, backend: Option<&str>) -> String {
     let mut parts = Vec::new();
     if let Some(s) = status {

@@ -32,7 +32,7 @@ Agent systems fail in exactly these dimensions. BWOC adopts Buddhist frameworks 
 ## Approach
 
 - **Pali terms are section names. Content is technical.** No religious interpretation. A reader who has never heard of Buddhism can read the docs and ship code.
-- **One specification, many backends.** `AGENTS.md` is the single source of truth; Claude, Gemini, Codex, Kimi, and any future LLM read it via symlinks. No backend is favored.
+- **One specification, many backends.** `AGENTS.md` is the single source of truth; Claude, Antigravity, Codex, Kimi, and any future LLM read it via symlinks. No backend is favored.
 - **One repository, one agent.** Each agent is a self-contained, forkable repo cloned from the template. No central runtime.
 - **Documents before implementation.** The framework is fully specified in Markdown before any runtime code is written. Code follows doctrine, not the reverse.
 

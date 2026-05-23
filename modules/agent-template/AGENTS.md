@@ -6,10 +6,10 @@
 | **Date** | 2026-05-22 |
 | **Philosophy** | docs/en/PHILOSOPHY.en.md |
 | **Requirements** | docs/en/SRS.en.md |
-| **Backends** | CLAUDE.md · GEMINI.md · CODEX.md · KIMI.md → all symlink here |
+| **Backends** | CLAUDE.md · AGY.md · CODEX.md · KIMI.md → all symlink here |
 
 > This file is the **single source of truth** for all LLM backends.
-> Backend-specific files (CLAUDE.md, GEMINI.md, CODEX.md, KIMI.md) MUST be symlinks to this file — never separate content.
+> Backend-specific files (CLAUDE.md, AGY.md, CODEX.md, KIMI.md) MUST be symlinks to this file — never separate content.
 > All backends receive equal treatment. No backend-specific instructions belong here.
 
 ---
@@ -21,7 +21,7 @@ This agent supports the following LLM backends via symlinks:
 | Backend | Entry File | Mechanism |
 |---|---|---|
 | Claude (Anthropic) | `CLAUDE.md` → `AGENTS.md` | Symlink |
-| Gemini (Google) | `GEMINI.md` → `AGENTS.md` | Symlink |
+| Antigravity (Google) | `AGY.md` → `AGENTS.md` | Symlink |
 | Codex (OpenAI) | `CODEX.md` → `AGENTS.md` | Symlink |
 | Kimi (Moonshot) | `KIMI.md` → `AGENTS.md` | Symlink |
 | Any future backend | `<BACKEND>.md` → `AGENTS.md` | Symlink — no code change needed |
@@ -188,7 +188,7 @@ This file contains no backend-specific content. Identical behavior is required o
 
 This script verifies:
 - `AGENTS.md` is a regular file
-- All backend files (`CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md`) are symlinks to `AGENTS.md`
+- All backend files (`CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md`) are symlinks to `AGENTS.md`
 - No placeholder is unsubstituted
 - `config.manifest.json` parses as valid JSON
 - `task-log.jsonl` is valid JSONL
@@ -462,7 +462,7 @@ When incarnating a new agent from this template:
 - [ ] Run `./scripts/incarnate.sh <agent-name>`
 - [ ] Edit `config.manifest.json` — fill all placeholders
 - [ ] Edit persona section (section 1) in this file
-- [ ] Create `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` as symlinks to `AGENTS.md`
+- [ ] Create `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` as symlinks to `AGENTS.md`
 - [ ] Run `./scripts/check-agent-neutrality.sh` — must pass
 - [ ] Add first entry to `task-log.jsonl`
 - [ ] Create `memories/` directory and initial `MEMORY.md`

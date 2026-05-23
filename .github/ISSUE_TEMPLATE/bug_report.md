@@ -29,7 +29,7 @@ What actually happened. Include error output verbatim (in a code block).
 - **BWOC version:** (`bwoc --version`, or commit SHA if running from source)
 - **OS:** (macOS / Linux / Windows + version)
 - **Rust toolchain:** (`rustc --version`, only if building from source)
-- **Backend:** (claude / gemini / codex / kimi, if applicable)
+- **Backend:** (claude / agy / codex / kimi, if applicable)
 - **Surface:** (framework spec / agent template / `bwoc` CLI / `bwoc-agent` runtime / `.claude/hooks/`)
 - **Arc phase:** (uppāda / ṭhiti / vaya — when in the agent's life did this surface?)
 

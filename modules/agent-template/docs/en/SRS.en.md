@@ -82,7 +82,7 @@ The system under specification is a **template repository**, not a runtime.
 
 | ID | P | Requirement | V |
 |---|---|---|---|
-| FR-5.1 | M | `AGENTS.md` SHALL be a regular file; `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` SHALL be symlinks pointing to `AGENTS.md` | T |
+| FR-5.1 | M | `AGENTS.md` SHALL be a regular file; `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` SHALL be symlinks pointing to `AGENTS.md` | T |
 | FR-5.2 | M | No instruction file SHALL contain backend-specific content contradicting AGENTS.md | A |
 | FR-5.3 | M | `check-agent-neutrality.sh` SHALL fail if any symlink is broken or replaced by a regular file | T |
 | FR-5.4 | M | `trust-model.md` SHALL document the security posture for cloning external agents | I |
@@ -247,7 +247,7 @@ Every FR that reads from memory must verify against current state — covered ex
 | Backend | Entry File | Mechanism |
 |---|---|---|
 | Claude | `CLAUDE.md` → `AGENTS.md` | Symlink |
-| Gemini | `GEMINI.md` → `AGENTS.md` | Symlink |
+| Antigravity | `AGY.md` → `AGENTS.md` | Symlink |
 | Codex | `CODEX.md` → `AGENTS.md` | Symlink |
 | Kimi | `KIMI.md` → `AGENTS.md` | Symlink |
 | Generic | `AGENTS.md` | Direct |
@@ -344,7 +344,7 @@ updated: <ISO 8601>                  # required
 
 ### 6.1 Automated Checks (`check-agent-neutrality.sh`)
 1. `AGENTS.md` exists and is a regular file
-2. `CLAUDE.md`, `GEMINI.md`, `CODEX.md`, `KIMI.md` are symlinks to `AGENTS.md`
+2. `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` are symlinks to `AGENTS.md`
 3. All required placeholders are substituted
 4. `config.manifest.json` parses as JSON
 5. `task-log.jsonl` is valid JSONL

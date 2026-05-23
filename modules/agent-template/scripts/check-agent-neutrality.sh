@@ -23,9 +23,9 @@ warn()  { echo -e "${YELLOW}WARN${NC}  $1"; warnings=$((warnings + 1)); }
 pass()  { echo -e "${GREEN}PASS${NC}  $1"; }
 
 # Hardcoded values that must not appear in AGENTS.md
-HARDCODED_MODELS=(claude-opus claude-sonnet claude-haiku claude-3 claude-4 gemini-2 gemini-1 gemini-pro gpt-4 gpt-3 o3- o4- codex- kimi-k2)
+HARDCODED_MODELS=(claude-opus claude-sonnet claude-haiku claude-3 claude-4 gemini-3 gemini-2 gemini-1 gemini-pro gpt-4 gpt-3 gpt-oss o3- o4- codex- kimi-k2)
 HARDCODED_TOOLS=(mempalace chromadb pinecone pgvector weaviate)
-BACKEND_PHRASES=("Claude will" "Claude can" "Gemini will" "Gemini can" "Codex will" "Kimi will")
+BACKEND_PHRASES=("Claude will" "Claude can" "Antigravity will" "Antigravity can" "Codex will" "Kimi will")
 
 echo ""
 echo "BWOC Agent Neutrality Check"
@@ -41,7 +41,7 @@ else
 fi
 
 # 2. Backend symlinks
-for backend in GEMINI.md CODEX.md KIMI.md; do
+for backend in AGY.md CODEX.md KIMI.md; do
   if [[ -L "$TARGET/$backend" ]]; then
     target_link=$(readlink "$TARGET/$backend")
     if [[ "$target_link" == "AGENTS.md" ]]; then

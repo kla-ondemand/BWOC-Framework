@@ -28,7 +28,7 @@ pub struct StatusArgs {
     pub all: bool,
 }
 
-const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
 
 pub fn run(args: StatusArgs) -> i32 {
     let Some(root) = resolve_workspace(args.workspace) else {

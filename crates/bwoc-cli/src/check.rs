@@ -22,11 +22,13 @@ const HARDCODED_MODELS: &[&str] = &[
     "claude-haiku",
     "claude-3",
     "claude-4",
+    "gemini-3",
     "gemini-2",
     "gemini-1",
     "gemini-pro",
     "gpt-4",
     "gpt-3",
+    "gpt-oss",
     "o3-",
     "o4-",
     "codex-",
@@ -38,8 +40,8 @@ const HARDCODED_TOOLS: &[&str] = &["mempalace", "chromadb", "pinecone", "pgvecto
 const BACKEND_PHRASES: &[&str] = &[
     "Claude will",
     "Claude can",
-    "Gemini will",
-    "Gemini can",
+    "Antigravity will",
+    "Antigravity can",
     "Codex will",
     "Kimi will",
 ];
@@ -50,6 +52,66 @@ const REQUIRED_PLACEHOLDERS: &[&str] = &[
     "{{taskId}}",
     "{{deepMemoryCmd}}",
 ];
+
+/// Placeholders that legitimately stay literal in AGENTS.md *after*
+/// incarnation. Per `interconnect/trust.md`-adjacent §Appendix A of
+/// AGENTS.md, `{{taskId}}` is resolved by the agent at task-assignment
+/// time, not at incarnation — so finding it in an incarnated doc is
+/// expected, not a violation. All other placeholders must be substituted.
+const RUNTIME_PLACEHOLDERS: &[&str] = &["{{taskId}}"];
+
+/// Which mode the audit runs in. Template mode asserts placeholders
+/// *exist* (the template must remain parseable as a scaffold). Incarnation
+/// mode asserts placeholders are *gone* (the agent has been personalized).
+/// Detection key: `manifest.name`. `{{name}}` ≡ template, anything else
+/// ≡ incarnation. Missing manifest defaults to template (safer — won't
+/// false-positive a half-built agent into "incarnated and broken").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditMode {
+    Template,
+    Incarnation,
+}
+
+/// Decide audit mode from a parsed `config.manifest.json` value.
+fn detect_mode(manifest: Option<&serde_json::Value>) -> AuditMode {
+    let name = manifest
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
+    // Template signals: literal `{{name}}` placeholder OR missing/empty
+    // manifest (incarnation-in-progress reads as template to avoid
+    // false-positives on half-built agents).
+    let looks_like_placeholder = name.starts_with("{{") && name.ends_with("}}");
+    if looks_like_placeholder || name.is_empty() {
+        AuditMode::Template
+    } else {
+        AuditMode::Incarnation
+    }
+}
+
+/// Extract every `{{identifier}}` placeholder found in `content`. Identifier
+/// = ASCII alphanumeric + underscore (matches the AGENTS.md spec, which
+/// uses camelCase keys). Duplicates collapse — each placeholder reported
+/// at most once. Used by the incarnation-mode check.
+fn extract_placeholders(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = content;
+    while let Some(open) = rest.find("{{") {
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find("}}") else {
+            break;
+        };
+        let key = &after_open[..close];
+        if !key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            let ph = format!("{{{{{key}}}}}");
+            if !out.contains(&ph) {
+                out.push(ph);
+            }
+        }
+        rest = &after_open[close + 2..];
+    }
+    out
+}
 
 /// Run all neutrality checks against `target` and return the structured report.
 pub fn audit(target: &Path) -> AuditReport {
@@ -71,8 +133,8 @@ pub fn audit(target: &Path) -> AuditReport {
             .push("AGENTS.md not found — this is the single source of truth".to_string());
     }
 
-    // 2. Backend symlinks (GEMINI, CODEX, KIMI must symlink to AGENTS.md)
-    for backend in &["GEMINI.md", "CODEX.md", "KIMI.md"] {
+    // 2. Backend symlinks (AGY, CODEX, KIMI must symlink to AGENTS.md)
+    for backend in &["AGY.md", "CODEX.md", "KIMI.md"] {
         let p = target.join(backend);
         check_symlink_to_agents(&p, backend, &mut report);
     }
@@ -102,12 +164,16 @@ pub fn audit(target: &Path) -> AuditReport {
 
     // 4. config.manifest.json — exists and is valid JSON
     let manifest = target.join("config.manifest.json");
+    let mut manifest_value: Option<serde_json::Value> = None;
     if manifest.is_file() {
         match fs::read_to_string(&manifest) {
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(_) => report
-                    .passes
-                    .push("config.manifest.json is valid JSON".to_string()),
+                Ok(v) => {
+                    report
+                        .passes
+                        .push("config.manifest.json is valid JSON".to_string());
+                    manifest_value = Some(v);
+                }
                 Err(_) => report
                     .violations
                     .push("config.manifest.json is not valid JSON".to_string()),
@@ -121,17 +187,42 @@ pub fn audit(target: &Path) -> AuditReport {
             .warnings
             .push("config.manifest.json missing (recommended for cloning readiness)".to_string());
     }
+    let mode = detect_mode(manifest_value.as_ref());
 
     // Content-based checks on AGENTS.md
     if let Ok(content) = fs::read_to_string(&agents_md) {
-        // 5. Required placeholders present
-        for ph in REQUIRED_PLACEHOLDERS {
-            if content.contains(ph) {
-                report.passes.push(format!("AGENTS.md contains {ph}"));
-            } else {
-                report
-                    .warnings
-                    .push(format!("AGENTS.md missing recommended placeholder {ph}"));
+        // 5. Placeholders — template asserts existence; incarnation
+        //    asserts substitution.
+        match mode {
+            AuditMode::Template => {
+                for ph in REQUIRED_PLACEHOLDERS {
+                    if content.contains(ph) {
+                        report.passes.push(format!("AGENTS.md contains {ph}"));
+                    } else {
+                        report
+                            .warnings
+                            .push(format!("AGENTS.md missing recommended placeholder {ph}"));
+                    }
+                }
+            }
+            AuditMode::Incarnation => {
+                let found = extract_placeholders(&content);
+                let unsubstituted: Vec<&String> = found
+                    .iter()
+                    .filter(|ph| !RUNTIME_PLACEHOLDERS.contains(&ph.as_str()))
+                    .collect();
+                if unsubstituted.is_empty() {
+                    report
+                        .passes
+                        .push("AGENTS.md has no unsubstituted placeholders".to_string());
+                } else {
+                    for ph in unsubstituted {
+                        report.violations.push(format!(
+                            "AGENTS.md has unsubstituted placeholder {ph} \
+                             — agent is incarnated but not personalized"
+                        ));
+                    }
+                }
             }
         }
 
@@ -157,53 +248,61 @@ pub fn audit(target: &Path) -> AuditReport {
             report.passes.push("AGENTS.md has no wikilinks".to_string());
         }
 
-        // 8. No hardcoded model IDs (case-insensitive substring match)
-        let lower = content.to_lowercase();
-        let mut model_ok = true;
-        for model in HARDCODED_MODELS {
-            if lower.contains(model) {
+        // Checks 8-10 are template-only. An incarnated agent has committed
+        // to a model + tools + backend voice — the neutrality rules guard
+        // the SCAFFOLD, not the per-agent instance. Running them in
+        // incarnation mode would false-positive every legitimately
+        // personalized agent (`primaryModel = claude-opus-4-7` after
+        // substitution would match HARDCODED_MODELS).
+        if matches!(mode, AuditMode::Template) {
+            // 8. No hardcoded model IDs (case-insensitive substring match)
+            let lower = content.to_lowercase();
+            let mut model_ok = true;
+            for model in HARDCODED_MODELS {
+                if lower.contains(model) {
+                    report
+                        .violations
+                        .push(format!("AGENTS.md contains hardcoded model ID '{model}'"));
+                    model_ok = false;
+                }
+            }
+            if model_ok {
                 report
-                    .violations
-                    .push(format!("AGENTS.md contains hardcoded model ID '{model}'"));
-                model_ok = false;
+                    .passes
+                    .push("No hardcoded model IDs in AGENTS.md".to_string());
             }
-        }
-        if model_ok {
-            report
-                .passes
-                .push("No hardcoded model IDs in AGENTS.md".to_string());
-        }
 
-        // 9. No hardcoded tool names
-        let mut tool_ok = true;
-        for tool in HARDCODED_TOOLS {
-            if lower.contains(tool) {
+            // 9. No hardcoded tool names
+            let mut tool_ok = true;
+            for tool in HARDCODED_TOOLS {
+                if lower.contains(tool) {
+                    report
+                        .violations
+                        .push(format!("AGENTS.md contains hardcoded tool name '{tool}'"));
+                    tool_ok = false;
+                }
+            }
+            if tool_ok {
                 report
-                    .violations
-                    .push(format!("AGENTS.md contains hardcoded tool name '{tool}'"));
-                tool_ok = false;
+                    .passes
+                    .push("No hardcoded tool names in AGENTS.md".to_string());
             }
-        }
-        if tool_ok {
-            report
-                .passes
-                .push("No hardcoded tool names in AGENTS.md".to_string());
-        }
 
-        // 10. No backend-specific phrasing
-        let mut lang_ok = true;
-        for phrase in BACKEND_PHRASES {
-            if content.contains(phrase) {
-                report.violations.push(format!(
-                    "AGENTS.md contains backend-specific phrase '{phrase}'"
-                ));
-                lang_ok = false;
+            // 10. No backend-specific phrasing
+            let mut lang_ok = true;
+            for phrase in BACKEND_PHRASES {
+                if content.contains(phrase) {
+                    report.violations.push(format!(
+                        "AGENTS.md contains backend-specific phrase '{phrase}'"
+                    ));
+                    lang_ok = false;
+                }
             }
-        }
-        if lang_ok {
-            report
-                .passes
-                .push("No backend-specific language in AGENTS.md".to_string());
+            if lang_ok {
+                report
+                    .passes
+                    .push("No backend-specific language in AGENTS.md".to_string());
+            }
         }
     }
 
@@ -536,7 +635,7 @@ fn visit_md_files<F: FnMut(&Path, &str)>(target: &Path, depth: usize, visit: &mu
     }
 }
 
-/// Verify the backend entry file (`GEMINI.md`, `CODEX.md`, `KIMI.md`) is
+/// Verify the backend entry file (`AGY.md`, `CODEX.md`, `KIMI.md`) is
 /// a symlink pointing at `AGENTS.md`. Missing files are warnings, not
 /// violations — an agent may not declare every backend. Symlinks
 /// pointing elsewhere are violations.
@@ -818,5 +917,161 @@ mod tests {
                 .iter()
                 .any(|v| v.contains("AGENTS.md not found"))
         );
+    }
+
+    // ---- Dual-mode detection ------------------------------------------------
+
+    #[test]
+    fn detect_mode_template_for_placeholder_name() {
+        let m = serde_json::json!({ "name": "{{name}}" });
+        assert_eq!(detect_mode(Some(&m)), AuditMode::Template);
+    }
+
+    #[test]
+    fn detect_mode_incarnation_for_real_name() {
+        let m = serde_json::json!({ "name": "pi" });
+        assert_eq!(detect_mode(Some(&m)), AuditMode::Incarnation);
+    }
+
+    #[test]
+    fn detect_mode_template_for_missing_manifest() {
+        // Safer default: half-built agents (no manifest yet) read as
+        // template, not as a broken incarnation.
+        assert_eq!(detect_mode(None), AuditMode::Template);
+    }
+
+    #[test]
+    fn detect_mode_template_for_empty_name() {
+        let m = serde_json::json!({ "name": "" });
+        assert_eq!(detect_mode(Some(&m)), AuditMode::Template);
+    }
+
+    // ---- Placeholder extraction ---------------------------------------------
+
+    #[test]
+    fn extract_placeholders_finds_each_unique() {
+        let content = "Hello {{agentId}}, role: {{agentRole}}. Again: {{agentId}}.";
+        let found = extract_placeholders(content);
+        assert_eq!(found, vec!["{{agentId}}", "{{agentRole}}"]);
+    }
+
+    #[test]
+    fn extract_placeholders_ignores_non_identifier_content() {
+        // `{{ ... }}` with spaces or punctuation between is not an
+        // identifier — skip it. Catches false-positives in code blocks.
+        let content = "{{ not an id }} but {{realOne}} yes";
+        let found = extract_placeholders(content);
+        assert_eq!(found, vec!["{{realOne}}"]);
+    }
+
+    #[test]
+    fn extract_placeholders_handles_empty_string() {
+        assert!(extract_placeholders("").is_empty());
+    }
+
+    #[test]
+    fn extract_placeholders_handles_no_close() {
+        // Unclosed `{{` — return cleanly, don't loop.
+        assert!(extract_placeholders("ragged {{open").is_empty());
+    }
+
+    // ---- Incarnation-mode audit end-to-end ----------------------------------
+
+    fn write_temp_agent(label: &str, manifest_name: &str, agents_body: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("bwoc-check-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("AGENTS.md"), agents_body).unwrap();
+        for backend in ["AGY.md", "CODEX.md", "KIMI.md", "CLAUDE.md"] {
+            std::os::unix::fs::symlink("AGENTS.md", root.join(backend)).unwrap();
+        }
+        let manifest = serde_json::json!({
+            "name": manifest_name,
+            "agentId": format!("agent-{manifest_name}"),
+            "agentRole": "demo",
+            "primaryModel": "m",
+            "memoryPath": "memories/",
+            "lintCmd": "true",
+            "formatCmd": "true",
+            "testCmd": "true",
+            "buildCmd": "true",
+            "version": "2.0",
+        });
+        fs::write(
+            root.join("config.manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn incarnated_with_unsubstituted_placeholder_fails() {
+        let root = write_temp_agent(
+            "unsub",
+            "alpha",
+            "You are {{agentId}}. The role is {{agentRole}}.",
+        );
+        let report = audit(&root);
+        let has_violation = report.violations.iter().any(|v| {
+            v.contains("unsubstituted placeholder") && (v.contains("{{agentId}}") || v.contains("{{agentRole}}"))
+        });
+        assert!(
+            has_violation,
+            "expected incarnation-mode violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn incarnated_clean_doc_passes() {
+        let root = write_temp_agent(
+            "clean",
+            "alpha",
+            "You are agent-alpha. Use {{taskId}} per task. No other placeholders.",
+        );
+        let report = audit(&root);
+        // taskId is whitelisted as runtime — the only remaining check should pass.
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("no unsubstituted placeholders")),
+            "expected the no-placeholders pass line, got passes: {:?}",
+            report.passes
+        );
+        // No placeholder-related violations.
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.contains("unsubstituted")),
+            "got unexpected violations: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn template_mode_still_checks_placeholders_exist() {
+        let root = write_temp_agent(
+            "tmpl",
+            "{{name}}", // template-mode trigger
+            "AGENTS.md without any placeholders at all.",
+        );
+        let report = audit(&root);
+        // In template mode, MISSING recommended placeholders become warnings.
+        let warned = report
+            .warnings
+            .iter()
+            .any(|w| w.contains("missing recommended placeholder {{agentId}}"));
+        assert!(
+            warned,
+            "expected template-mode warning, got: {:?}",
+            report.warnings
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 }

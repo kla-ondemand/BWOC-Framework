@@ -11,7 +11,7 @@
 //!   powershell:  `bwoc completion powershell | Out-String | Invoke-Expression`
 //!
 //! Tab-complete then surfaces every subcommand, every flag, and every
-//! ValueEnum choice (--backend claude|gemini|codex|kimi, --lang en|th, etc.)
+//! ValueEnum choice (--backend claude|agy|codex|kimi, --lang en|th, etc.)
 //! — fulfilling the "easy to use, options should have suggestions" theme.
 
 use std::io;

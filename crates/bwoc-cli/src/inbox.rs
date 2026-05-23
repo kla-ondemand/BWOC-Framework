@@ -5,7 +5,6 @@
 //! send order. Malformed lines emit a warning to stderr but don't
 //! abort — the rest of the inbox is still readable.
 
-use std::io::BufRead;
 use std::path::PathBuf;
 
 use bwoc_core::workspace::AgentsRegistry;
@@ -442,31 +441,101 @@ fn watch_inbox(inbox_path: &std::path::Path, mut idx: usize) -> Result<(), Inbox
 }
 
 /// Read the inbox file line-by-line. Malformed lines warn-and-skip;
-/// missing file is treated as an empty inbox.
+/// missing file is treated as an empty inbox. Any refusals recorded by
+/// the daemon in the sibling `inbox.refusals.jsonl` are merged in: the
+/// matching envelope gets a `refused: { reason, missing }` field so the
+/// trust spec's `jq '.[] | select(.refused)'` example works against
+/// either snapshot mode.
 fn read_messages(path: &std::path::Path) -> Result<Vec<serde_json::Value>, InboxError> {
-    let file = match std::fs::File::open(path) {
+    let envelopes = read_envelopes_with_offsets(path)?;
+    let refusals_path = path.with_file_name("inbox.refusals.jsonl");
+    let refusals = read_refusals(&refusals_path);
+    let mut out = Vec::with_capacity(envelopes.len());
+    for (offset, mut env) in envelopes {
+        if let Some(refused) = refusals.get(&offset) {
+            if let Some(obj) = env.as_object_mut() {
+                obj.insert("refused".to_string(), refused.clone());
+            }
+        }
+        out.push(env);
+    }
+    Ok(out)
+}
+
+/// Read inbox.jsonl with byte-offset tracking per line. The offset is
+/// the byte position of the first character of each line within the file
+/// — the same key the daemon writes into refusal records.
+fn read_envelopes_with_offsets(
+    path: &std::path::Path,
+) -> Result<Vec<(u64, serde_json::Value)>, InboxError> {
+    use std::io::Read;
+
+    let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
     };
-    let reader = std::io::BufReader::new(file);
+    let mut buf = String::new();
+    file.read_to_string(&mut buf)?;
+
     let mut out = Vec::new();
-    for (lineno, line) in reader.lines().enumerate() {
-        let line = line?;
-        if line.trim().is_empty() {
+    let mut offset: u64 = 0;
+    let mut lineno: usize = 0;
+    for line in buf.split_inclusive('\n') {
+        lineno += 1;
+        let line_offset = offset;
+        offset += line.len() as u64;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<serde_json::Value>(&line) {
-            Ok(v) => out.push(v),
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(v) => out.push((line_offset, v)),
             Err(e) => {
                 eprintln!(
-                    "bwoc inbox: warning — line {} is malformed JSON, skipped ({e})",
-                    lineno + 1
+                    "bwoc inbox: warning — line {lineno} is malformed JSON, skipped ({e})"
                 );
             }
         }
     }
     Ok(out)
+}
+
+/// Read the daemon's refusal sidecar into a map keyed by envelope offset.
+/// Map value is the `{reason, missing}` view attached to the envelope
+/// — `ts` and `envelope*` echo fields stay in the sidecar but don't
+/// pollute the envelope display. Best-effort: missing or malformed file
+/// returns an empty map; the inbox is still readable.
+fn read_refusals(path: &std::path::Path) -> std::collections::HashMap<u64, serde_json::Value> {
+    use std::collections::HashMap;
+    let mut out: HashMap<u64, serde_json::Value> = HashMap::new();
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return out;
+    };
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(offset) = v.get("envelopeOffset").and_then(|x| x.as_u64()) else {
+            continue;
+        };
+        let reason = v
+            .get("reason")
+            .cloned()
+            .unwrap_or(serde_json::Value::String("missing_trust".into()));
+        let missing = v
+            .get("missing")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new()));
+        out.insert(
+            offset,
+            serde_json::json!({ "reason": reason, "missing": missing }),
+        );
+    }
+    out
 }
 
 fn resolve_workspace(explicit: Option<PathBuf>) -> Option<PathBuf> {
@@ -570,5 +639,105 @@ mod tests {
         assert_eq!(view.len(), 2);
         assert_eq!(view[0]["message"], "m3");
         assert_eq!(view[1]["message"], "m4");
+    }
+
+    // ---- Trust refusal merge (step 4) ---------------------------------------
+
+    fn write_refusals(root: &std::path::Path, lines: &[&str]) {
+        let p = root.join("agents/agent-alpha/.bwoc/inbox.refusals.jsonl");
+        let mut f = fs::File::create(p).unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+    }
+
+    #[test]
+    fn read_envelopes_offsets_match_line_starts() {
+        let root = setup("offsets");
+        write_inbox(
+            &root,
+            &[
+                r#"{"ts":"t1","from":"user","to":"agent-alpha","message":"a"}"#,
+                r#"{"ts":"t2","from":"agent-x","to":"agent-alpha","message":"b"}"#,
+            ],
+        );
+        let pairs =
+            read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
+                .unwrap();
+        assert_eq!(pairs.len(), 2);
+        // First line starts at byte 0.
+        assert_eq!(pairs[0].0, 0);
+        // Second line starts past the first (which is 58 bytes + newline = 59).
+        let first_len = pairs[0].1.to_string().len();
+        assert!(pairs[1].0 > 0);
+        assert!(pairs[1].0 >= first_len as u64);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refusals_merge_into_envelopes_by_offset() {
+        let root = setup("merge");
+        // Two envelopes; daemon refused the second one.
+        write_inbox(
+            &root,
+            &[
+                r#"{"ts":"t1","from":"user","to":"agent-alpha","message":"ok"}"#,
+                r#"{"ts":"t2","from":"agent-x","to":"agent-alpha","message":"no"}"#,
+            ],
+        );
+        // Figure out where line 2 starts.
+        let pairs =
+            read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
+                .unwrap();
+        let line2_offset = pairs[1].0;
+        let refusal_line = format!(
+            r#"{{"ts":"refusal-ts","envelopeOffset":{line2_offset},"envelopeTs":"t2","envelopeFrom":"agent-x","reason":"missing_trust","missing":["vatta"]}}"#
+        );
+        write_refusals(&root, &[&refusal_line]);
+
+        let msgs = read_messages(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        assert_eq!(msgs.len(), 2);
+        // First envelope: no refusal attached.
+        assert!(msgs[0].get("refused").is_none());
+        // Second envelope: refused field with reason + missing list.
+        let refused = msgs[1].get("refused").expect("expected refused field");
+        assert_eq!(refused["reason"], "missing_trust");
+        assert_eq!(refused["missing"], serde_json::json!(["vatta"]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn missing_refusals_file_is_silent_passthrough() {
+        let root = setup("no-refusals");
+        write_inbox(
+            &root,
+            &[r#"{"ts":"t1","from":"user","to":"agent-alpha","message":"x"}"#],
+        );
+        // No inbox.refusals.jsonl on disk — read_messages should not
+        // attach any `refused` fields and not error.
+        let msgs = read_messages(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].get("refused").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn malformed_refusal_line_is_skipped() {
+        let root = setup("bad-refusal");
+        write_inbox(
+            &root,
+            &[r#"{"ts":"t1","from":"agent-x","to":"agent-alpha","message":"x"}"#],
+        );
+        write_refusals(
+            &root,
+            &[
+                "this is not json",
+                r#"{"missing":"envelopeOffset-field"}"#, // legal JSON but no offset
+            ],
+        );
+        let msgs = read_messages(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].get("refused").is_none());
+        let _ = fs::remove_dir_all(&root);
     }
 }

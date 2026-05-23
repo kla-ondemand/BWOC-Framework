@@ -3,11 +3,11 @@
 The canonical template for creating BWOC-compliant AI coding agents.
 
 [![Template](https://img.shields.io/badge/role-agent%20template-blue.svg)](../../README.md)
-[![Backend-neutral](https://img.shields.io/badge/backends-Claude%20%7C%20Gemini%20%7C%20Codex%20%7C%20Kimi-purple.svg)](#backend-neutrality-sammā-ājīva)
+[![Backend-neutral](https://img.shields.io/badge/backends-Claude%20%7C%20Antigravity%20%7C%20Codex%20%7C%20Kimi-purple.svg)](#backend-neutrality-sammā-ājīva)
 [![Format](https://img.shields.io/badge/format-two--tier%20Markdown-lightgrey.svg)](../../CLAUDE.md)
 [![Docs](https://img.shields.io/badge/docs-EN%20%7C%20TH-blue.svg)](docs/)
 
-One clone per agent. Backend-neutral by design: Claude, Gemini, Codex, and Kimi all read the same `AGENTS.md` via symlinks.
+One clone per agent. Backend-neutral by design: Claude, Antigravity, Codex, and Kimi all read the same `AGENTS.md` via symlinks.
 
 > Framework root: [`../../README.md`](../../README.md) · Philosophy: [`docs/en/PHILOSOPHY.en.md`](docs/en/PHILOSOPHY.en.md) · The Arc: [`PHILOSOPHY.en.md §0.1`](docs/en/PHILOSOPHY.en.md#01-the-arc--uppāda--ṭhiti--vaya)
 
@@ -47,7 +47,7 @@ One clone per agent. Backend-neutral by design: Claude, Gemini, Codex, and Kimi 
 
 ```
 CLAUDE.md  ──┐
-GEMINI.md  ──┤──→  AGENTS.md
+AGY.md     ──┤──→  AGENTS.md
 CODEX.md   ──┤
 KIMI.md    ──┘
 ```
@@ -83,7 +83,7 @@ Full step-by-step (placeholders, persona, verification checklist, multilingual s
 agent-<name>/
 ├── AGENTS.md                  ← single source of truth (all backends)
 ├── CLAUDE.md → AGENTS.md      ← symlink
-├── GEMINI.md → AGENTS.md      ← symlink
+├── AGY.md → AGENTS.md         ← symlink
 ├── CODEX.md  → AGENTS.md      ← symlink
 ├── KIMI.md   → AGENTS.md      ← symlink
 ├── config.manifest.json       ← placeholders + runtime config

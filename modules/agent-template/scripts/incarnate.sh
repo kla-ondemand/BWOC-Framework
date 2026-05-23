@@ -37,7 +37,7 @@ rsync -a --exclude='.git' --exclude='*.example.*' "$TEMPLATE_DIR/" "$target/"
 
 # 2. Create backend symlinks (remove any copied files first)
 cd "$target"
-for backend in GEMINI.md CODEX.md KIMI.md CLAUDE.md; do
+for backend in AGY.md CODEX.md KIMI.md CLAUDE.md; do
   rm -f "$backend"
   ln -s AGENTS.md "$backend"
   echo -e "${GREEN}+${NC} $backend -> AGENTS.md"

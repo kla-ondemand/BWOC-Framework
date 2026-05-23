@@ -27,11 +27,11 @@ Exit codes:
 | # | Check | Auto-fixable? |
 |---|---|---|
 | 1 | `~/.bwoc/` directory exists | ✓ creates the dir + empty `config.toml` |
-| 2 | At least one backend CLI on PATH (`claude` / `gemini` / `codex` / `kimi`) | ✗ informational only — you install them |
+| 2 | At least one backend CLI on PATH (`claude` / `agy` / `codex` / `kimi`) | ✗ informational only — you install them |
 | 3 | `.bwoc/workspace.toml` parses cleanly | ✗ needs manual edit — won't silently rewrite |
 | 4 | `.bwoc/agents.toml` parses cleanly | ✗ same |
 | 5 | Scaffold dirs present (`agents_dir`, `projects/`, `notes/`) | ✓ `mkdir -p` |
-| 6 | Each registered agent has its 4 backend symlinks (`CLAUDE.md` / `GEMINI.md` / `CODEX.md` / `KIMI.md` → `AGENTS.md`) | ✓ recreates the missing symlinks |
+| 6 | Each registered agent has its 4 backend symlinks (`CLAUDE.md` / `AGY.md` / `CODEX.md` / `KIMI.md` → `AGENTS.md`) | ✓ recreates the missing symlinks |
 
 The policy: auto-fix only when there's **one obvious correct answer**. Anything that needs judgment (malformed config, missing `AGENTS.md`, missing backend CLI) is reported, never silently rewritten.
 
@@ -76,7 +76,7 @@ The env-level checks (`~/.bwoc/`, backends on PATH) still run; workspace-level c
 ```bash
 $ bwoc doctor
 …
-  WARN   backends on PATH — no backend CLI on PATH (claude/gemini/codex/kimi). `bwoc spawn` will fail.
+  WARN   backends on PATH — no backend CLI on PATH (claude/agy/codex/kimi). `bwoc spawn` will fail.
 ```
 
 WARN, not FAIL — you may have other workflows that don't need `bwoc spawn`. Install at least one backend if you want to run agents.

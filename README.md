@@ -41,7 +41,7 @@ Buddhist principles are used here as **engineering thinking aids** — not relig
 BWOC provides a **template and doctrine** for creating AI coding agents with a consistent, principled foundation:
 
 - **One repo, one agent** — each agent lives in its own repository cloned from the template
-- **Backend-neutral** — runs on Claude, Gemini, Codex, Kimi, or any LLM
+- **Backend-neutral** — runs on Claude, Antigravity, Codex, Kimi, or any LLM
 - **Persistent memory** — accumulates knowledge across sessions with impermanence-aware pruning
 - **Multi-agent safe** — multiple agents co-operate in the same repo without collision
 
@@ -162,7 +162,7 @@ bwoc-framwork/
 │   └── bwoc-core/                 • shared types — manifest, workspace, identity
 ├── modules/
 │   └── agent-template/          ← Core template (cloned per agent — see B)
-│       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/GEMINI/CODEX/KIMI.md)
+│       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/AGY/CODEX/KIMI.md)
 │       ├── docs/{en,th}/          • PHILOSOPHY · PRD · SRS · SELF-IMPROVEMENT · THREAT-MODEL · OVERVIEW
 │       ├── persona/ · mindsets/ · skills/ · interconnect/ · memories/
 │       └── scripts/               • incarnate.sh · check-agent-neutrality.sh
@@ -302,7 +302,7 @@ BWOC is specification-first. The reference implementation is a native, cross-pla
 | `bwoc` CLI | Rust, single static binary | **macOS · Linux · Windows** |
 | `bwoc-agent` runtime (ships with each incarnated agent) | Rust, single static binary | **macOS · Linux · Windows** |
 | CLI i18n (output strings) | Project Fluent (`.ftl` per locale) | **Ships with TH · EN**; pluggable for any future language |
-| Backend integration | Subprocess of the LLM's own CLI — Claude Code, Gemini CLI, Codex CLI, Kimi CLI | Whatever the backend supports |
+| Backend integration | Subprocess of the LLM's own CLI — Claude Code, Antigravity CLI, Codex CLI, Kimi CLI | Whatever the backend supports |
 | Distribution | GitHub Release binaries with SHA-256 checksums; `cargo install --git` from source (crates.io publish targeted for 1.0) | — |
 | License | MIT (see [`LICENSE`](LICENSE)) | — |
 
@@ -312,19 +312,28 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 ## Status
 
-**Current phase:** Phase 2 — *ṭhiti operations* — in progress. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend).
+**Current phase:** Phase 3 — *sammā-vācā inter-agent messaging* — actively shipping. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — *ṭhiti operations* — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
 
 **First public release:** [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) shipped 2026-05-23 with cross-platform binaries for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`. CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`; SHA-256 checksums shipped alongside each binary.
+
+**Latest unreleased work (post v2026.5.23-1):**
+
+- **Kalyāṇamitta-7 trust — all 5 implementation steps complete.** Recipients declare 7 booleans + an opt-in `requiredTrust` list in `config.manifest.json`; `bwoc check` verifies each declaration against repo evidence; `bwoc trust <agent>` reads a peer's profile; `bwoc-agent --serve` refuses inbox envelopes from senders missing required qualities (behind `BWOC_TRUST_GATING=1` env opt-in, v1 safety), writing refusals to a sidecar log that `bwoc inbox` joins at read time. Spec: [`interconnect/trust.md`](modules/agent-template/interconnect/trust.md). See [`notes/2026-05-23_trust-step-4.md`](notes/2026-05-23_trust-step-4.md).
+- **Agent → agent messaging (sammā-vācā Phase 1).** `bwoc send --from <agent>` writes a real sender identity into the envelope; the recipient daemon's trust gate already verifies against that sender's manifest (from trust step 4). **Sāraṇīyadhamma 6** norms in [`interconnect/messaging.md`](modules/agent-template/interconnect/messaging.md) (+ `.th.md`). See [`notes/2026-05-23_agent-to-agent-messaging.md`](notes/2026-05-23_agent-to-agent-messaging.md).
+- **Phase 4 fleet-governance spec (Aparihāniya-dhamma 7).** [`docs/en/FLEET-GOVERNANCE.en.md`](docs/en/FLEET-GOVERNANCE.en.md) (+ `.th.md`) — seven non-decline conditions from DN 16 mapped to workspace-level operator practices (regular `bwoc list` cadence, coordinated start/stop, schemaVersion discipline, template-version honoring, refusal-respect, shared-resource ownership, senior-agent protection). v1 ships observable signals; v2 may promote signals to gates. See [`notes/2026-05-23_phase-4-fleet-governance.md`](notes/2026-05-23_phase-4-fleet-governance.md).
+- **`bwoc check` becomes dual-mode** (template vs incarnation). The check reads `manifest.name` to decide what to assert: template-mode keeps the existing behavior (placeholders present + neutrality rules); incarnation-mode asserts placeholders are *gone* (except runtime `{{taskId}}`) and skips neutrality rules (those guard the scaffold, not per-agent commitments). Closes a latent bug where un-personalized agents silently passed. See [`notes/2026-05-23_check-dual-mode-and-personalize.md`](notes/2026-05-23_check-dual-mode-and-personalize.md).
+- **`agents/agent-pi/` + `agents/agent-oracle/` personalized.** Both now pass `bwoc check` with 0 violations.
 
 | Area | Status |
 |---|---|
 | Specification (Philosophy, PRD, SRS, Threat) | Ready |
 | Lifecycle, Observability, Failure, Improvement | Ready |
 | Coordination, Governance | Ready |
-| `bwoc` CLI (Rust, macOS · Linux · Windows · CI matrix green) | **Phase 1 ✓ · Phase 2 in progress** |
-| `bwoc-agent` runtime (Rust; `--serve` daemon on Unix) | **Phase 1 ✓ · Phase 2 in progress** |
-| Reference agents | Phase 4 |
-| Fleet dashboard | Phase 4 |
+| Kalyāṇamitta-7 trust (manifest + check + read + daemon refusal) | **Phase 3 ✓ (behind `BWOC_TRUST_GATING=1`)** |
+| `bwoc` CLI (Rust, macOS · Linux · Windows · CI matrix green) | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress** |
+| `bwoc-agent` runtime (Rust; `--serve` daemon on Unix) | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress** |
+| Reference agents (`agent-pi`, `agent-oracle`) | **Phase 3 ✓ (incarnated + personalized + `bwoc check` clean)** |
+| Fleet dashboard (`bwoc dashboard` TUI) | **Phase 2 ✓** |
 
 For the full phase-by-phase plan with completed / in-progress / remaining items, see [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) (Thai: [`docs/th/ROADMAP.th.md`](docs/th/ROADMAP.th.md)).
 

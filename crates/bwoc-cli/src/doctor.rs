@@ -43,7 +43,7 @@ struct CheckResult {
 const WORKSPACE_EXTRAS: &[&str] = &["projects", "notes"];
 /// Backend symlink files inside each incarnated agent. Mirror of
 /// `new.rs::create_symlinks`.
-const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "GEMINI.md", "CODEX.md", "KIMI.md"];
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
 
 pub fn run(args: DoctorArgs) -> i32 {
     let mut results: Vec<CheckResult> = Vec::new();
@@ -205,7 +205,7 @@ fn check_user_home(auto: bool) -> CheckResult {
 }
 
 fn check_backends() -> CheckResult {
-    let backends = ["claude", "gemini", "codex", "kimi"];
+    let backends = ["claude", "agy", "codex", "kimi"];
     let mut available = Vec::new();
     for b in backends {
         if which(b).is_some() {
@@ -217,7 +217,7 @@ fn check_backends() -> CheckResult {
         CheckResult {
             name,
             status: Status::Warn(
-                "no backend CLI on PATH (claude/gemini/codex/kimi). `bwoc spawn` will fail.".into(),
+                "no backend CLI on PATH (claude/agy/codex/kimi). `bwoc spawn` will fail.".into(),
             ),
         }
     } else {

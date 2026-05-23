@@ -28,8 +28,32 @@ permissions:
   contents: write  # required to create / upload to GitHub Release
 
 jobs:
+  # Create the release shell once before any matrix builds — eliminates
+  # the race condition where parallel matrix jobs would each call
+  # softprops/action-gh-release@v2 and one would lose with
+  # "Validation Failed: already_exists". Now matrix jobs find the
+  # release pre-existing and just append assets.
+  create-release:
+    name: create release shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create empty release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF##refs/tags/}"
+          # --notes-start-tag=$prev would be ideal but `gh release create`
+          # auto-generates from history when --generate-notes is set;
+          # safer for the first release where no prior tag exists.
+          gh release create "$tag" \
+            --title "$tag" \
+            --generate-notes \
+            --repo "$GITHUB_REPOSITORY"
+
   build:
     name: build ${{ matrix.target }} (${{ matrix.os }})
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -91,12 +115,14 @@ jobs:
           $h = (Get-FileHash -Algorithm SHA256 "dist/$name.zip").Hash.ToLower()
           "$h  $name.zip" | Out-File -Encoding ascii "dist/$name.zip.sha256"
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          # CalVer tags always contain `-<patch>` so `contains(ref, '-')` cannot
-          # distinguish stable from prerelease. Treat every CalVer release as
-          # stable; flip the GH Release "Set as a pre-release" toggle by hand
-          # if a given build is genuinely experimental.
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+      - name: Upload assets to existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="${GITHUB_REF##refs/tags/}"
+          # Upload every artifact in dist/ to the release created by
+          # the create-release job. `gh release upload --clobber` is
+          # idempotent — replays of a rerun-after-failure scenario won't
+          # error on duplicate asset names.
+          gh release upload "$tag" dist/* --clobber --repo "$GITHUB_REPOSITORY"

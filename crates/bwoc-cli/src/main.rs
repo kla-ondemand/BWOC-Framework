@@ -25,6 +25,7 @@ mod memory;
 mod new;
 mod ping;
 mod retire;
+mod sangha;
 mod send;
 mod spawn;
 mod start;
@@ -122,6 +123,107 @@ enum Commands {
     /// Read workspace-level memory (`.bwoc/memory/`).
     #[command(subcommand)]
     Memory(MemoryAction),
+    /// Manage Saṅgha teams — a named subset of agents sharing a task list.
+    #[command(subcommand)]
+    Team(TeamCommand),
+    /// Manage a team's shared task list (add / list / claim / complete).
+    #[command(subcommand)]
+    Task(TaskCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum TeamCommand {
+    /// Create a team with a member list (`--members a,b,c`).
+    Create {
+        /// Team id (kebab-case by convention).
+        id: String,
+        /// Comma-separated agent ids that belong to the team.
+        #[arg(long, value_delimiter = ',')]
+        members: Vec<String>,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        /// Emit JSON instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List teams in the workspace with member + task counts.
+    List {
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire a team — remove its membership file + task list.
+    Retire {
+        /// Team id to retire.
+        id: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum TaskCommand {
+    /// Add a task to a team's list. Optional `--deps a,b` gate it on others.
+    Add {
+        /// Team id the task belongs to.
+        team: String,
+        /// Human-readable task title.
+        title: String,
+        /// Comma-separated task ids that must complete before this is claimable.
+        #[arg(long, value_delimiter = ',')]
+        deps: Vec<String>,
+        /// Explicit task id (default: auto `t<N>`).
+        #[arg(long = "id")]
+        id: Option<String>,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List a team's tasks with state + claimant.
+    List {
+        /// Team id.
+        team: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Claim a pending, unblocked task as an agent (`--as <agent>`).
+    Claim {
+        /// Team id.
+        team: String,
+        /// Task id to claim.
+        task: String,
+        /// Claiming agent id (must be a team member).
+        #[arg(long = "as")]
+        agent: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Complete an in-progress task you claimed (`--as <agent>`).
+    Complete {
+        /// Team id.
+        team: String,
+        /// Task id to complete.
+        task: String,
+        /// Completing agent id (must be the claimant).
+        #[arg(long = "as")]
+        agent: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1129,6 +1231,56 @@ fn main() -> ExitCode {
         }
         Some(Commands::Memory(action)) => {
             let code = memory::run(action.into_runtime());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Team(command)) => {
+            let code = match command {
+                TeamCommand::Create {
+                    id,
+                    members,
+                    workspace,
+                    json,
+                } => sangha::run_team_create(workspace, id, members, json),
+                TeamCommand::List { workspace, json } => sangha::run_team_list(workspace, json),
+                TeamCommand::Retire {
+                    id,
+                    workspace,
+                    yes,
+                    json,
+                } => sangha::run_team_retire(workspace, id, yes, json),
+            };
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Task(command)) => {
+            let code = match command {
+                TaskCommand::Add {
+                    team,
+                    title,
+                    deps,
+                    id,
+                    workspace,
+                    json,
+                } => sangha::run_task_add(workspace, team, title, deps, id, json),
+                TaskCommand::List {
+                    team,
+                    workspace,
+                    json,
+                } => sangha::run_task_list(workspace, team, json),
+                TaskCommand::Claim {
+                    team,
+                    task,
+                    agent,
+                    workspace,
+                    json,
+                } => sangha::run_task_claim(workspace, team, task, agent, json),
+                TaskCommand::Complete {
+                    team,
+                    task,
+                    agent,
+                    workspace,
+                    json,
+                } => sangha::run_task_complete(workspace, team, task, agent, json),
+            };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

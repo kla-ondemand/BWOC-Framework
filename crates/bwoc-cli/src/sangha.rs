@@ -307,6 +307,52 @@ pub fn run_team_retire(workspace: Option<PathBuf>, id: String, yes: bool, json: 
     0
 }
 
+// --- task hooks ------------------------------------------------------------
+
+/// Run a workspace-level task hook if one exists. Hooks live at
+/// `<ws>/.bwoc/hooks/<event>` (`task-created` / `task-completed`); they are
+/// optional — a missing or non-executable file is a silent no-op. The hook
+/// receives the task context as environment variables (`BWOC_TASK_EVENT`,
+/// `BWOC_TEAM`, `BWOC_TASK_ID`, `BWOC_TASK_TITLE`, and `BWOC_AGENT` for
+/// completion). A **non-zero exit blocks the operation** (matching Claude
+/// Agent Teams' TaskCreated/TaskCompleted semantics): the caller aborts
+/// before persisting, and the hook's stderr is surfaced. Returns
+/// `Ok(())` when the hook passes or is absent; `Err(reason)` when it blocks
+/// or can't be run.
+fn run_task_hook(workspace: &Path, event: &str, env: &[(&str, &str)]) -> Result<(), String> {
+    let hook = workspace.join(".bwoc/hooks").join(event);
+    let meta = match std::fs::metadata(&hook) {
+        Ok(m) => m,
+        Err(_) => return Ok(()), // no hook installed → no-op
+    };
+    // Require the executable bit on Unix; on other platforms, presence is enough.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o111 == 0 {
+            return Ok(()); // present but not executable → treat as disabled
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = &meta;
+
+    let output = std::process::Command::new(&hook)
+        .envs(env.iter().copied())
+        .current_dir(workspace)
+        .output()
+        .map_err(|e| format!("hook {event} failed to run: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let first = stderr.trim().lines().next().unwrap_or("(no message)");
+        Err(format!(
+            "blocked by {event} hook (exit {}): {first}",
+            output.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
 // --- task commands ---------------------------------------------------------
 
 pub fn run_task_add(
@@ -345,6 +391,21 @@ pub fn run_task_add(
     let id = id_override.unwrap_or_else(|| format!("t{}", tasks.len() + 1));
     let task = Task::new(&id, &title, deps);
     if let Err(e) = team::add_task(&mut tasks, task) {
+        eprintln!("bwoc task add: {e}");
+        return 2;
+    }
+    // task-created hook (optional). A non-zero exit blocks creation — the
+    // task is added in-memory but never persisted, so the file is unchanged.
+    if let Err(e) = run_task_hook(
+        &ws,
+        "task-created",
+        &[
+            ("BWOC_TASK_EVENT", "task-created"),
+            ("BWOC_TEAM", &team_id),
+            ("BWOC_TASK_ID", &id),
+            ("BWOC_TASK_TITLE", &title),
+        ],
+    ) {
         eprintln!("bwoc task add: {e}");
         return 2;
     }
@@ -419,7 +480,7 @@ pub fn run_task_claim(
     agent: String,
     json: bool,
 ) -> i32 {
-    mutate_task(workspace, &team_id, &agent, json, "claim", |tasks| {
+    mutate_task(workspace, &team_id, &task_id, &agent, json, "claim", |tasks| {
         team::claim_task(tasks, &task_id, &agent)
     })
 }
@@ -431,7 +492,7 @@ pub fn run_task_complete(
     agent: String,
     json: bool,
 ) -> i32 {
-    mutate_task(workspace, &team_id, &agent, json, "complete", |tasks| {
+    mutate_task(workspace, &team_id, &task_id, &agent, json, "complete", |tasks| {
         team::complete_task(tasks, &task_id, &agent)
     })
 }
@@ -442,6 +503,7 @@ pub fn run_task_complete(
 fn mutate_task(
     workspace: Option<PathBuf>,
     team_id: &str,
+    task_id: &str,
     agent: &str,
     json: bool,
     verb: &str,
@@ -483,6 +545,24 @@ fn mutate_task(
         // errors → exit 2; the file is untouched.
         return 2;
     }
+    // task-completed hook (optional). The transition succeeded in-memory;
+    // a non-zero exit blocks completion by aborting before the file is
+    // written. Only fires for `complete` — claim has no hook in Phase B+.
+    if verb == "complete"
+        && let Err(e) = run_task_hook(
+            &ws,
+            "task-completed",
+            &[
+                ("BWOC_TASK_EVENT", "task-completed"),
+                ("BWOC_TEAM", team_id),
+                ("BWOC_TASK_ID", task_id),
+                ("BWOC_AGENT", agent),
+            ],
+        )
+    {
+        eprintln!("bwoc task {verb}: {e}");
+        return 2;
+    }
     if let Err(e) = save_tasks(&ws, team_id, &tasks) {
         eprintln!("bwoc task {verb}: {e}");
         return 1;
@@ -496,4 +576,41 @@ fn mutate_task(
         println!("{verb}: ok ({agent} on team '{team_id}')");
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn task_hook_missing_is_noop_blocking_is_err() {
+        use std::os::unix::fs::PermissionsExt;
+        let ws = std::env::temp_dir().join(format!("bwoc-hook-{}", std::process::id()));
+        let hooks = ws.join(".bwoc/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+
+        // No hook installed → Ok (no-op).
+        assert!(run_task_hook(&ws, "task-created", &[]).is_ok());
+
+        // Non-executable hook → treated as disabled → Ok.
+        let hook = hooks.join("task-created");
+        std::fs::write(&hook, "#!/bin/sh\nexit 2\n").unwrap();
+        assert!(run_task_hook(&ws, "task-created", &[]).is_ok());
+
+        // Executable + exit 0 → Ok.
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&hook, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(run_task_hook(&ws, "task-created", &[]).is_ok());
+
+        // Executable + exit 2 → Err (blocks), surfaces stderr.
+        std::fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 2\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err = run_task_hook(&ws, "task-created", &[]).unwrap_err();
+        assert!(err.contains("blocked by task-created hook"), "got: {err}");
+        assert!(err.contains("nope"), "stderr surfaced: {err}");
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 }

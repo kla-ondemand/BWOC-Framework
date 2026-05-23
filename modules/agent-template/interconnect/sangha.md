@@ -112,9 +112,17 @@ bwoc-agent: task available ← squad/t3: implement the parser
 
 **Opt-in wakeup** (`BWOC_TASK_WAKEUP=1`): on a newly-claimable task the daemon also pings the agent's tmux session (`agent-<x>` → session `<x>`) with a `[bwoc task <team>/<id>] <title>` marker — the same best-effort two-step send-keys the inbox uses. A live Claude session running the agent sees it and can `bwoc task claim`. The agent stays in control: the daemon does **not** auto-claim or mutate the list, so there's no risk of stranding a task no one works. Default off (announce-only).
 
+## Task hooks (shipped)
+
+Optional workspace-level shell hooks fire on task lifecycle, mirroring Claude Agent Teams' `TaskCreated` / `TaskCompleted`:
+
+- `<workspace>/.bwoc/hooks/task-created` — runs when `bwoc task add` is about to persist a task.
+- `<workspace>/.bwoc/hooks/task-completed` — runs when `bwoc task complete` is about to persist a completion.
+
+Each hook receives the context as environment variables: `BWOC_TASK_EVENT`, `BWOC_TEAM`, `BWOC_TASK_ID`, `BWOC_TASK_TITLE` (created), `BWOC_AGENT` (completed). A **non-zero exit blocks the operation** — the task file is left unchanged and the hook's first stderr line is surfaced to the operator (exit 2). A missing or non-executable hook is a silent no-op (hooks are opt-in). Use them for quality gates: e.g. a `task-completed` hook that runs `cargo test` and exits non-zero to refuse completion until tests pass.
+
 ## Deferred (later phases)
 
-- **Task hooks** — `task-created` / `task-completed` shell hooks at workspace level (mirrors Claude Agent Teams' TaskCreated/TaskCompleted). (Phase B+.)
 - **Auto-claim** — the daemon claims the next available task itself (behind its own opt-in), not just pings. Higher risk (autonomous mutation + stranding if the wakeup misses), so gated separately and deferred until the wakeup-then-agent-claims loop is proven. (Phase B+.)
 - **Plan approval (Pavāraṇā)** — a teammate submits a plan, the lead approves/rejects before implementation. Maps to an envelope-kind extension on [[messaging]]. (Phase C.)
 - **Team-aware dashboard** — a task pane in `bwoc dashboard`. (Phase B+.)

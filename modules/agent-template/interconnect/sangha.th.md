@@ -112,9 +112,17 @@ bwoc-agent: task available ← squad/t3: implement the parser
 
 **Wakeup แบบ opt-in** (`BWOC_TASK_WAKEUP=1`): เมื่อมี task ที่ claim ได้ใหม่ daemon จะ ping tmux session ของ agent (`agent-<x>` → session `<x>`) ด้วย marker `[bwoc task <team>/<id>] <title>` — กลไก two-step send-keys best-effort เดียวกับ inbox Claude session ที่รัน agent อยู่จะเห็นแล้ว `bwoc task claim` ได้ agent ยังคุมเอง: daemon **ไม่** auto-claim หรือ mutate รายการ จึงไม่เสี่ยง strand งานที่ไม่มีใครทำ default ปิด (announce-only)
 
+## Task hooks (ส่งแล้ว)
+
+shell hook ระดับ workspace แบบ optional ทำงานตาม lifecycle ของงาน mirror `TaskCreated` / `TaskCompleted` ของ Claude Agent Teams:
+
+- `<workspace>/.bwoc/hooks/task-created` — ทำงานเมื่อ `bwoc task add` กำลังจะ persist งาน
+- `<workspace>/.bwoc/hooks/task-completed` — ทำงานเมื่อ `bwoc task complete` กำลังจะ persist การ complete
+
+hook รับ context เป็น environment variable: `BWOC_TASK_EVENT`, `BWOC_TEAM`, `BWOC_TASK_ID`, `BWOC_TASK_TITLE` (created), `BWOC_AGENT` (completed) **exit ไม่เป็นศูนย์ block การทำงาน** — ไฟล์งานไม่ถูกแตะ และ stderr บรรทัดแรกของ hook โผล่ให้ operator (exit 2) hook ที่ไม่มีหรือไม่ executable เป็น no-op เงียบ (hook เป็น opt-in) ใช้สำหรับ quality gate: เช่น hook `task-completed` ที่รัน `cargo test` แล้ว exit ไม่เป็นศูนย์เพื่อปฏิเสธ completion จนกว่า test จะผ่าน
+
 ## เลื่อนไป phase ถัดไป
 
-- **Task hooks** — shell hook `task-created` / `task-completed` ระดับ workspace (mirror TaskCreated/TaskCompleted ของ Claude Agent Teams) (Phase B+)
 - **Auto-claim** — daemon claim งานถัดไปเอง (หลัง opt-in ของตัวเอง) ไม่ใช่แค่ ping เสี่ยงกว่า (autonomous mutation + strand ถ้า wakeup พลาด) จึง gate แยกและเลื่อนจนกว่า loop wakeup-แล้ว-agent-claim จะพิสูจน์แล้ว (Phase B+)
 - **Plan approval (ปวารณา)** — teammate ส่ง plan, lead approve/reject ก่อน implement map กับส่วนขยาย envelope-kind บน [[messaging]] (Phase C)
 - **Dashboard รู้จักทีม** — task pane ใน `bwoc dashboard` (Phase B+)

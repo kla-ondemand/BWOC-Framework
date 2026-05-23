@@ -1,3 +1,9 @@
+---
+title: Roadmap
+parent: English
+nav_order: 6
+---
+
 # Roadmap
 
 Phase-by-phase plan for BWOC. **Phases** describe implementation milestones; each may span several SemVer releases. See [`VERSION.md`](../../VERSION.md) for the version-vs-phase distinction. See [`VISION.md`](../../VISION.md) for success criteria at 1-year and 3-year horizons.
@@ -108,12 +114,23 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | Agent → agent messaging (sammā-vācā Phase 1) | `bwoc send --from <agent>` writes sender identity into envelope; recipient daemon's trust gate evaluates against sender's manifest; refusals surface via `bwoc inbox` JSON merge. **Sāraṇīyadhamma 6** norms in [`interconnect/messaging.md`](../../modules/agent-template/interconnect/messaging.md) (+ `.th.md`). |
 | Dual-mode `bwoc check` | Detects template (placeholder `manifest.name`) vs incarnation (real name). Template mode asserts placeholders exist + neutrality rules; incarnation mode asserts placeholders are gone (except runtime `{{taskId}}`) and skips neutrality checks. Closes the bug where un-personalized agents silently passed. |
 
-### Remaining for Phase 3
+### Remaining for Phase 3 — sequenced
 
-- **Full vaya** for `bwoc retire` — file modes shipped (default/--keep-files/--keep-memory); still pending: worktree cleanup (when worktreeBase set), branch release, interconnect deregistration (when interconnect lands).
-- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging. Spec mentions; implementation deferred until v1 telemetry justifies the lift.
-- **`.bwoc/interconnect/`** per-workspace routing config.
-- **Tier 2 memory backend reference implementation.**
+Worktree/branch **full lifecycle** (create + cleanup) is in Phase 3 scope (decided 2026-05-23). Two independent tracks run in parallel, then converge on `bwoc retire`:
+
+**Track A — interconnect routing** (`.bwoc/interconnect/`): a per-workspace routing layer added ahead of the existing single-workspace registry lookup in `send`. Delivers the "coordinate without a central authority" half of the DoD. Additive — current behaviour stays the fallback.
+
+**Track B — worktree lifecycle** (long pole; start first):
+
+- *git util layer* — shell out to `git worktree` / `git branch` (no `git2` / `gitoxide` dependency; matches the existing process-spawn style).
+- *creation* — a new `task-claimed` Saṅgha hook fires `git worktree add <worktreeBase>/<agentId>/<taskId> -b agent/<agentId>/feat/<taskId>`. The Saṅgha `Task` struct is **not** extended; worktree location follows the `<worktreeBase>/<agentId>/<taskId>` path convention so cleanup is deterministic without parsing any agent-written log. The Saṅgha task list (coordination) and the per-agent `task-log.jsonl` (execution log) stay separate systems.
+
+**Converge — full vaya for `bwoc retire`** (needs A + B): worktree cleanup (`git worktree list` filtered by the path convention), branch release (`git branch --list 'agent/<agentId>/*'`), interconnect deregistration (via Track A).
+
+**Deferred (off the Phase 3 DoD):**
+
+- **Tier 2 memory** — two distinct pieces: the pluggable backend *interface* (also listed under Phase 2 remaining) and a *reference implementation*. Tier 1 file-based memory is complete.
+- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging. Gated on v1 telemetry; the cross-workspace part also depends on Track A.
 
 ---
 

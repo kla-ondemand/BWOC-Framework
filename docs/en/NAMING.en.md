@@ -1,3 +1,9 @@
+---
+title: Naming
+parent: English
+nav_order: 4
+---
+
 # Markdown File Naming Standard
 
 A single, consistent convention for every `*.md` file in the BWOC framework, agent template, and incarnated agents. The rules below decide what each new file is called and where it lives.

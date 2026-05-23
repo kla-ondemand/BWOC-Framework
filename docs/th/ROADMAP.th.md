@@ -1,3 +1,9 @@
+---
+title: แผนพัฒนา
+parent: ภาษาไทย
+nav_order: 6
+---
+
 # Roadmap
 
 แผนทีละ phase ของ BWOC **Phase** อธิบาย milestone ของการ implement; แต่ละ phase อาจครอบคลุม SemVer release หลายครั้ง ดู [`VERSION.md`](../../VERSION.md) สำหรับการแยก version กับ phase ดู [`VISION.th.md`](../../VISION.th.md) สำหรับ success criteria ที่ 1 ปีและ 3 ปี
@@ -108,12 +114,23 @@
 | Agent → agent messaging (สัมมาวาจา Phase 1) | `bwoc send --from <agent>` เขียน sender identity ลง envelope; daemon ฝั่งผู้รับประเมินด้วย manifest ของ sender; refusals โผล่ผ่าน `bwoc inbox` JSON merge. กฎ **สาราณียธรรม 6** อยู่ใน [`interconnect/messaging.md`](../../modules/agent-template/interconnect/messaging.md) (+ `.th.md`) |
 | `bwoc check` แบบ dual-mode | ตรวจเทมเพลต (placeholder `manifest.name`) vs incarnation (ชื่อจริง) Template mode ยืนยันว่า placeholder ต้องมี + กฎ neutrality; incarnation mode ยืนยันว่า placeholder ต้องหายไป (ยกเว้น `{{taskId}}` ซึ่งเป็น runtime) และข้าม neutrality checks ปิด bug ที่ agent ยังไม่ personalize ผ่าน check แบบเงียบๆ |
 
-### ที่เหลือสำหรับ Phase 3
+### ที่เหลือสำหรับ Phase 3 — เรียงลำดับแล้ว
 
-- **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — file mode ship แล้ว (default/--keep-files/--keep-memory); ที่ค้าง: worktree cleanup (เมื่อ set worktreeBase), branch release, interconnect deregistration (เมื่อ interconnect ship)
-- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging Spec อ้างถึง; implementation เลื่อนจนกว่า telemetry ของ v1 จะ justify
-- **`.bwoc/interconnect/`** config routing ระดับ workspace
-- **Reference implementation ของ Tier 2 memory backend**
+worktree/branch **lifecycle เต็มรูปแบบ** (create + cleanup) อยู่ใน scope ของ Phase 3 (ตัดสิน 2026-05-23) สอง track อิสระวิ่งขนานกัน แล้วบรรจบที่ `bwoc retire`:
+
+**Track A — interconnect routing** (`.bwoc/interconnect/`): routing layer ระดับ workspace ที่เพิ่มก่อน registry lookup แบบ single-workspace เดิมใน `send` ส่งมอบครึ่ง "ประสานงานโดยไม่มีศูนย์กลาง" ของ DoD เป็น additive — พฤติกรรมเดิมเป็น fallback
+
+**Track B — worktree lifecycle** (long pole; เริ่มก่อน):
+
+- *git util layer* — shell out ไปยัง `git worktree` / `git branch` (ไม่เพิ่ม dependency `git2` / `gitoxide`; ตรงกับ style spawn process เดิม)
+- *creation* — hook ใหม่ `task-claimed` ของ Saṅgha ยิง `git worktree add <worktreeBase>/<agentId>/<taskId> -b agent/<agentId>/feat/<taskId>` **ไม่** ขยาย `Task` struct ของ Saṅgha; ตำแหน่ง worktree เป็นไปตาม path convention `<worktreeBase>/<agentId>/<taskId>` เพื่อให้ cleanup deterministic โดยไม่ต้อง parse log ที่ agent เขียน Saṅgha task list (coordination) กับ `task-log.jsonl` ราย agent (execution log) ยังเป็นคนละระบบ
+
+**บรรจบ — vaya เต็มรูปแบบสำหรับ `bwoc retire`** (ต้องการ A + B): worktree cleanup (`git worktree list` filter ด้วย path convention), branch release (`git branch --list 'agent/<agentId>/*'`), interconnect deregistration (ผ่าน Track A)
+
+**เลื่อน (อยู่นอก DoD ของ Phase 3):**
+
+- **Tier 2 memory** — สองชิ้นแยกกัน: *interface* ของ backend ที่ pluggable (อยู่ใน Phase 2 ที่เหลือด้วย) กับ *reference implementation* Tier 1 file-based memory เสร็จแล้ว
+- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging gate บน telemetry ของ v1; ส่วน cross-workspace ยังขึ้นกับ Track A ด้วย
 
 ---
 

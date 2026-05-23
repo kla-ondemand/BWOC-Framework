@@ -10,6 +10,8 @@ tags:
   - meta/framework
 status: draft (v2026.5.23 — initial spec; observable signals stubbed, automation deferred)
 canonical-source: DN 16 (Mahāparinibbāna Sutta) §1.4 — the Vajjī teaching
+parent: English
+nav_order: 8
 ---
 
 # Fleet Governance — Aparihāniya-dhamma 7

@@ -1,3 +1,9 @@
+---
+title: FAQ
+parent: English
+nav_order: 9
+---
+
 # FAQ
 
 The questions newcomers ask in their first few hours with BWOC. Concise answers; cross-references to the spec for depth.

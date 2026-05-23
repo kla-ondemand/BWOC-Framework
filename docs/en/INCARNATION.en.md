@@ -1,3 +1,9 @@
+---
+title: Incarnation
+parent: English
+nav_order: 2
+---
+
 # Incarnation
 
 How to create a new BWOC agent from the canonical template — start to first commit in under 30 minutes.

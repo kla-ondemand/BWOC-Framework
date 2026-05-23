@@ -1,3 +1,9 @@
+---
+title: สถาปัตยกรรม
+parent: ภาษาไทย
+nav_order: 1
+---
+
 # สถาปัตยกรรม
 
 อธิบายว่า framework, agent template, agent ที่ incarnate แล้ว, CLI, และ runtime ประกอบกันอย่างไร — ในระดับไฟล์, process, และการไหลของข้อมูล

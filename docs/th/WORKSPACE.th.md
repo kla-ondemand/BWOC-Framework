@@ -1,3 +1,9 @@
+---
+title: Workspace
+parent: ภาษาไทย
+nav_order: 3
+---
+
 # Workspace
 
 **Workspace** คือ directory ที่บรรจุ BWOC agent หนึ่งตัวหรือมากกว่า พร้อม metadata ที่ CLI ต้องใช้ทำงานกับ agent เหล่านั้นอย่างประสานกัน CLI รับ workspace path ที่ user ระบุ **คำสั่งเชิงปฏิบัติการจะปฏิเสธการรันจนกว่า workspace จะมีโครงสร้างครบถ้วน** (fail-fast พร้อมข้อความที่ระบุการแก้ไขที่ทำได้)

@@ -6,6 +6,8 @@ tags:
   - group/framework
   - type/process
   - meta/operations
+parent: ภาษาไทย
+nav_order: 7
 ---
 
 # การปล่อย Release BWOC

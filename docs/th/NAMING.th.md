@@ -1,3 +1,9 @@
+---
+title: การตั้งชื่อ
+parent: ภาษาไทย
+nav_order: 4
+---
+
 # มาตรฐานการตั้งชื่อไฟล์ Markdown
 
 convention เดียวที่สอดคล้องสำหรับทุกไฟล์ `*.md` ใน BWOC framework, agent template, และ agent ที่ incarnate แล้ว กฎด้านล่างกำหนดว่าไฟล์ใหม่แต่ละไฟล์จะถูกตั้งชื่ออะไรและอยู่ที่ไหน

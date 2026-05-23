@@ -14,26 +14,45 @@ Buddhist principles are used here as **engineering thinking aids** — not relig
 
 > GitHub: [github.com/bemindlabs/BWOC-Framework](https://github.com/bemindlabs/BWOC-Framework) · Conceptual core: [`PHILOSOPHY.en.md`](modules/agent-template/docs/en/PHILOSOPHY.en.md) · Vision: [`VISION.md`](VISION.md) · Contributing: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
+![BWOC Framework — Buddhist Way of Coding](assets/banner.png)
+
 ---
 
 ## Contents
 
-- [What It Is](#what-it-is)
-- [Why Buddhist Frameworks](#why-buddhist-frameworks)
-- [The 22 Frameworks](#the-22-frameworks)
-- [Stack Diagram](#stack-diagram)
-- [Five Principles to Know First](#five-principles-to-know-first)
-- [Repository & Workspace Layout](#repository--workspace-layout)
-- [Getting Started](#getting-started)
-- [Reading Paths](#reading-paths)
-- [Security Rules (Sīla 5)](#security-rules-sīla-5)
-- [FAQ](#faq)
-- [Tech Stack](#tech-stack)
-- [Status](#status)
-- [Contributing](#contributing)
-- [Security](#security)
-- [Code of Conduct](#code-of-conduct)
-- [License](#license)
+- [BWOC Framework — Buddhist Way of Coding](#bwoc-framework--buddhist-way-of-coding)
+  - [Contents](#contents)
+  - [What It Is](#what-it-is)
+  - [Why Buddhist Frameworks](#why-buddhist-frameworks)
+  - [The 22 Frameworks](#the-22-frameworks)
+    - [A — Process](#a--process)
+    - [B — State](#b--state)
+    - [C — Growth](#c--growth)
+    - [D — Relational](#d--relational)
+    - [E — Discipline](#e--discipline)
+    - [F — Governance](#f--governance)
+  - [Stack Diagram](#stack-diagram)
+  - [Five Principles to Know First](#five-principles-to-know-first)
+    - [1. Yoniso Manasikāra — Verify Before Act](#1-yoniso-manasikāra--verify-before-act)
+    - [2. Mattaññutā — Right Amount](#2-mattaññutā--right-amount)
+    - [3. Anattā — Non-Clinging](#3-anattā--non-clinging)
+    - [4. Samānattatā — Equal Treatment](#4-samānattatā--equal-treatment)
+    - [5. Sīla-sāmaññatā — Communal Convention](#5-sīla-sāmaññatā--communal-convention)
+  - [Repository \& Workspace Layout](#repository--workspace-layout)
+    - [A. The BWOC framework repository](#a-the-bwoc-framework-repository)
+    - [B. A user workspace (what `bwoc init` creates)](#b-a-user-workspace-what-bwoc-init-creates)
+  - [Getting Started](#getting-started)
+    - [Install the toolkit](#install-the-toolkit)
+    - [As an Agent Author](#as-an-agent-author)
+    - [Reading Paths](#reading-paths)
+  - [Security Rules (Sīla 5)](#security-rules-sīla-5)
+  - [FAQ](#faq)
+  - [Tech Stack](#tech-stack)
+  - [Status](#status)
+  - [Contributing](#contributing)
+  - [Security](#security)
+  - [Code of Conduct](#code-of-conduct)
+  - [License](#license)
 
 ---
 
@@ -52,23 +71,23 @@ BWOC provides a **template and doctrine** for creating AI coding agents with a c
 
 Buddhist thinking addresses areas where Western engineering frameworks (DDD, Clean Architecture, SOLID) are thin: **state impermanence, failure tracing, lifecycle, inter-agent trust, and threat modeling**.
 
-| Engineering Problem | Buddhist Framework |
-|---|---|
-| Problem solving | Ariyasacca 4 (Four Noble Truths) |
-| Functional requirements | Magga 8 (Noble Eightfold Path) |
-| System architecture | Khandha 5 (Five Aggregates) |
-| State & impermanence | Tilakkhaṇa (Three Marks) |
-| Failure analysis | Paṭiccasamuppāda (Dependent Origination) |
-| Audit logging | Kamma 3 (Three Doors of Action) |
-| Observability | Satipaṭṭhāna 4 (Four Foundations) |
-| Agent lifecycle | Bhāvanā 4 (Four Cultivations) |
-| Self-improvement | Paññā 3 (Three Roots of Wisdom) |
-| Capability maturity | Ariya-dhana 7 (Seven Noble Treasures) |
-| Error UX | Brahmavihāra 4 (Four Divine Abidings) |
-| Inter-agent trust | Kalyāṇamitta 7 (Seven Qualities of a Good Friend) |
-| Threat modeling | Taṇhā 3 (Three Cravings) |
-| Baseline security | Sīla 5 (Five Precepts) |
-| Fleet governance | Aparihāniya-dhamma 7 (Seven Non-Decline Principles) |
+| Engineering Problem     | Buddhist Framework                                  |
+| ----------------------- | --------------------------------------------------- |
+| Problem solving         | Ariyasacca 4 (Four Noble Truths)                    |
+| Functional requirements | Magga 8 (Noble Eightfold Path)                      |
+| System architecture     | Khandha 5 (Five Aggregates)                         |
+| State & impermanence    | Tilakkhaṇa (Three Marks)                            |
+| Failure analysis        | Paṭiccasamuppāda (Dependent Origination)            |
+| Audit logging           | Kamma 3 (Three Doors of Action)                     |
+| Observability           | Satipaṭṭhāna 4 (Four Foundations)                   |
+| Agent lifecycle         | Bhāvanā 4 (Four Cultivations)                       |
+| Self-improvement        | Paññā 3 (Three Roots of Wisdom)                     |
+| Capability maturity     | Ariya-dhana 7 (Seven Noble Treasures)               |
+| Error UX                | Brahmavihāra 4 (Four Divine Abidings)               |
+| Inter-agent trust       | Kalyāṇamitta 7 (Seven Qualities of a Good Friend)   |
+| Threat modeling         | Taṇhā 3 (Three Cravings)                            |
+| Baseline security       | Sīla 5 (Five Precepts)                              |
+| Fleet governance        | Aparihāniya-dhamma 7 (Seven Non-Decline Principles) |
 
 ---
 
@@ -77,21 +96,27 @@ Buddhist thinking addresses areas where Western engineering frameworks (DDD, Cle
 Organized into six groups — see [`PHILOSOPHY.en.md`](modules/agent-template/docs/en/PHILOSOPHY.en.md) for full mappings.
 
 ### A — Process
+
 Ariyasacca 4 · Magga 8 · Khandha 5
 
 ### B — State
+
 Tilakkhaṇa · Paṭiccasamuppāda · Kamma 3
 
 ### C — Growth
+
 Iddhipāda 4 · Bhāvanā 4 · Paññā 3 · Ariya-dhana 7
 
 ### D — Relational
+
 Sappurisadhamma 7 · Saṅgahavatthu 4 · Sāraṇīyadhamma 6 · Brahmavihāra 4 · Kalyāṇamitta 7
 
 ### E — Discipline
+
 Yoniso Manasikāra · Acinteyya 4 · Satipaṭṭhāna 4 · Padhāna 4
 
 ### F — Governance
+
 Aparihāniya-dhamma 7 · Taṇhā 3 · Sīla 5
 
 ---
@@ -133,25 +158,30 @@ Aparihāniya-dhamma 7 · Taṇhā 3 · Sīla 5
 ## Five Principles to Know First
 
 ### 1. Yoniso Manasikāra — Verify Before Act
+
 Memory is a past claim. Verify against present state before acting on it.
 
 ### 2. Mattaññutā — Right Amount
+
 `MEMORY.md` ≤ 200 lines. Forces selection of what actually matters.
 
 ### 3. Anattā — Non-Clinging
+
 Task done → cleanup worktree → delete branch. No attachment to past state.
 
 ### 4. Samānattatā — Equal Treatment
+
 All backends receive equal treatment. No vendor favoritism in tooling.
 
 ### 5. Sīla-sāmaññatā — Communal Convention
+
 All agents run under the same rules via `conventions.md` and a neutrality check.
 
 ---
 
 ## Repository & Workspace Layout
 
-Two distinct trees the project deals with: **(A)** this repository — what a contributor clones; and **(B)** a *user workspace* — what `bwoc init` creates on a user's machine. They are not the same thing.
+Two distinct trees the project deals with: **(A)** this repository — what a contributor clones; and **(B)** a _user workspace_ — what `bwoc init` creates on a user's machine. They are not the same thing.
 
 ### A. The BWOC framework repository
 
@@ -308,15 +338,15 @@ Yes — keep the technical skeleton. You lose the unified "why" behind design de
 
 BWOC is specification-first. The reference implementation is a native, cross-platform Rust toolchain.
 
-| Surface | Stack | Platforms |
-|---|---|---|
-| Specification | Markdown (two-tier: plain for `AGENTS.md`, Obsidian-flavored elsewhere) | — |
-| `bwoc` CLI | Rust, single static binary | **macOS · Linux · Windows** |
-| `bwoc-agent` runtime (ships with each incarnated agent) | Rust, single static binary | **macOS · Linux · Windows** |
-| CLI i18n (output strings) | Project Fluent (`.ftl` per locale) | **Ships with TH · EN**; pluggable for any future language |
-| Backend integration | Subprocess of the LLM's own CLI — Claude Code, Antigravity CLI, Codex CLI, Kimi CLI | Whatever the backend supports |
-| Distribution | GitHub Release binaries with SHA-256 checksums; `cargo install --git` from source (crates.io publish targeted for 1.0) | — |
-| License | MIT (see [`LICENSE`](LICENSE)) | — |
+| Surface                                                 | Stack                                                                                                                  | Platforms                                                 |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| Specification                                           | Markdown (two-tier: plain for `AGENTS.md`, Obsidian-flavored elsewhere)                                                | —                                                         |
+| `bwoc` CLI                                              | Rust, single static binary                                                                                             | **macOS · Linux · Windows**                               |
+| `bwoc-agent` runtime (ships with each incarnated agent) | Rust, single static binary                                                                                             | **macOS · Linux · Windows**                               |
+| CLI i18n (output strings)                               | Project Fluent (`.ftl` per locale)                                                                                     | **Ships with TH · EN**; pluggable for any future language |
+| Backend integration                                     | Subprocess of the LLM's own CLI — Claude Code, Antigravity CLI, Codex CLI, Kimi CLI                                    | Whatever the backend supports                             |
+| Distribution                                            | GitHub Release binaries with SHA-256 checksums; `cargo install --git` from source (crates.io publish targeted for 1.0) | —                                                         |
+| License                                                 | MIT (see [`LICENSE`](LICENSE))                                                                                         | —                                                         |
 
 The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, no Docker required to incarnate or run an agent.
 
@@ -324,7 +354,7 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 ## Status
 
-**Current phase:** Phase 3 — *sammā-vācā inter-agent messaging* — actively shipping. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — *ṭhiti operations* — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
+**Current phase:** Phase 3 — _sammā-vācā inter-agent messaging_ — actively shipping. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — _ṭhiti operations_ — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
 
 **First public release:** [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) shipped 2026-05-23 with cross-platform binaries for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`. CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`; SHA-256 checksums shipped alongside each binary.
 
@@ -333,19 +363,19 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 - **Kalyāṇamitta-7 trust — all 5 implementation steps complete.** Recipients declare 7 booleans + an opt-in `requiredTrust` list in `config.manifest.json`; `bwoc check` verifies each declaration against repo evidence; `bwoc trust <agent>` reads a peer's profile; `bwoc-agent --serve` refuses inbox envelopes from senders missing required qualities (behind `BWOC_TRUST_GATING=1` env opt-in, v1 safety), writing refusals to a sidecar log that `bwoc inbox` joins at read time. Spec: [`interconnect/trust.md`](modules/agent-template/interconnect/trust.md). See [`notes/2026-05-23_trust-step-4.md`](notes/2026-05-23_trust-step-4.md).
 - **Agent → agent messaging (sammā-vācā Phase 1).** `bwoc send --from <agent>` writes a real sender identity into the envelope; the recipient daemon's trust gate already verifies against that sender's manifest (from trust step 4). **Sāraṇīyadhamma 6** norms in [`interconnect/messaging.md`](modules/agent-template/interconnect/messaging.md) (+ `.th.md`). See [`notes/2026-05-23_agent-to-agent-messaging.md`](notes/2026-05-23_agent-to-agent-messaging.md).
 - **Phase 4 fleet-governance spec (Aparihāniya-dhamma 7).** [`docs/en/FLEET-GOVERNANCE.en.md`](docs/en/FLEET-GOVERNANCE.en.md) (+ `.th.md`) — seven non-decline conditions from DN 16 mapped to workspace-level operator practices (regular `bwoc list` cadence, coordinated start/stop, schemaVersion discipline, template-version honoring, refusal-respect, shared-resource ownership, senior-agent protection). v1 ships observable signals; v2 may promote signals to gates. See [`notes/2026-05-23_phase-4-fleet-governance.md`](notes/2026-05-23_phase-4-fleet-governance.md).
-- **`bwoc check` becomes dual-mode** (template vs incarnation). The check reads `manifest.name` to decide what to assert: template-mode keeps the existing behavior (placeholders present + neutrality rules); incarnation-mode asserts placeholders are *gone* (except runtime `{{taskId}}`) and skips neutrality rules (those guard the scaffold, not per-agent commitments). Closes a latent bug where un-personalized agents silently passed. See [`notes/2026-05-23_check-dual-mode-and-personalize.md`](notes/2026-05-23_check-dual-mode-and-personalize.md).
+- **`bwoc check` becomes dual-mode** (template vs incarnation). The check reads `manifest.name` to decide what to assert: template-mode keeps the existing behavior (placeholders present + neutrality rules); incarnation-mode asserts placeholders are _gone_ (except runtime `{{taskId}}`) and skips neutrality rules (those guard the scaffold, not per-agent commitments). Closes a latent bug where un-personalized agents silently passed. See [`notes/2026-05-23_check-dual-mode-and-personalize.md`](notes/2026-05-23_check-dual-mode-and-personalize.md).
 - **`agents/agent-pi/` + `agents/agent-oracle/` personalized.** Both now pass `bwoc check` with 0 violations.
 
-| Area | Status |
-|---|---|
-| Specification (Philosophy, PRD, SRS, Threat) | Ready |
-| Lifecycle, Observability, Failure, Improvement | Ready |
-| Coordination, Governance | Ready |
-| Kalyāṇamitta-7 trust (manifest + check + read + daemon refusal) | **Phase 3 ✓ (behind `BWOC_TRUST_GATING=1`)** |
-| `bwoc` CLI (Rust, macOS · Linux · Windows · CI matrix green) | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress** |
-| `bwoc-agent` runtime (Rust; `--serve` daemon on Unix) | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress** |
-| Reference agents (`agent-pi`, `agent-oracle`) | **Phase 3 ✓ (incarnated + personalized + `bwoc check` clean)** |
-| Fleet dashboard (`bwoc dashboard` TUI) | **Phase 2 ✓** |
+| Area                                                            | Status                                                         |
+| --------------------------------------------------------------- | -------------------------------------------------------------- |
+| Specification (Philosophy, PRD, SRS, Threat)                    | Ready                                                          |
+| Lifecycle, Observability, Failure, Improvement                  | Ready                                                          |
+| Coordination, Governance                                        | Ready                                                          |
+| Kalyāṇamitta-7 trust (manifest + check + read + daemon refusal) | **Phase 3 ✓ (behind `BWOC_TRUST_GATING=1`)**                   |
+| `bwoc` CLI (Rust, macOS · Linux · Windows · CI matrix green)    | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress**                |
+| `bwoc-agent` runtime (Rust; `--serve` daemon on Unix)           | **Phase 1 ✓ · Phase 2 ✓ · Phase 3 in progress**                |
+| Reference agents (`agent-pi`, `agent-oracle`)                   | **Phase 3 ✓ (incarnated + personalized + `bwoc check` clean)** |
+| Fleet dashboard (`bwoc dashboard` TUI)                          | **Phase 2 ✓**                                                  |
 
 For the full phase-by-phase plan with completed / in-progress / remaining items, see [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) (Thai: [`docs/th/ROADMAP.th.md`](docs/th/ROADMAP.th.md)).
 

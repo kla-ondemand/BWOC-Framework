@@ -1,5 +1,7 @@
 ---
-title: BWOC Framework Documentation
+title: Home
+nav_order: 1
+permalink: /
 ---
 
 # BWOC Framework — Documentation

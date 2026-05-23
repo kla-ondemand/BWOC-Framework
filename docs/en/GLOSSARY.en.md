@@ -1,3 +1,9 @@
+---
+title: Glossary
+parent: English
+nav_order: 5
+---
+
 # Glossary — Pali Terms in BWOC
 
 This is the fast-lookup reference for every Pali term used in BWOC. Each entry gives the **engineering meaning in one line**. For the full mapping (which framework owns the term, what it determines, how it composes with others), see [`PHILOSOPHY.en.md`](../../modules/agent-template/docs/en/PHILOSOPHY.en.md).

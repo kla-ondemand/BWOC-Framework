@@ -1,3 +1,9 @@
+---
+title: Architecture
+parent: English
+nav_order: 1
+---
+
 # Architecture
 
 How the BWOC framework, the agent template, incarnated agents, the CLI, and the runtime fit together — at the level of files, processes, and information flow.

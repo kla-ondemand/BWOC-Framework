@@ -1,3 +1,9 @@
+---
+title: การถือกำเนิด
+parent: ภาษาไทย
+nav_order: 2
+---
+
 # การ Incarnation
 
 วิธีสร้าง BWOC agent ใหม่จาก template — เริ่มต้นจนถึง commit แรกภายในไม่ถึง 30 นาที

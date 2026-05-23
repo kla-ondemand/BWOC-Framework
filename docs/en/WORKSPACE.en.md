@@ -1,3 +1,9 @@
+---
+title: Workspace
+parent: English
+nav_order: 3
+---
+
 # Workspace
 
 A **workspace** is a directory that holds one or more BWOC agents plus the metadata the CLI needs to operate on them coherently. The CLI accepts a user-specified workspace path. **Operational commands refuse to run until the workspace is structurally complete** (fail-fast, with an actionable error).

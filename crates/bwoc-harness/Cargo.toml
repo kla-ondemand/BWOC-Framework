@@ -1,6 +1,6 @@
 [package]
 name = "bwoc-harness"
-description = "BWOC self-hosted agentic harness — OpenAI-compatible provider, agentic loop, core tools. Dev-only P1 (no safety guardrails yet)."
+description = "BWOC self-hosted agentic harness — OpenAI-compatible provider, agentic loop, core tools, P3 task queue + telemetry + tool-auth."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,24 @@ repository.workspace = true
 name = "bwoc-harness"
 path = "src/main.rs"
 
+# ---------------------------------------------------------------------------
+# Feature flags
+# ---------------------------------------------------------------------------
+[features]
+# Optional OpenTelemetry export.  The default build has ZERO OTEL deps.
+# Enable with: cargo build --features otel
+# The exporter is a stub in P3; a real exporter is wired in P4.
+otel = []
+
 [dependencies]
-# Async runtime — required for streaming + concurrent tool execution
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
+# Lean shared types — bwoc-core carries only serde/toml/thiserror.
+# This dep does NOT violate the dep-quarantine invariant.
+bwoc-core = { path = "../bwoc-core" }
+
+# Async runtime — required for streaming + concurrent tool execution + queue
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "time"] }
+# Cancellation token for the task queue (CancellationToken is in the default feature set)
+tokio-util = "0.7"
 # HTTP client for OpenAI-compat endpoint
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 # Serialization
@@ -33,8 +48,12 @@ async-trait = "0.1"
 # TOML config parsing for .bwoc/harness-policy.toml
 toml = "0.8"
 
+# OS keyring — scoped credential store for tool authentication.
+# Heavy dep (platform integration): lives in bwoc-harness ONLY per dep-quarantine.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+
 [dev-dependencies]
 # HTTP mock server for offline provider tests
 wiremock = "0.6"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tempfile = "3"

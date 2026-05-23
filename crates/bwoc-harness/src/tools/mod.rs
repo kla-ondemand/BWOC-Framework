@@ -9,9 +9,11 @@
 //! the working directory is rejected with [`HarnessError::PathEscape`].
 //! Full sandbox (OS-level, allowlist, env scrub) is P2.
 
+pub mod auth;
 pub mod impls;
 pub mod registry;
 
+pub use auth::{CredentialBroker, CredentialRequest, InMemoryCredentialStore, ResolvedCredentials};
 pub use impls::{ListDir, ReadFile, RunCommand, WriteFile};
 pub use registry::ToolRegistry;
 

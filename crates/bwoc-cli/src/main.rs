@@ -428,6 +428,17 @@ struct SendArgs {
     /// See modules/agent-template/interconnect/messaging.md.
     #[arg(long = "from")]
     from: Option<String>,
+    /// Thread this send as a reply to a prior envelope. Value is the prior
+    /// envelope's `messageId` ("msg-<slug>-<hex>"). Stamped as `replyTo`
+    /// in the new envelope; the auto-reply Stop hook uses this to close
+    /// a request/response loop.
+    #[arg(long = "reply-to")]
+    reply_to: Option<String>,
+    /// Skip the best-effort tmux send-keys wakeup ping. CI, daemons, and
+    /// the auto-reply hook pass this to avoid side-effecting into a TUI
+    /// session that didn't ask for an interruption.
+    #[arg(long = "no-wakeup")]
+    no_wakeup: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -451,6 +462,8 @@ impl SendArgs {
             to: self.to,
             message: body,
             from: self.from,
+            reply_to: self.reply_to,
+            no_wakeup: self.no_wakeup,
             workspace: self.workspace,
         })
     }

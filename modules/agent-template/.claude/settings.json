@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/inbox-auto-reply.sh 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

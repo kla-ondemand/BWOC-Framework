@@ -10,6 +10,16 @@ Phase 3 work in progress beyond the v2026.5.23-1 release. Items shipped here wil
 
 ### Added
 
+**Inbox tmux wakeup + Stop-hook auto-reply (ported from `it-app-workspace/bin`)**
+
+- **Envelope schema** — `inbox.jsonl` envelopes now carry `messageId` (always, format `msg-YYYYMMDDTHHMMSSZ-<5hex>`) and optional `replyTo`. Both fields are additive — `serde_json::Value` readers in the daemon and `bwoc inbox` ignore them silently, so no behavior change for existing flows. Mattaññutā — required-field set unchanged.
+- **`bwoc send` flags** — new `--reply-to <msg-id>` threads a reply; new `--no-wakeup` skips the tmux ping for CI/daemon callers. Env opt-out `BWOC_DISABLE_TMUX_WAKEUP=1` for process-wide suppression (used by tests).
+- **Native tmux wakeup** — after a successful inbox append, `bwoc send` attempts `tmux send-keys -t <bare-name>` of the marker `[bwoc inbox <msg-id> from <sender>] <message>`. Two-step submit (text → 200 ms → Enter) for the Claude TUI input quirk. Silent skip when tmux is absent or no session matches — daemon poll remains the source-of-truth delivery path.
+- **Stop-hook auto-reply** — `modules/agent-template/.claude/hooks/inbox-auto-reply.sh` (new) is a Claude Code Stop hook: reads transcript, detects the inbox marker in the last user prompt, posts the last assistant text back to the original sender with `--reply-to`. Wired via `modules/agent-template/.claude/settings.json` (also new). Backend neutrality: hook is Claude-specific by event-surface; analog paths for AGY / CODEX / KIMI deferred — protocol is shared.
+- **Docs** — `modules/agent-template/interconnect/messaging.md` + `.th.md` gain §Envelope Schema field table, `--reply-to` / `--no-wakeup` CLI rows, and a new §Wakeup & Auto-Reply explaining the two-half design (native tmux + Stop hook) plus the per-backend deferral matrix.
+
+See [`notes/2026-05-23_inbox-wakeup-and-auto-reply.md`](notes/2026-05-23_inbox-wakeup-and-auto-reply.md).
+
 **Phase 4 — Fleet governance spec (Aparihāniya-dhamma 7)**
 
 - **`docs/en/FLEET-GOVERNANCE.en.md` + `.th.md`** — new framework-root operator-facing spec. Seven non-decline conditions from DN 16 (Mahāparinibbāna Sutta, §1.4 — the Vajjī teaching) mapped to workspace-level fleet operations: (1) regular meetings → `bwoc list` cadence; (2) coordinated start/end → `bwoc doctor` + `bwoc workspace prune`; (3) process-bound convention change → `schemaVersion` discipline; (4) honor template version → `bwoc check --all` version-lag flag; (5) protect vulnerable → respect recipient refusals, don't relax `requiredTrust`; (6) honor shared resources → `agents.toml` + `workspace.toml` + template are operator-owned; (7) protect senior agents → audit trust-dependency before `bwoc retire`. Each condition lists an observable signal (existing query) and a suggested operator practice. v1 is descriptive (signals, not gates); v2 may promote signals to gates as telemetry justifies. **Phase 4 is structurally an ecosystem-viability phase** (external-adoption goals); this spec closes the one Phase-4 line item the framework itself owns. PHILOSOPHY.en.md / `.th.md` cross-reference updated to point to the new location. ROADMAP §Phase 4 gains a "Shipped" subsection. See [`notes/2026-05-23_phase-4-fleet-governance.md`](notes/2026-05-23_phase-4-fleet-governance.md).

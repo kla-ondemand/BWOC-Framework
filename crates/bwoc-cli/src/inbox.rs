@@ -492,9 +492,7 @@ fn read_envelopes_with_offsets(
         match serde_json::from_str::<serde_json::Value>(trimmed) {
             Ok(v) => out.push((line_offset, v)),
             Err(e) => {
-                eprintln!(
-                    "bwoc inbox: warning — line {lineno} is malformed JSON, skipped ({e})"
-                );
+                eprintln!("bwoc inbox: warning — line {lineno} is malformed JSON, skipped ({e})");
             }
         }
     }
@@ -661,9 +659,8 @@ mod tests {
                 r#"{"ts":"t2","from":"agent-x","to":"agent-alpha","message":"b"}"#,
             ],
         );
-        let pairs =
-            read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
-                .unwrap();
+        let pairs = read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
+            .unwrap();
         assert_eq!(pairs.len(), 2);
         // First line starts at byte 0.
         assert_eq!(pairs[0].0, 0);
@@ -686,9 +683,8 @@ mod tests {
             ],
         );
         // Figure out where line 2 starts.
-        let pairs =
-            read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
-                .unwrap();
+        let pairs = read_envelopes_with_offsets(&root.join("agents/agent-alpha/.bwoc/inbox.jsonl"))
+            .unwrap();
         let line2_offset = pairs[1].0;
         let refusal_line = format!(
             r#"{{"ts":"refusal-ts","envelopeOffset":{line2_offset},"envelopeTs":"t2","envelopeFrom":"agent-x","reason":"missing_trust","missing":["vatta"]}}"#

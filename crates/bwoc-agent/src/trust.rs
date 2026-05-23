@@ -38,10 +38,7 @@ impl TrustContext {
             .as_ref()
             .map(|t| t.required_trust.clone())
             .unwrap_or_default();
-        let gating_enabled = std::env::var("BWOC_TRUST_GATING")
-            .ok()
-            .as_deref()
-            == Some("1");
+        let gating_enabled = std::env::var("BWOC_TRUST_GATING").ok().as_deref() == Some("1");
         let workspace_root = find_workspace_root(cwd);
         Self {
             required,
@@ -93,11 +90,7 @@ impl Refusal {
 /// `envelope_offset` is the byte offset of the envelope's line within
 /// `inbox.jsonl` — it's the join key `bwoc inbox` uses when overlaying
 /// refusals onto the envelope view.
-pub fn evaluate(
-    ctx: &TrustContext,
-    envelope_line: &str,
-    envelope_offset: u64,
-) -> Option<Refusal> {
+pub fn evaluate(ctx: &TrustContext, envelope_line: &str, envelope_offset: u64) -> Option<Refusal> {
     if ctx.is_inert() {
         return None;
     }

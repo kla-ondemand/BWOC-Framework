@@ -46,12 +46,27 @@ Envelope บน disk = 1 บรรทัด JSONL ต่อหนึ่งข้
 
 ```json
 {
-  "ts":      "<ISO 8601 UTC>",
-  "from":    "user" | "agent-<sender-name>",
-  "to":      "agent-<recipient-name>",
-  "message": "<UTF-8 text>"
+  "ts":        "<ISO 8601 UTC>",
+  "messageId": "msg-<utc-slug>-<5hex>",
+  "from":      "user" | "agent-<sender-name>",
+  "to":        "agent-<recipient-name>",
+  "message":   "<UTF-8 text>",
+  "replyTo":   "msg-..."            // optional — เฉพาะเมื่อเป็นการตอบกลับ
 }
 ```
+
+ความหมายของแต่ละฟิลด์:
+
+| ฟิลด์ | จำเป็น? | จุดประสงค์ |
+|---|---|---|
+| `ts` | ใช่ | ISO 8601 UTC ของการส่ง |
+| `messageId` | ใช่ (ตั้งแต่ v2.0.x) | id ที่เสถียรสำหรับ threading + audit รูปแบบ: `msg-YYYYMMDDTHHMMSSZ-<5hex>` `bwoc send` สร้างให้ — caller ไม่ต้องส่งเอง |
+| `from` | ใช่ | identity ผู้ส่ง (ตามตารางด้านล่าง) |
+| `to` | ใช่ | ผู้รับ `agent-<name>` |
+| `message` | ใช่ | UTF-8 body |
+| `replyTo` | optional | `messageId` ของ envelope ก่อนหน้าเมื่อ send นี้เป็นการตอบกลับ stamp ผ่าน `bwoc send --reply-to <id>` — ขาดหายในรอบแรก |
+
+Backward compatibility: reader เก่าที่ parse envelope เป็น `serde_json::Value` จะ ignore `messageId` กับ `replyTo` แบบเงียบๆ — ไม่มี behavior change สำหรับ inbox watch และ refusal path ของ daemon มัตตัญญุตา — เพิ่มแบบ additive ไม่กระทบ required fields
 
 ความหมายของ `from` ตามค่า:
 
@@ -66,8 +81,10 @@ Envelope บน disk = 1 บรรทัด JSONL ต่อหนึ่งข้
 ## CLI Surface
 
 ```
-bwoc send <to> <message>                    # from=user (default)
-bwoc send <to> <message> --from <agent>     # from=agent-<name>
+bwoc send <to> <message>                          # from=user (default)
+bwoc send <to> <message> --from <agent>           # from=agent-<name>
+bwoc send <to> <message> --reply-to <msg-id>      # ตอบกลับแบบ thread
+bwoc send <to> <message> --no-wakeup              # ข้าม tmux ping
 ```
 
 กฎ resolution ของ `--from`:
@@ -76,6 +93,64 @@ bwoc send <to> <message> --from <agent>     # from=agent-<name>
 - `config.manifest.json` ของผู้ส่ง **ต้อง** อ่านได้ ถ้าอ่านไม่ได้ → exit 1
 
 Daemon ฝั่งผู้รับ resolve manifest ของผู้ส่งใหม่ตอน envelope มาถึง — ฉะนั้นผู้ส่งที่เปลี่ยน declaration ระหว่าง `send` กับ `inbox poll` จะถูกประเมินด้วยสถานะ *ปัจจุบัน* (trust เป็น property ของ claim ปัจจุบัน ไม่ใช่ของเวลาที่ส่ง)
+
+กฎ resolution ของ `--reply-to`:
+- ค่าคือ `messageId` ของ envelope ก่อนหน้า (รับ string ใดก็ได้ที่ recipient เคย emit — framework ไม่ validate ว่ามีอยู่จริง ผู้รับ thread จาก lookup ไม่ใช่ foreign-key constraint)
+- ถูก stamp ลงใน envelope ใหม่เป็น `replyTo` Stop hook (ดู §Wakeup & Auto-Reply) ใช้ฟิลด์นี้ปิด loop ของ request/response
+
+`--no-wakeup` ปิด tmux send-keys ping แบบ best-effort ตามที่อธิบายในหัวข้อถัดไป CI, daemons และ auto-reply hook เองตั้ง flag นี้เพื่อไม่ให้ caller แบบ non-interactive ไป side-effect TUI session ที่ไม่ได้ขอให้ขัดจังหวะ ผลแบบ process-wide ได้จาก env `BWOC_DISABLE_TMUX_WAKEUP` (test suite ใช้ตัวนี้)
+
+## Wakeup & Auto-Reply
+
+Daemon poll ของผู้รับ surface envelope ตาม cadence ของตัวเอง แต่มี 2 กรณีที่ต้องการ latency ต่ำ: peer ที่รออันตอบโต้เชิง interactive และ multi-agent flow ที่ orchestrator ต้องการให้ prompt ของมันเข้าใน assistant turn ถัดไปแทนที่จะรอ poll interval
+
+Framework ให้ครึ่งหนึ่งเป็น native Rust (`bwoc send`) และอีกครึ่งเป็น Claude Code Stop hook ที่ bundle ไปกับ template ทั้งสองเป็น opt-in โดยธรรมชาติ — ทำงานเมื่อเงื่อนไขเป็นจริง, degrade เป็น no-op เงียบๆ เมื่อไม่ใช่
+
+### 1. Native tmux wakeup (`bwoc send`)
+
+หลังจาก `bwoc send` append ลง `inbox.jsonl` ของผู้รับ มันจะลอง tmux send-keys ping แบบ best-effort:
+
+| เงื่อนไข | พฤติกรรม |
+|---|---|
+| ผู้รับเป็น `agent-<x>` และ `tmux has-session -t <x>` สำเร็จ | ส่ง marker เป็น input → sleep 200 ms → ส่ง `Enter` |
+| ผู้รับเป็น `user` หรือค่าอื่นที่ไม่ใช่ `agent-*` | ข้ามเงียบๆ |
+| ไม่มี binary `tmux` ใน `PATH` | ข้ามเงียบๆ |
+| caller ส่ง `--no-wakeup` หรือมี env `BWOC_DISABLE_TMUX_WAKEUP` | ข้ามเงียบๆ |
+
+Marker line เป็น:
+
+```
+[bwoc inbox <messageId> from <sender>] <message body>
+```
+
+Convention: codename `agent-<x>` แมปไปยัง tmux session `<x>` Operator ที่ต้องการ feature นี้ wrap `bwoc spawn` ด้วย tmux session ที่ชื่อเดียวกับ bare name ของ agent (ไม่มี prefix `agent-`) เมื่อไม่มี wrap → wakeup เป็น no-op — daemon poll ก็ยัง deliver envelope อยู่ดี
+
+การส่งแบบ 2 ขั้น (text → 200 ms → Enter) จำเป็น: `send-keys -l "text\n"` ครั้งเดียวจะถูก TUI input layer ของ Claude Code drop ทิ้ง — workaround เดียวกับ pattern ต้นทาง `it-app-workspace/bin/agent-send` ที่ port มา
+
+### 2. Stop hook auto-reply (Claude Code, bundle กับ template)
+
+`modules/agent-template/.claude/hooks/inbox-auto-reply.sh` เป็น Claude Code [`Stop` hook](https://docs.anthropic.com/en/docs/claude-code/hooks) ที่ wire ผ่าน `.claude/settings.json` ของ template เมื่อ turn จบ มันจะ:
+
+1. Loop-guard ด้วย `stop_hook_active`
+2. เดินขึ้นจาก `cwd` หา `config.manifest.json` ของ agent ตัวเอง อ่าน `agentId`
+3. Scan transcript หา user message ล่าสุด match regex `\[bwoc inbox (msg-[\w.-]+) from ([\w-]+)\]`
+4. รวบ assistant text ล่าสุดหลัง user prompt ที่ทำเครื่องหมาย (cap 4000 ตัวอักษร)
+5. Shell ออกไป `bwoc send --from <self> --reply-to <id> --no-wakeup <sender> "<reply>"`
+
+ข้ามเงียบๆ เมื่อ: ไม่มี marker, sender เป็น `user`, อ่าน manifest ไม่ได้, หรือไม่มี assistant text การ fail ของ `bwoc send` ถูกเก็บไว้ (`|| true` ใน wrapper) — hook ไม่บล็อกการจบ turn ของ Claude Code
+
+### Backend neutrality
+
+Hook เป็น Claude-specific เพราะ `Stop` event surface เป็น Claude-specific Contract เดียวกัน — *parse inbox marker, post reply ด้วย `--reply-to`* — ใช้กับ backend อื่นได้ equivalents จะ land ใน hook configuration ของแต่ละตัว:
+
+| Backend | event analog | hook target |
+|---|---|---|
+| Claude (Anthropic) | `Stop` hook | `.claude/hooks/inbox-auto-reply.sh` (ship แล้ว) |
+| Antigravity (Google) | tbd — ตาม hook surface ของ Antigravity | `.antigravity/hooks/...` (เลื่อน) |
+| Codex (OpenAI) | tbd — ตาม hook surface ของ Codex | เลื่อน |
+| Kimi (Moonshot) | tbd — ตาม hook surface ของ Kimi | เลื่อน |
+
+สมานัตตตา — equal treatment เชิงเจตนา Backend อื่นรับ protocol เดียวกันทันทีที่ hook surface ของมัน land — ไม่มี special-casing ใน `bwoc-cli`
 
 ## สาราณียธรรม 6 — กฎเชิงวิศวกรรม
 

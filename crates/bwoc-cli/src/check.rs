@@ -978,8 +978,7 @@ mod tests {
     // ---- Incarnation-mode audit end-to-end ----------------------------------
 
     fn write_temp_agent(label: &str, manifest_name: &str, agents_body: &str) -> std::path::PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("bwoc-check-{label}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("bwoc-check-{label}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("AGENTS.md"), agents_body).unwrap();
@@ -1015,7 +1014,8 @@ mod tests {
         );
         let report = audit(&root);
         let has_violation = report.violations.iter().any(|v| {
-            v.contains("unsubstituted placeholder") && (v.contains("{{agentId}}") || v.contains("{{agentRole}}"))
+            v.contains("unsubstituted placeholder")
+                && (v.contains("{{agentId}}") || v.contains("{{agentRole}}"))
         });
         assert!(
             has_violation,

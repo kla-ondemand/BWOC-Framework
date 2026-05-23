@@ -3,7 +3,12 @@
 //! User → agent inbox communication. Appends a JSON line to
 //! `<agent>/.bwoc/inbox.jsonl`. Each line is one message:
 //!
-//!   {"ts": "<ISO 8601 UTC>", "from": "user", "to": "<agent-id>", "message": "..."}
+//!   {"ts":"...","messageId":"msg-...","from":"user","to":"<agent-id>",
+//!    "message":"...","replyTo":"msg-..."?}
+//!
+//! `messageId` is always present (generated here). `replyTo` is present
+//! only when the caller passes `--reply-to` — typically the Stop hook
+//! at `modules/agent-template/.claude/hooks/inbox-auto-reply.sh`.
 //!
 //! Agent → agent messaging (the full sammā-vācā channel with
 //! Sāraṇīyadhamma 6 + Kalyāṇamitta 7 trust scoring) lands later.
@@ -14,6 +19,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use bwoc_core::workspace::AgentsRegistry;
 
@@ -25,6 +31,14 @@ pub struct SendArgs {
     /// workspace registry and write `from: <agentId>`. See
     /// `modules/agent-template/interconnect/messaging.md` §"CLI Surface".
     pub from: Option<String>,
+    /// When set, this envelope is a reply to a prior message. The value
+    /// is the prior envelope's `messageId`. Stamped into the envelope as
+    /// `replyTo` so recipients can thread, and used by the auto-reply
+    /// hook to close a request/response loop. See messaging.md §Wakeup.
+    pub reply_to: Option<String>,
+    /// Skip the best-effort tmux send-keys wakeup. CI/daemons set this
+    /// so non-interactive callers don't side-effect into a TUI session.
+    pub no_wakeup: bool,
     pub workspace: Option<PathBuf>,
 }
 
@@ -37,7 +51,9 @@ pub enum SendError {
     NoWorkspace,
     #[error("no agent named '{name}' in workspace {workspace}")]
     NotFound { name: String, workspace: PathBuf },
-    #[error("no sender agent named '{name}' in workspace {workspace} (--from must reference a registered agent)")]
+    #[error(
+        "no sender agent named '{name}' in workspace {workspace} (--from must reference a registered agent)"
+    )]
     SenderNotFound { name: String, workspace: PathBuf },
     #[error("empty message — pass non-empty text after the agent name")]
     EmptyMessage,
@@ -108,13 +124,17 @@ fn send(args: SendArgs) -> Result<(), SendError> {
     let inbox_path = bwoc_dir.join("inbox.jsonl");
 
     let ts = crate::util::utc_now_iso8601();
-    let envelope = serde_json::json!({
-        "ts": ts,
-        "from": from,
-        "to": entry.id,
-        "message": args.message,
-    });
-    let line = serde_json::to_string(&envelope)?;
+    let message_id = generate_message_id(&ts);
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("ts".into(), ts.clone().into());
+    envelope.insert("messageId".into(), message_id.clone().into());
+    envelope.insert("from".into(), from.clone().into());
+    envelope.insert("to".into(), entry.id.clone().into());
+    envelope.insert("message".into(), args.message.clone().into());
+    if let Some(rt) = args.reply_to.as_deref() {
+        envelope.insert("replyTo".into(), rt.into());
+    }
+    let line = serde_json::to_string(&serde_json::Value::Object(envelope))?;
 
     // Append-only — multiple `bwoc send` calls just stack lines. The
     // agent's daemon (when it reads inbox) is responsible for tracking
@@ -126,11 +146,84 @@ fn send(args: SendArgs) -> Result<(), SendError> {
         .open(&inbox_path)?;
     writeln!(f, "{line}")?;
 
+    // Best-effort tmux wakeup — see notify_tmux for the convention and
+    // the silent skip rules. Suppressed for CI/daemons via --no-wakeup
+    // or BWOC_DISABLE_TMUX_WAKEUP (the latter keeps tests quiet).
+    if !args.no_wakeup && std::env::var("BWOC_DISABLE_TMUX_WAKEUP").is_err() {
+        notify_tmux(&entry.id, &from, &message_id, &args.message);
+    }
+
+    let reply_suffix = match args.reply_to.as_deref() {
+        Some(rt) => format!(", reply to {rt}"),
+        None => String::new(),
+    };
     println!();
-    println!("Sent to {} (from {}): {}", entry.id, from, args.message);
+    println!(
+        "Sent to {} (from {from}) [id {message_id}{reply_suffix}]: {}",
+        entry.id, args.message,
+    );
     println!("  Inbox: {} (appended at {ts})", inbox_path.display());
     println!();
     Ok(())
+}
+
+/// Best-effort tmux send-keys ping that wakes a recipient TUI session.
+///
+/// Convention: recipient `agent-<x>` → tmux session `<x>`. The marker
+/// `[bwoc inbox <msg-id> from <sender>]` prefixes the message body so
+/// the Stop hook at `modules/agent-template/.claude/hooks/inbox-auto-reply.sh`
+/// can detect a bus-triggered turn and thread its reply via `--reply-to`.
+///
+/// Silent no-op when:
+/// - the recipient is not `agent-*` (topics, user-only flows)
+/// - `tmux` binary is missing
+/// - no tmux session matches the recipient's bare name
+///
+/// Two-step send (text → 200ms → Enter) — single-call submission gets
+/// dropped by Claude Code's TUI input layer; this is the upstream
+/// pattern from `it-app-workspace/bin/agent-send`.
+fn notify_tmux(to: &str, from: &str, msg_id: &str, message: &str) {
+    let Some(session) = to.strip_prefix("agent-") else {
+        return;
+    };
+    if std::process::Command::new("tmux")
+        .args(["has-session", "-t", session])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let notify = format!("[bwoc inbox {msg_id} from {from}] {message}");
+    let _ = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", session, "--", &notify])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let _ = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", session, "Enter"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Build a per-envelope id of the form `msg-<utc-slug>-<5hex>`.
+///
+/// `utc-slug` is the same instant as `ts` collapsed to `YYYYMMDDTHHMMSSZ`.
+/// The 5-hex suffix derives from sub-second nanos so two sends inside
+/// the same wallclock second still get distinct ids without pulling in
+/// a `rand` dependency (Mattaññutā — minimal deps).
+fn generate_message_id(ts: &str) -> String {
+    let slug: String = ts.chars().filter(|c| *c != '-' && *c != ':').collect();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let suffix = nanos & 0xF_FFFF;
+    format!("msg-{slug}-{suffix:05x}")
 }
 
 /// Normalize a user-supplied agent name to its canonical `agent-<name>`
@@ -205,6 +298,8 @@ mod tests {
             to: "alpha".into(),
             message: "hello".into(),
             from: None,
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -226,6 +321,8 @@ mod tests {
                 to: "alpha".into(),
                 message: msg.into(),
                 from: None,
+                reply_to: None,
+                no_wakeup: true,
                 workspace: Some(root.clone()),
             })
             .unwrap();
@@ -243,6 +340,8 @@ mod tests {
             to: "alpha".into(),
             message: "   ".into(),
             from: None,
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         });
         assert!(matches!(err, Err(SendError::EmptyMessage)));
@@ -256,6 +355,8 @@ mod tests {
             to: "zzz".into(),
             message: "x".into(),
             from: None,
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         });
         assert!(matches!(err, Err(SendError::NotFound { .. })));
@@ -301,6 +402,8 @@ mod tests {
             to: "alpha".into(),
             message: "peer message".into(),
             from: Some("beta".into()),
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -320,6 +423,8 @@ mod tests {
             to: "alpha".into(),
             message: "x".into(),
             from: Some("agent-beta".into()),
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -337,6 +442,8 @@ mod tests {
             to: "alpha".into(),
             message: "x".into(),
             from: Some("ghost".into()),
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         });
         assert!(
@@ -353,6 +460,8 @@ mod tests {
             to: "alpha".into(),
             message: "still works".into(),
             from: None,
+            reply_to: None,
+            no_wakeup: true,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -369,5 +478,62 @@ mod tests {
         assert_eq!(canonicalize("agent-foo"), "agent-foo");
         // Edge: a bare hyphen is unusual but still canonicalized
         assert_eq!(canonicalize("a"), "agent-a");
+    }
+
+    // ---- messageId + replyTo (messaging.md §Envelope Schema) ---------------
+
+    #[test]
+    fn send_stamps_message_id_into_envelope() {
+        let root = setup("msgid");
+        send(SendArgs {
+            to: "alpha".into(),
+            message: "hi".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(root.clone()),
+        })
+        .unwrap();
+        let line =
+            std::fs::read_to_string(root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        let msg_id = v["messageId"].as_str().expect("messageId stamped");
+        assert!(msg_id.starts_with("msg-"), "format: {msg_id}");
+        // shape: msg-YYYYMMDDTHHMMSSZ-XXXXX (5 hex)
+        let parts: Vec<&str> = msg_id.splitn(3, '-').collect();
+        assert_eq!(parts.len(), 3, "msg-<slug>-<hex>: {msg_id}");
+        assert_eq!(parts[2].len(), 5, "5-hex suffix: {msg_id}");
+        // replyTo absent when not requested
+        assert!(v.get("replyTo").is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn send_with_reply_to_round_trips_field() {
+        let root = setup("replyto");
+        send(SendArgs {
+            to: "alpha".into(),
+            message: "ack".into(),
+            from: None,
+            reply_to: Some("msg-20260523T000000Z-deadb".into()),
+            no_wakeup: true,
+            workspace: Some(root.clone()),
+        })
+        .unwrap();
+        let line =
+            std::fs::read_to_string(root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["replyTo"], "msg-20260523T000000Z-deadb");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn generate_message_id_collapses_separators_in_slug() {
+        let id = generate_message_id("2026-05-23T14:30:12Z");
+        assert!(id.starts_with("msg-20260523T143012Z-"), "got {id}");
+        // 5-hex tail
+        let tail = id.rsplit('-').next().unwrap();
+        assert_eq!(tail.len(), 5);
+        assert!(tail.chars().all(|c| c.is_ascii_hexdigit()), "hex: {id}");
     }
 }

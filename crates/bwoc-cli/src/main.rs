@@ -31,6 +31,7 @@ mod start;
 mod status;
 mod stop;
 mod supervise;
+mod trust;
 mod user_home;
 mod util;
 mod workspace;
@@ -108,6 +109,8 @@ enum Commands {
     Ping(PingArgs),
     /// Supervise an agent's daemon — restart on crash, exit cleanly when stopped.
     Supervise(SuperviseArgs),
+    /// Read an agent's Kalyāṇamitta-7 trust profile (declared + requiredTrust).
+    Trust(TrustArgs),
     /// Append a message to an agent's inbox (`.bwoc/inbox.jsonl`).
     Send(SendArgs),
     /// Chat with an agent — exec backend CLI with manifest-driven model.
@@ -489,6 +492,28 @@ impl From<SuperviseArgs> for supervise::SuperviseArgs {
             agent: a.agent,
             workspace: a.workspace,
             max_restarts_per_min: a.max_restarts_per_min,
+            json: a.json,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct TrustArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+impl From<TrustArgs> for trust::TrustArgs {
+    fn from(a: TrustArgs) -> Self {
+        Self {
+            agent: a.agent,
+            workspace: a.workspace,
             json: a.json,
         }
     }
@@ -1040,6 +1065,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Supervise(args)) => {
             let code = supervise::run(args.into());
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Trust(args)) => {
+            let code = trust::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Send(args)) => {

@@ -6,7 +6,7 @@ Phase-by-phase plan for BWOC. **Phases** describe implementation milestones; eac
 
 ## Current Status
 
-**Active phase:** Phase 2 — *ṭhiti operations* — in progress. Phase 1 v2.0 DoD met.
+**Active phase:** Phase 3 — *vaya + interconnect* — in progress. Phase 1 v2.0 and Phase 2 DoDs met. **BWOC 2.0** released as `v2026.5.23-2`.
 **Software-Version:** see [`VERSION.md`](../../VERSION.md).
 **Document-Version:** see [`VERSION.md`](../../VERSION.md).
 
@@ -104,12 +104,14 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 | `bwoc retire <name>` | Removes from registry; 3 file modes: default (delete dir), `--keep-files` (retain everything), `--keep-memory` (preserve just `memories/`, remove the rest — archives accumulated knowledge while letting the agent go). `--keep-files` and `--keep-memory` are clap-mutex. |
 | `bwoc workspace prune` | Reconciles phantom registry entries vs orphan agent dirs; `--apply` removes safe drift; `--json` emits `{ phantoms, orphans, applied, removed }` for CI gating. |
 | User → agent inbox (sammā-vācā Phase 0) | `bwoc send` + `bwoc inbox` ship as JSONL envelopes; foundation for agent → agent messaging. |
+| Kalyāṇamitta-7 trust (5 of 5 steps) | All implementation steps shipped 2026-05-23: (1) `bwoc-core::Manifest` deserialization, (2) `bwoc check` evidence verification, (3) `bwoc trust <agent> read`, (4) daemon-level refusal at inbox poll behind `BWOC_TRUST_GATING=1` with sidecar `inbox.refusals.jsonl` and `bwoc inbox` merge, (5) CHANGELOG roll-up + TH parity. Spec: [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md). |
+| Agent → agent messaging (sammā-vācā Phase 1) | `bwoc send --from <agent>` writes sender identity into envelope; recipient daemon's trust gate evaluates against sender's manifest; refusals surface via `bwoc inbox` JSON merge. **Sāraṇīyadhamma 6** norms in [`interconnect/messaging.md`](../../modules/agent-template/interconnect/messaging.md) (+ `.th.md`). |
+| Dual-mode `bwoc check` | Detects template (placeholder `manifest.name`) vs incarnation (real name). Template mode asserts placeholders exist + neutrality rules; incarnation mode asserts placeholders are gone (except runtime `{{taskId}}`) and skips neutrality checks. Closes the bug where un-personalized agents silently passed. |
 
 ### Remaining for Phase 3
 
 - **Full vaya** for `bwoc retire` — file modes shipped (default/--keep-files/--keep-memory); still pending: worktree cleanup (when worktreeBase set), branch release, interconnect deregistration (when interconnect lands).
-- **Agent → agent messaging** — Sammā-vācā channel proper; Sāraṇīyadhamma 6 cordiality rules.
-- **Trust scoring** — Kalyāṇamitta 7 qualities applied to capability declarations and message provenance. **Spec draft shipped 2026-05-23** at [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md) (7 declared booleans + `requiredTrust` array, verified by `bwoc check`; no Rust impl yet — 5-step implementation order documented).
+- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging. Spec mentions; implementation deferred until v1 telemetry justifies the lift.
 - **`.bwoc/interconnect/`** per-workspace routing config.
 - **Tier 2 memory backend reference implementation.**
 

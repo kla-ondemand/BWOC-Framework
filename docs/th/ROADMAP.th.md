@@ -6,7 +6,7 @@
 
 ## สถานะปัจจุบัน
 
-**Phase ที่ active:** Phase 2 — *การปฏิบัติ ฐิติ* — กำลังดำเนินการ DoD ของ Phase 1 v2.0 บรรลุแล้ว
+**Phase ที่ active:** Phase 3 — *วยะ + Interconnect* — กำลังดำเนินการ DoD ของ Phase 1 v2.0 และ Phase 2 บรรลุแล้ว **BWOC 2.0** release เป็น `v2026.5.23-2`
 **Software-Version:** ดู [`VERSION.md`](../../VERSION.md)
 **Document-Version:** ดู [`VERSION.md`](../../VERSION.md)
 
@@ -104,12 +104,14 @@
 | `bwoc retire <name>` | ลบจาก registry; file mode 3 แบบ: default (ลบ dir), `--keep-files` (เก็บทั้งหมด), `--keep-memory` (เก็บแค่ `memories/`, ลบที่เหลือ — archive ความรู้ที่ agent สั่งสมในขณะที่ปล่อย agent ไป) `--keep-files` กับ `--keep-memory` เป็น clap-mutex |
 | `bwoc workspace prune` | ปรับ phantom registry entries vs orphan agent dirs; `--apply` ลบ drift ที่ปลอดภัย; `--json` emit `{ phantoms, orphans, applied, removed }` สำหรับ CI gating |
 | User → agent inbox (สัมมาวาจา Phase 0) | `bwoc send` + `bwoc inbox` ship เป็น JSONL envelope; รากฐานสำหรับ agent → agent messaging |
+| Kalyāṇamitta 7 trust (5 จาก 5 ขั้น) | implementation ทุกขั้น ship แล้ว 2026-05-23: (1) deserialization ใน `bwoc-core::Manifest`, (2) `bwoc check` ตรวจหลักฐาน, (3) `bwoc trust <agent> read`, (4) refusal ระดับ daemon ที่ inbox poll หลัง `BWOC_TRUST_GATING=1` พร้อม sidecar `inbox.refusals.jsonl` และ `bwoc inbox` merge, (5) CHANGELOG roll-up + TH parity Spec: [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md) |
+| Agent → agent messaging (สัมมาวาจา Phase 1) | `bwoc send --from <agent>` เขียน sender identity ลง envelope; daemon ฝั่งผู้รับประเมินด้วย manifest ของ sender; refusals โผล่ผ่าน `bwoc inbox` JSON merge. กฎ **สาราณียธรรม 6** อยู่ใน [`interconnect/messaging.md`](../../modules/agent-template/interconnect/messaging.md) (+ `.th.md`) |
+| `bwoc check` แบบ dual-mode | ตรวจเทมเพลต (placeholder `manifest.name`) vs incarnation (ชื่อจริง) Template mode ยืนยันว่า placeholder ต้องมี + กฎ neutrality; incarnation mode ยืนยันว่า placeholder ต้องหายไป (ยกเว้น `{{taskId}}` ซึ่งเป็น runtime) และข้าม neutrality checks ปิด bug ที่ agent ยังไม่ personalize ผ่าน check แบบเงียบๆ |
 
 ### ที่เหลือสำหรับ Phase 3
 
 - **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — file mode ship แล้ว (default/--keep-files/--keep-memory); ที่ค้าง: worktree cleanup (เมื่อ set worktreeBase), branch release, interconnect deregistration (เมื่อ interconnect ship)
-- **Agent → agent messaging** — channel สัมมาวาจาจริง; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
-- **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ **Spec draft ship แล้ว 2026-05-23** ที่ [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md) (boolean 7 ค่า + array `requiredTrust` ตรวจสอบโดย `bwoc check`; ยังไม่มี Rust impl — ลำดับ implement 5 ขั้น document ไว้)
+- **Trust v2** — signed envelopes / identity proof, warn-by-default refusal mode, cross-workspace messaging Spec อ้างถึง; implementation เลื่อนจนกว่า telemetry ของ v1 จะ justify
 - **`.bwoc/interconnect/`** config routing ระดับ workspace
 - **Reference implementation ของ Tier 2 memory backend**
 

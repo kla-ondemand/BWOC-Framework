@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-Phase 3 work in progress beyond the v2026.5.23-1 release. Items shipped here will land in the next CalVer tag.
+_Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+ items continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+
+## [v2026.5.23-2] — 2026-05-23 — BWOC 2.0
+
+**First major version of the BWOC framework.** Significant capability stack on top of the v2026.5.23 baseline; one BREAKING backend rename (`gemini` → `antigravity`/`agy`). Cargo SemVer jumps `0.1.721` → `2.0.0` to mark the discontinuity. CalVer per [VERSION.md policy](VERSION.md#versioning-policy--dual-namespaces).
+
+### Highlights
+
+- **Kalyāṇamitta-7 trust system** — spec v1.1 + 4 implementation steps; permissive by default, opt-in gating via `BWOC_TRUST_GATING=1`.
+- **Agent → agent messaging** (Sammā-vācā Phase 1) — `--from` flag + Sāraṇīyadhamma 6 norms in `interconnect/messaging.md`.
+- **Inbox tmux wakeup + Stop-hook auto-reply** — sub-second turn latency; `messageId` always, `replyTo` optional.
+- **Phase 4 fleet governance spec** (Aparihāniya-dhamma 7, DN 16) — operator-facing.
+- **Dual-mode `bwoc check`** — distinguishes template from incarnation; closes silent-pass bug for un-personalized agents.
+- **`bwoc chat --ghostty`** + dashboard `g` hotkey for the new-window launcher.
+- **HITL cleanup pass** — `bwoc status --banner`, dashboard refusal badge, `start`/`stop` non-TTY consistency, Stop-hook failure surfacing.
+- **Auto-version hook** gains minor/major sentinel support via `scripts/queue-bump.sh`.
 
 ### Added
 
@@ -20,9 +35,76 @@ Phase 3 work in progress beyond the v2026.5.23-1 release. Items shipped here wil
 
 See [`notes/2026-05-23_inbox-wakeup-and-auto-reply.md`](notes/2026-05-23_inbox-wakeup-and-auto-reply.md).
 
+### Changed — BREAKING
+
+**Backend rename: `gemini` → `antigravity` (CLI `agy`)**
+
+- Google's Gemini CLI stops serving Google One / unpaid tiers on 2026-06-18 and the replacement coding CLI is **Antigravity** (`agy`), a multi-vendor router exposing Gemini, Claude, and GPT-OSS model families through one binary. Per [Samānattatā](modules/agent-template/docs/en/PHILOSOPHY.en.md), the framework follows the actual product surface — backend `gemini` is replaced by backend `antigravity` everywhere.
+- **Rust** (`crates/bwoc-cli`): `Backend::Gemini` → `Backend::Antigravity`, `cli_name()` returns `"agy"`, model list now covers `gemini-3.5-flash-*`, `gemini-3.1-pro-*`, `claude-{sonnet,opus}-4.6-thinking`, `gpt-oss-120b-medium`. All backend-symlink arrays (`check.rs`, `doctor.rs`, `status.rs`, `new.rs`, `dashboard.rs`) swap `GEMINI.md` → `AGY.md`. `bwoc check` `BACKEND_PHRASES` now flags `Antigravity will/can` (not `Gemini will/can`); `HARDCODED_MODELS` gains `gemini-3`, `gpt-oss`. 115 tests pass.
+- **Symlinks**: `GEMINI.md` deleted in `modules/agent-template/`, `agents/agent-pi/`, `agents/agent-oracle/`. `AGY.md → AGENTS.md` created in their place.
+- **Shell scripts**: `incarnate.sh` and `check-agent-neutrality.sh` updated to create / validate `AGY.md`; `HARDCODED_MODELS` and `BACKEND_PHRASES` mirror the Rust audit.
+- **Docs (EN + TH parity)**: VISION, README, SECURITY, ARCHITECTURE, INCARNATION, WORKSPACE at root; AGENTS.md, README.md, CLAUDE.md, conventions.md, neutrality.md, persona/README.md, OVERVIEW, SRS, plugins/README in `modules/`. All `GEMINI.md` → `AGY.md`, "Gemini CLI" → "Antigravity CLI", `backend = "gemini"` → `backend = "agy"`. Model identifiers in `gemini-*` form stay (still the model family; only the routing CLI changed).
+- **Migration**: existing agents with `GEMINI.md` symlinks remain functional only until `bwoc check` runs — the audit now expects `AGY.md`. Rename with `mv GEMINI.md AGY.md` or run `bwoc new --force` to regenerate. Existing `.bwoc/agents.toml` entries reading `backend = "gemini"` will fail to parse (no `Backend::Gemini` variant); edit to `backend = "agy"`.
+
+See [`notes/2026-05-23_antigravity-rename.md`](notes/2026-05-23_antigravity-rename.md).
+
+**Kalyāṇamitta-7 trust — all 5 implementation steps shipped**
+
+- **Trust spec v1.1** (`docs(spec)` `f815dbe`) — `modules/agent-template/interconnect/trust.md` + `.th.md` revised to incorporate Oracle + Pi review feedback on the v1 draft shipped 2026-05-23.
+- **Step 1 — core** (`feat(core)` `1c54cbc`) — `bwoc-core::Manifest` gains `TrustBlock` + `TrustDeclared`. Manifests now deserialize a `trust` section (7 booleans + optional `requiredTrust` array) with permissive defaults; existing manifests load unchanged.
+- **Step 2 — check** (`feat(check)` `ce3907f`) — `bwoc check` verifies Kalyāṇamitta-7 evidence: each declared trust boolean is cross-checked against the matching repo signal so the manifest cannot lie about itself.
+- **Step 3 — trust read** (`feat(cli)` `cd10a52`) — new `bwoc trust <agent> read` reports the declared trust block for an agent in the workspace; foundation for the step-4 inbox refusal gate.
+- **Step 4 — daemon refusal** (`feat(agent)` pending) — `bwoc-agent --serve` refuses inbox envelopes from senders missing required trust qualities, behind `BWOC_TRUST_GATING=1` env opt-in (v1 safety). Refusals are written to a sidecar `.bwoc/inbox.refusals.jsonl` (never modifying the original envelope — append-only auditability); `bwoc inbox` joins the sidecar at read time so `jq '.[] | select(.refused)'` works verbatim. `from=user` always passes per spec. New `bwoc-core::time` module promoted from `bwoc-cli::util` to share UTC ISO 8601 between CLI + agent. 19 new tests. See [`notes/2026-05-23_trust-step-4.md`](notes/2026-05-23_trust-step-4.md).
+- **Step 5 — this CHANGELOG roll-up.** Trust feature complete behind opt-in; v2 (warn-mode, identity proof) is a separate ROADMAP item.
+
+**`bwoc check` becomes dual-mode (template vs incarnation)**
+
+- **Mode detection** (`feat(check)` pending) — `bwoc check` now reads `config.manifest.json::name` to decide whether the target is the template (placeholder name like `{{name}}`) or an incarnated agent (real name). Template mode keeps the existing behavior (asserts placeholders + neutrality rules hold). Incarnation mode asserts the opposite: NO `{{xxx}}` placeholders survive (except `{{taskId}}`, whitelisted as runtime per Appendix A) AND skips the hardcoded-model / hardcoded-tool / backend-phrasing neutrality checks (those guard the scaffold, not the per-agent commitment). Fixed the latent bug where an incarnated-but-not-personalized agent silently passed `bwoc check`. 9 new tests. See [`notes/2026-05-23_check-dual-mode-and-personalize.md`](notes/2026-05-23_check-dual-mode-and-personalize.md).
+
+**Agent personalization**
+
+- **`agents/agent-pi/` + `agents/agent-oracle/` personalized** — placeholders in AGENTS.md + persona/README.md substituted from manifest values (mechanical) + persona-level fields filled with concrete content (`primaryCapability` / `scopeDescription` / `outOfScope` / `moduleName`). Pi = Rust implementation across `bwoc-*` crates; Oracle = fleet coordination via inbox/messaging. Template-only Appendix A (Placeholder Reference) + Appendix B (Quick-Start Checklist) removed from the incarnated agents — those docs apply pre-incarnation only. Both agents now pass `bwoc check` with 0 violations.
+
+**Agent → agent messaging — Sammā-vācā Phase 1**
+
+- **`bwoc send --from <agent>` flag** (`feat(cli)` pending) — `bwoc send` gains an optional `--from <agent>` flag so an envelope can carry a real sender identity (not just `from: "user"`). The named sender must exist in the workspace registry; unknown sender → exit 2 with `SenderNotFound`. Trust verification stays at the recipient daemon (already implemented in trust step 4) so this iter is purely sender-identity plumbing. Backward compatible: omitting `--from` writes `from: "user"` exactly as before.
+- **`interconnect/messaging.md` + `.th.md`** — new spec covering the envelope schema, `--from` resolution rules, and **Sāraṇīyadhamma 6** (AN 6.11–12) mapped to engineering rules (API stability, kindly speech, charitable interpretation, observability, common Sīla baseline, shared philosophy graph). Norms only — `bwoc check` does not gate them; the spec exists so an incarnated agent can internalize them.
+- **Live verified** — scenario A: sender lacks required qualities → daemon refuses + sidecar log + `jq 'select(.refused)'` matches; scenario B: sender declares qualities → passes silently, no sidecar. See [`notes/2026-05-23_agent-to-agent-messaging.md`](notes/2026-05-23_agent-to-agent-messaging.md).
+
 **Phase 4 — Fleet governance spec (Aparihāniya-dhamma 7)**
 
 - **`docs/en/FLEET-GOVERNANCE.en.md` + `.th.md`** — new framework-root operator-facing spec. Seven non-decline conditions from DN 16 (Mahāparinibbāna Sutta, §1.4 — the Vajjī teaching) mapped to workspace-level fleet operations: (1) regular meetings → `bwoc list` cadence; (2) coordinated start/end → `bwoc doctor` + `bwoc workspace prune`; (3) process-bound convention change → `schemaVersion` discipline; (4) honor template version → `bwoc check --all` version-lag flag; (5) protect vulnerable → respect recipient refusals, don't relax `requiredTrust`; (6) honor shared resources → `agents.toml` + `workspace.toml` + template are operator-owned; (7) protect senior agents → audit trust-dependency before `bwoc retire`. Each condition lists an observable signal (existing query) and a suggested operator practice. v1 is descriptive (signals, not gates); v2 may promote signals to gates as telemetry justifies. **Phase 4 is structurally an ecosystem-viability phase** (external-adoption goals); this spec closes the one Phase-4 line item the framework itself owns. PHILOSOPHY.en.md / `.th.md` cross-reference updated to point to the new location. ROADMAP §Phase 4 gains a "Shipped" subsection. See [`notes/2026-05-23_phase-4-fleet-governance.md`](notes/2026-05-23_phase-4-fleet-governance.md).
+
+**`bwoc chat --ghostty` + dashboard `g` hotkey**
+
+- **`bwoc chat --ghostty <name>`** (`feat(cli)` `5110dde`) — new flag opens a fresh Ghostty terminal window running `bwoc spawn` for the agent. macOS-only (`open -na Ghostty.app --args -e bwoc spawn ...`); non-macOS exits 2 with a hint pointing at the manual `ghostty -e` invocation. Clap-mutex with existing `--tmux`.
+- **Dashboard `g` hotkey** — mirrors `t` (tmux chat) but targets Ghostty. Help overlay row added. See [`notes/2026-05-23_chat-ghostty-launcher.md`](notes/2026-05-23_chat-ghostty-launcher.md).
+
+**Cargo SemVer 2.0.0 + auto-version sentinel for minor/major**
+
+- **Workspace version** (`build(version)` `b6885f8`) — `Cargo.toml` workspace.package version `0.1.721` → `2.0.0`. Aligns the Cargo SemVer with the BWOC 2.0 release identity. Per VERSION.md policy: Cargo SemVer captures dev checkpoints (auto-bumped on every edit), CalVer captures release identity.
+- **Auto-version hook gains minor/major support** — `.claude/hooks/auto-version.sh` now reads `.bwoc/next-bump.<domain>` sentinel files (one-shot, deleted after consume). Defaults to patch when sentinel is absent. New `scripts/queue-bump.sh <software\|document> <minor\|major\|patch>` helper. See [`notes/2026-05-23_version-2-0-0-and-auto-bump-levels.md`](notes/2026-05-23_version-2-0-0-and-auto-bump-levels.md).
+
+**HITL cleanup pass (4 small fixes from /investigate audit)**
+
+- **`bwoc status --banner`** (`refactor(hitl)` `2e6a754`) — new flag on `bwoc status <agent>` replays the daemon's startup "I am alive" multi-line block from the manifest. No daemon required. Mutex with `--all`. Honors `--lang`. `--banner --json` emits `{"banner": "..."}`. 6 new FTL keys EN+TH; 3 new tests.
+- **Dashboard refusal badge** — detail pane now renders `Refused: N` + sub-line `last refused: <reason> from <from>` in yellow when N > 0; omitted when N == 0. New `livecheck::refusal_summary()` helper reads `.bwoc/inbox.refusals.jsonl`.
+- **`start`/`stop` non-TTY consistency** — single-agent paths previously failed silently when non-interactive without `--yes`. Now abort with exit 2 + actionable message matching `retire`'s pattern.
+- **Stop-hook failure surfacing** — `inbox-auto-reply.sh` now captures stdout/stderr from `bwoc send --reply-to` and appends a diagnostic line to `<self>/.bwoc/agent.log` on non-zero exit. Happy path stays silent.
+- See [`notes/2026-05-23_hitl-cleanup-pass.md`](notes/2026-05-23_hitl-cleanup-pass.md).
+
+### Migration from v2026.5.23-1
+
+Existing agents with `gemini` backend need two edits:
+
+```bash
+# 1. Rename the symlink in each agent dir (and template if you forked it)
+cd agents/<your-agent> && mv GEMINI.md AGY.md
+# 2. Edit .bwoc/agents.toml entries:
+#    backend = "gemini"   →   backend = "agy"
+```
+
+Or regenerate with `bwoc new <name> --force` after the upgrade. Manifests without a `trust` block load unchanged (all fields optional with permissive defaults). Inbox envelopes without `messageId` are still readable (the field is additive — old envelopes pass through unmodified).
 
 ## [v2026.5.23-1] — 2026-05-23
 
@@ -65,10 +147,10 @@ Everything documented under the prior `[Unreleased]` "Phase 1 v2.0 work in progr
 - Cargo workspace at the repo root: edition 2024, resolver 3, MSRV 1.85.
 - `crates/bwoc-core` — shared types; declares `LifecyclePhase { Uppada, Thiti, Vaya }`.
 - `crates/bwoc-cli` — `bwoc` binary with `--lang` flag (precedence: `--lang` flag > `BWOC_LANG` env > `$LANG` env > `en` fallback) and clap subcommand surface.
-- `crates/bwoc-cli` — **`bwoc check [path]`** implemented. Full feature parity with `modules/agent-template/scripts/check-agent-neutrality.sh`: AGENTS.md existence, backend symlink validation (GEMINI/CODEX/KIMI → AGENTS.md), CLAUDE.md handling (symlink or standalone), `config.manifest.json` JSON validation, required placeholders, no YAML frontmatter, no wikilinks, no hardcoded model IDs/tool names, no backend-specific phrasing. Read-only; exit 0 = pass, 1 = violations. Pure-data `audit()` + `print_report()` for testability; two unit tests cover wikilink detection and missing-target case.
+- `crates/bwoc-cli` — **`bwoc check [path]`** implemented. Full feature parity with `modules/agent-template/scripts/check-agent-neutrality.sh`: AGENTS.md existence, backend symlink validation (AGY/CODEX/KIMI → AGENTS.md), CLAUDE.md handling (symlink or standalone), `config.manifest.json` JSON validation, required placeholders, no YAML frontmatter, no wikilinks, no hardcoded model IDs/tool names, no backend-specific phrasing. Read-only; exit 0 = pass, 1 = violations. Pure-data `audit()` + `print_report()` for testability; two unit tests cover wikilink detection and missing-target case.
 - `crates/bwoc-cli` — **`bwoc new <name> --role ... --primary-model ... --lint-cmd ... --format-cmd ... --test-cmd ... --build-cmd ...`** implemented. Ports `incarnate.sh` plus the manifest-input spec from `INCARNATION.en.md` §"Setting the Manifest". Recursively copies template (skips `.git/`, `*.example.*`), creates backend symlinks (Unix only; Windows deferred), writes a flat resolved manifest. Kebab-case name validation. Refuses if target exists. Auto-detects template by walking up cwd ancestors. Live end-to-end verified: `bwoc new` then `bwoc check` returns 15 PASS / 0 violations.
 - `crates/bwoc-cli` — **`bwoc new` interactive TTY prompts** for missing required fields. Uses `std::io::IsTerminal` (no new dep). On TTY: prompts each missing field with `{key} ({description}): ` where description comes from the template's `config.manifest.json` `requiredConfig.<field>.description`. On non-TTY: collects ALL missing fields in one pass and fails fast with exit code 2 and a comma-separated list — no partial blocking on stdin in CI. Empty prompt response is treated as missing. Two new unit tests cover the fail-fast path and template-description loading.
-- `crates/bwoc-cli` — **`bwoc spawn [--path <agent>] [--backend <claude\|gemini\|codex\|kimi>] [-- <args>...]`** implemented. Validates the path is a BWOC agent (has `AGENTS.md`), then exec's the backend CLI in the agent's directory via `std::process::Command::status()` (cross-platform; propagates exit code). Default backend is `claude`. Backend-not-found returns actionable "backend CLI 'X' not found on PATH" error. Extra args after `--` pass verbatim to the backend. Four new unit tests cover backend CLI mapping, missing-path rejection, non-agent-dir rejection, and template acceptance. Live verification: `bwoc spawn --path modules/agent-template --backend kimi` successfully launched Kimi Code CLI in the agent directory.
+- `crates/bwoc-cli` — **`bwoc spawn [--path <agent>] [--backend <claude\|agy\|codex\|kimi>] [-- <args>...]`** implemented. Validates the path is a BWOC agent (has `AGENTS.md`), then exec's the backend CLI in the agent's directory via `std::process::Command::status()` (cross-platform; propagates exit code). Default backend is `claude`. Backend-not-found returns actionable "backend CLI 'X' not found on PATH" error. Extra args after `--` pass verbatim to the backend. Four new unit tests cover backend CLI mapping, missing-path rejection, non-agent-dir rejection, and template acceptance. Live verification: `bwoc spawn --path modules/agent-template --backend kimi` successfully launched Kimi Code CLI in the agent directory.
 
 **Phase 1 v2.0 uppāda surface — DoD reached**
 
@@ -203,7 +285,7 @@ The three-command uppāda arc (`bwoc new` → `bwoc check` → `bwoc spawn`) now
 
 **Issue and PR templates (non-policy)**
 
-- `.github/ISSUE_TEMPLATE/bug_report.md` — structured form with BWOC-specific fields: BWOC version, OS, Rust toolchain, backend (claude/gemini/codex/kimi), surface (framework/template/CLI/runtime/hooks), and **arc phase** (uppāda/ṭhiti/vaya — where in the agent's life did this surface?). Includes a SECURITY redirect for exploitable defects.
+- `.github/ISSUE_TEMPLATE/bug_report.md` — structured form with BWOC-specific fields: BWOC version, OS, Rust toolchain, backend (claude/agy/codex/kimi), surface (framework/template/CLI/runtime/hooks), and **arc phase** (uppāda/ṭhiti/vaya — where in the agent's life did this surface?). Includes a SECURITY redirect for exploitable defects.
 - `.github/ISSUE_TEMPLATE/feature_request.md` — Problem/Solution/Alternatives shape grounded in Ariyasacca 4 (Dukkha → propose; Samudaya implied; Nirodha/Magga in scope section). Optional but-encouraged "Buddhist framework alignment" field referencing GLOSSARY.
 - `.github/PULL_REQUEST_TEMPLATE.md` — Summary + What/Related/Checklist/Risk-and-rollback. The Checklist mirrors `CONTRIBUTING.md` §Pull Request Checklist verbatim PLUS adds bilingual-parity + naming-audit + manifest-schema gates that the CI workflows enforce.
 

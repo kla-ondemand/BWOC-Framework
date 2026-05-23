@@ -26,13 +26,8 @@
 //! log. This keeps the Saṅgha task list (coordination) and the per-agent
 //! `task-log.jsonl` (execution log) as separate systems (Anattā).
 //!
-//! The live git functions (`worktree_add`, `worktree_list`, `worktree_remove`,
-//! `branch_list_glob`, `branch_delete`) have no callers yet — they are
-//! pre-API for `bwoc retire` Step 3 (worktree cleanup + branch release),
-//! which lands when Track A converges. The `#[allow(dead_code)]` below is
-//! a deliberate hold-open, not a permanent suppression; remove it when
-//! retire Step 3 is wired.
-#![allow(dead_code)]
+//! `bwoc retire` Step 3 is now wired: worktree cleanup + branch release
+//! are called from `retire.rs`. Dead-code suppression removed.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -77,6 +72,9 @@ fn git(args: &[&str]) -> Result<String, GitError> {
 /// Returns `GitError::Failed` if the branch already exists or the path is
 /// already a worktree. Callers should treat that as a "worktree already
 /// exists for this task" condition and decide whether to proceed or abort.
+///
+/// Pre-API for the `task-claimed` hook (Track B). No caller in the CLI yet.
+#[allow(dead_code)]
 pub fn worktree_add(path: &Path, branch: &str) -> Result<(), GitError> {
     let path_str = path.to_string_lossy();
     git(&["worktree", "add", &path_str, "-b", branch])?;
@@ -195,11 +193,25 @@ pub fn branch_list_glob(glob: &str) -> Result<Vec<String>, GitError> {
 ///
 /// Equivalent to: `git branch -d <branch>`
 ///
-/// Uses `-d` (safe delete — refuses if not fully merged). Never uses
-/// `-D` (force delete) — the caller must merge first if needed
-/// (Sīla: no silent destruction of work).
+/// Uses `-d` (safe delete — refuses if not fully merged). Returns
+/// `GitError::Failed` when the branch has unmerged commits; the caller
+/// should surface that and offer the user a chance to review before
+/// escalating to [`branch_delete_force`].
 pub fn branch_delete(branch: &str) -> Result<(), GitError> {
     git(&["branch", "-d", branch])?;
+    Ok(())
+}
+
+/// Force-delete a local branch by name, even if it has unmerged commits.
+///
+/// Equivalent to: `git branch -D <branch>`
+///
+/// This is the explicit escalation path. Callers MUST surface a warning
+/// to the user before calling this (Sīla: no silent destruction of work).
+/// `bwoc retire` uses this only when `-d` fails and surfaces the branch
+/// name + a "forced" label in its output so the operator is informed.
+pub fn branch_delete_force(branch: &str) -> Result<(), GitError> {
+    git(&["branch", "-D", branch])?;
     Ok(())
 }
 
@@ -210,12 +222,18 @@ pub fn branch_delete(branch: &str) -> Result<(), GitError> {
 ///
 /// `worktree_base` is from the agent's `config.manifest.json`
 /// (`manifest.worktree_base`), defaulting to `/tmp` when absent.
+///
+/// Tested by unit tests; production consumer lands with `task-claimed`.
+#[allow(dead_code)]
 pub fn worktree_path(worktree_base: &str, agent_id: &str, task_id: &str) -> PathBuf {
     PathBuf::from(worktree_base).join(agent_id).join(task_id)
 }
 
 /// Build the BWOC branch name for a given agent + task:
 /// `agent/<agentId>/feat/<taskId>`.
+///
+/// Tested by unit tests; production consumer lands with `task-claimed`.
+#[allow(dead_code)]
 pub fn worktree_branch(agent_id: &str, task_id: &str) -> String {
     format!("agent/{agent_id}/feat/{task_id}")
 }

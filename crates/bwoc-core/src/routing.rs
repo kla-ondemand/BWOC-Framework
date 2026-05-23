@@ -138,6 +138,57 @@ impl Routes {
         Ok(Self { routes })
     }
 
+    /// Remove all routes whose `RouteKind` is `Agent(agent_id)` and rewrite
+    /// `<workspace_root>/.bwoc/interconnect/routes.toml` with the remainder.
+    ///
+    /// Used by `bwoc retire` Step 3 (interconnect deregister): dead agents
+    /// must not remain reachable from the routing table.
+    ///
+    /// Idempotency: if no routes match `agent_id`, the file is rewritten
+    /// unchanged (still a valid operation). If the file is absent, nothing
+    /// is written and `Ok(0)` is returned.
+    ///
+    /// Returns the count of routes removed.
+    pub fn remove_agent_routes(
+        workspace_root: &Path,
+        agent_id: &str,
+    ) -> Result<usize, RoutingError> {
+        let path = workspace_root
+            .join(".bwoc")
+            .join("interconnect")
+            .join("routes.toml");
+
+        if !path.exists() {
+            return Ok(0);
+        }
+
+        let content = std::fs::read_to_string(&path)?;
+        if content.trim().is_empty() {
+            return Ok(0);
+        }
+
+        let raw: RawRoutes = toml::from_str(&content)?;
+        let before = raw.routes.len();
+        let kept: Vec<RawRoute> = raw
+            .routes
+            .into_iter()
+            .filter(|r| r.agent.as_deref() != Some(agent_id))
+            .collect();
+        let removed = before - kept.len();
+
+        // Rewrite the file with the surviving routes (preserves workspace-
+        // scoped routes and namespace routes untouched).
+        let out = RawRoutes { routes: kept };
+        let toml_str = toml::to_string(&out).map_err(|e| {
+            // toml::ser::Error doesn't implement std::io::Error, so wrap via Io
+            // using a fabricated io::Error with the serialization message.
+            RoutingError::Io(std::io::Error::other(e.to_string()))
+        })?;
+        std::fs::write(&path, toml_str)?;
+
+        Ok(removed)
+    }
+
     /// Resolve a recipient id to its peer workspace root.
     ///
     /// Resolution order (spec §"Resolution Order" step 2):

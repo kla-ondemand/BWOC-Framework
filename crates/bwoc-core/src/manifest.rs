@@ -48,7 +48,90 @@ pub struct Manifest {
     /// `{{outOfScope}}` in AGENTS.md and persona/README.md.
     #[serde(rename = "outOfScope", skip_serializing_if = "Option::is_none")]
     pub out_of_scope: Option<String>,
+    /// Inter-agent trust declaration per the Kalyāṇamitta 7 spec
+    /// (`modules/agent-template/interconnect/trust.md`). Absent block
+    /// means "no qualities declared, no qualities required" — the
+    /// framework ships permissive by default; recipients opt in via
+    /// `requiredTrust`. See `TrustBlock` for shape + the `Default`
+    /// impl for how missing-field semantics resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<TrustBlock>,
     pub version: String,
+}
+
+/// Kalyāṇamitta 7 trust block. Two halves: `declared` (what this agent
+/// claims about itself) and `required_trust` (what this agent demands
+/// from peers that want to message it). They're independent — see
+/// `interconnect/trust.md` §"Manifest Schema".
+///
+/// `schema_version` is currently 1. Future spec revisions may add
+/// fields to `TrustDeclared`; per the spec, missing fields in declared
+/// are treated as `false` (Anicca seam). `serde(default)` on each
+/// boolean implements this — a v2 agent's manifest with extra fields
+/// deserializes cleanly on v1; a v1 manifest deserializing on v2
+/// silently gets `false` for unknown new fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustBlock {
+    /// Always `1` for this spec revision. Future spec bumps increment.
+    /// Required field (no `default`) — a malformed manifest without
+    /// it fails to load, which is the right escalation when trust
+    /// semantics ride on the block being well-formed.
+    #[serde(rename = "schemaVersion")]
+    pub schema_version: u32,
+    /// 7 booleans per the AN 7.36 (Mitta Sutta) canonical list. Missing
+    /// fields → `false` per the spec.
+    #[serde(default)]
+    pub declared: TrustDeclared,
+    /// Qualities required from peer senders. Empty vec ≡ no gating
+    /// for this recipient. Names match the camelCase manifest keys
+    /// in `TrustDeclared`.
+    #[serde(
+        rename = "requiredTrust",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub required_trust: Vec<String>,
+}
+
+impl Default for TrustBlock {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            declared: TrustDeclared::default(),
+            required_trust: Vec::new(),
+        }
+    }
+}
+
+/// The 7 Kalyāṇamitta qualities as declared booleans. Each is
+/// `#[serde(default)]` so missing fields deserialize as `false` —
+/// implements the spec's Anicca seam: a v2 spec adding `mudu` doesn't
+/// silently refuse v1 peers who never declared it. Names match the
+/// camelCase manifest keys: piyo / garu / bhavaniyo / vatta /
+/// vacanakkhamo / gambhira / noCatthana.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TrustDeclared {
+    /// Piyo — pleasant to delegate to.
+    #[serde(default)]
+    pub piyo: bool,
+    /// Garu — respectable in capability.
+    #[serde(default)]
+    pub garu: bool,
+    /// Bhāvanīyo — helps us improve.
+    #[serde(default)]
+    pub bhavaniyo: bool,
+    /// Vattā — speaks beneficial truth.
+    #[serde(default)]
+    pub vatta: bool,
+    /// Vacanakkhamo — can take feedback.
+    #[serde(default)]
+    pub vacanakkhamo: bool,
+    /// Gambhīrañca kathaṃ kattā — can explain depth.
+    #[serde(default)]
+    pub gambhira: bool,
+    /// No caṭṭhāne niyojaye — does not lead astray.
+    #[serde(rename = "noCatthana", default)]
+    pub no_catthana: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,6 +179,7 @@ mod tests {
             worktree_base: None,
             scope_description: None,
             out_of_scope: None,
+            trust: None,
             version: "2.0".into(),
         }
     }
@@ -117,5 +201,93 @@ mod tests {
         assert!(json.contains("\"lintCmd\""));
         // Optional none fields skipped
         assert!(!json.contains("\"fallbackModel\""));
+        // Trust block absent → no "trust" key in serialized output.
+        assert!(!json.contains("\"trust\""));
+    }
+
+    // ---- TrustBlock tests ---------------------------------------------------
+
+    /// Backward-compat: a manifest without a `trust` block deserializes
+    /// fine with `trust = None`. This is the most important test — every
+    /// existing agent's manifest predates the trust spec.
+    #[test]
+    fn trust_block_absent_is_none() {
+        let json = r#"{
+            "name": "demo", "agentId": "agent-demo", "agentRole": "x",
+            "primaryModel": "m", "memoryPath": "memories/",
+            "lintCmd": "true", "formatCmd": "true", "testCmd": "true",
+            "buildCmd": "true", "version": "2.0"
+        }"#;
+        let m: Manifest = serde_json::from_str(json).unwrap();
+        assert!(m.trust.is_none());
+    }
+
+    /// Full-block roundtrip — every quality declared, requiredTrust array.
+    #[test]
+    fn trust_block_full_roundtrip() {
+        let mut m = sample();
+        m.trust = Some(TrustBlock {
+            schema_version: 1,
+            declared: TrustDeclared {
+                piyo: true,
+                garu: false,
+                bhavaniyo: true,
+                vatta: true,
+                vacanakkhamo: true,
+                gambhira: false,
+                no_catthana: true,
+            },
+            required_trust: vec!["vatta".into(), "noCatthana".into()],
+        });
+        let json = serde_json::to_string(&m).unwrap();
+        // Wire format uses camelCase + the rename for noCatthana.
+        assert!(json.contains("\"trust\""));
+        assert!(json.contains("\"schemaVersion\":1"));
+        assert!(json.contains("\"noCatthana\":true"));
+        assert!(json.contains("\"requiredTrust\":[\"vatta\",\"noCatthana\"]"));
+        // Roundtrip preserves every boolean.
+        let back: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+    }
+
+    /// Missing-field rule (Anicca seam): a partial `declared` block
+    /// with only 2 fields → other 5 are `false`. Critical because a
+    /// v2 spec that adds quality `mudu` must not silently refuse all
+    /// v1 manifests that never declared it.
+    #[test]
+    fn trust_declared_partial_missing_fields_are_false() {
+        let json = r#"{ "piyo": true, "vatta": true }"#;
+        let d: TrustDeclared = serde_json::from_str(json).unwrap();
+        assert!(d.piyo);
+        assert!(d.vatta);
+        // The other 5 default to false.
+        assert!(!d.garu);
+        assert!(!d.bhavaniyo);
+        assert!(!d.vacanakkhamo);
+        assert!(!d.gambhira);
+        assert!(!d.no_catthana);
+    }
+
+    /// `requiredTrust` empty array is the same as missing — both serialize
+    /// out of the picture (`skip_serializing_if = Vec::is_empty`) and both
+    /// deserialize back to the empty vec.
+    #[test]
+    fn required_trust_empty_skipped_on_serialize() {
+        let block = TrustBlock::default();
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(!json.contains("\"requiredTrust\""));
+        let back: TrustBlock = serde_json::from_str(&json).unwrap();
+        assert!(back.required_trust.is_empty());
+    }
+
+    /// Forward-compat: a v2 manifest that adds an unknown field to
+    /// `TrustDeclared` deserializes cleanly on v1 (serde ignores unknown
+    /// JSON keys by default). This is the other half of the Anicca seam.
+    #[test]
+    fn trust_declared_unknown_field_ignored() {
+        let json = r#"{ "piyo": true, "mudu": true, "futureField": "anything" }"#;
+        let d: TrustDeclared = serde_json::from_str(json).unwrap();
+        assert!(d.piyo);
+        // Unknown fields don't error or attach.
     }
 }

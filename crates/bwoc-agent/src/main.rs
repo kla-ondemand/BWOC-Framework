@@ -433,6 +433,7 @@ mod tests {
             worktree_base: None,
             scope_description: None,
             out_of_scope: None,
+            trust: None,
             version: "2.0".into(),
         }
     }

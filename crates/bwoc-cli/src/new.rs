@@ -993,6 +993,12 @@ fn build_manifest(r: &Resolved) -> Manifest {
         worktree_base: r.worktree_base.clone(),
         scope_description: r.scope_description.clone(),
         out_of_scope: r.out_of_scope.clone(),
+        // Trust spec v1 ships permissive-by-default at the framework
+        // level; the scaffolding floor (requiredTrust = [vatta,
+        // noCatthana]) for new agents will land in a follow-up step.
+        // For now, `bwoc new` writes no trust block — equivalent to
+        // "no qualities declared, no gating" per the spec.
+        trust: None,
         version: "2.0".to_string(),
     }
 }

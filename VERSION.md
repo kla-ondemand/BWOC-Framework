@@ -3,11 +3,11 @@
 > **Auto-maintained header.** The hook `.claude/hooks/auto-version.sh` bumps the patch number and stamps `Last-Updated` on every Claude Code edit. Software-Version is canonical in `Cargo.toml`; Document-Version is canonical here.
 
 **Software-Version:** `0.1.636`   *(canonical in `Cargo.toml` — bumped on `.rs` / `.toml` edits)*
-**Document-Version:** `1.0.241`   *(canonical here — bumped on `.md` edits)*
+**Document-Version:** `1.0.242`   *(canonical here — bumped on `.md` edits)*
 **Phase:** Phase 2 — *ṭhiti operations*, in progress *(Phase 1 v2.0 DoD met)*
 **Latest release:** [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) *(2026-05-23 — first public release: `v2026.5.23-0` initial, `v2026.5.23-1` workflow fix)*
 **Specification:** [`AGENTS.md`](modules/agent-template/AGENTS.md) v2.0
-**Last-Updated:** `2026-05-23T01:51:53Z`   *(UTC, ISO 8601 — stamped on every edit)*
+**Last-Updated:** `2026-05-23T01:53:13Z`   *(UTC, ISO 8601 — stamped on every edit)*
 
 ---
 

@@ -100,9 +100,20 @@ All commands take `--workspace` (standard resolution: flag → `BWOC_WORKSPACE` 
 | Complete by non-claimant | 2 | `task 't1' is claimed by 'agent-pi', not 'agent-oracle'` |
 | Lock contention timeout | 1 | `could not acquire task lock (… remove tasks.lock if stale)` |
 
+## Phase B — daemon task-watch (shipped, announce-only)
+
+A running `bwoc-agent --serve` watches the shared task lists of every team its agent belongs to and announces newly-claimable tasks to stderr — the same shape as the inbox watch:
+
+```text
+bwoc-agent: task available ← squad/t3: implement the parser
+```
+
+"Claimable" = `pending` with every dependency `completed`, in a member team. The daemon snapshots what's already open at startup (no replay — like the inbox cursor starting at EOF) and polls on a 2-second cadence (tasks change rarely). **Announce-only**: it does NOT auto-claim or wake the agent — that's a deliberate follow-up once announce is proven. Inert when the agent is on no team or no workspace resolves. See [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs).
+
 ## Deferred (later phases)
 
-- **Daemon task-watch + hooks** — `task-created` / `task-completed` events so a running `bwoc-agent --serve` reacts to list changes. (Phase B.)
+- **Task hooks** — `task-created` / `task-completed` shell hooks at workspace level (mirrors Claude Agent Teams' TaskCreated/TaskCompleted). (Phase B+.)
+- **Auto-claim + wakeup** — the daemon claims the next available task and wakes the agent via the tmux mechanism already used for inbox. Closes the loop to autonomous teamwork. (Phase B+.)
 - **Plan approval (Pavāraṇā)** — a teammate submits a plan, the lead approves/rejects before implementation. Maps to an envelope-kind extension on [[messaging]]. (Phase C.)
 - **Team-aware dashboard** — a task pane in `bwoc dashboard`. (Phase B+.)
 - **Designated lead agent** — a `lead` field + lead-only operations. Only if the human-implicit-lead model proves limiting.

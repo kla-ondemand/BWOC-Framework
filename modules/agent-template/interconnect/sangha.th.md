@@ -100,9 +100,20 @@ bwoc task complete <team> <task> --as <agent>   # เฉพาะผู้ claim
 | complete โดยผู้ที่ไม่ได้ claim | 2 | `task 't1' is claimed by 'agent-pi', not 'agent-oracle'` |
 | lock contention timeout | 1 | `could not acquire task lock (… remove tasks.lock if stale)` |
 
+## Phase B — daemon task-watch (ส่งแล้ว, announce-only)
+
+`bwoc-agent --serve` ที่รันอยู่จะเฝ้ารายการงานร่วมของทุกทีมที่ agent เป็นสมาชิก และประกาศงานที่ claim ได้ใหม่ไปยัง stderr — รูปแบบเดียวกับ inbox watch:
+
+```text
+bwoc-agent: task available ← squad/t3: implement the parser
+```
+
+"claim ได้" = `pending` ที่ทุก dependency `completed` ในทีมที่เป็นสมาชิก daemon snapshot งานที่เปิดอยู่แล้วตอน startup (ไม่ replay — เหมือน inbox cursor เริ่มที่ EOF) และ poll ที่ cadence 2 วินาที (งานเปลี่ยนไม่บ่อย) **announce-only**: ไม่ auto-claim หรือปลุก agent — เป็น follow-up ที่ตั้งใจหลังพิสูจน์ announce แล้ว inert เมื่อ agent ไม่อยู่ทีมใดหรือไม่มี workspace ดู [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs)
+
 ## เลื่อนไป phase ถัดไป
 
-- **Daemon task-watch + hooks** — event `task-created` / `task-completed` ให้ `bwoc-agent --serve` ที่รันอยู่ตอบสนองการเปลี่ยนรายการ (Phase B)
+- **Task hooks** — shell hook `task-created` / `task-completed` ระดับ workspace (mirror TaskCreated/TaskCompleted ของ Claude Agent Teams) (Phase B+)
+- **Auto-claim + wakeup** — daemon claim งานถัดไปที่ว่างและปลุก agent ผ่านกลไก tmux ที่ใช้กับ inbox อยู่แล้ว ปิด loop สู่การทำงานเป็นทีมแบบอัตโนมัติ (Phase B+)
 - **Plan approval (ปวารณา)** — teammate ส่ง plan, lead approve/reject ก่อน implement map กับส่วนขยาย envelope-kind บน [[messaging]] (Phase C)
 - **Dashboard รู้จักทีม** — task pane ใน `bwoc dashboard` (Phase B+)
 - **Lead agent ที่กำหนด** — field `lead` + การกระทำเฉพาะ lead เฉพาะเมื่อโมเดล human-implicit-lead พิสูจน์ว่าจำกัดเกินไป

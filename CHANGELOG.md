@@ -10,6 +10,7 @@ _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+
 
 ### Added
 
+- **Saṅgha Phase B — daemon task-watch (announce-only)** — `bwoc-agent --serve` now watches the shared task lists of every team its agent belongs to and announces newly-claimable tasks (`pending` + deps complete) to stderr: `bwoc-agent: task available ← <team>/<task>: <title>`. Snapshots open tasks at startup (no replay), polls on a 2s cadence, inert when the agent is on no team. Auto-claim + wakeup and task hooks are deferred to Phase B+. New `bwoc-agent::task_watch` (4 tests). See `modules/agent-template/interconnect/sangha.md` §Phase B.
 - **Online docs link in the CLI** — the bare-`bwoc` banner and `bwoc help` index now surface <https://bemindlabs.github.io/BWOC-Framework/>.
 
 **"What's New" surface**

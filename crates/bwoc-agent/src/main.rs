@@ -19,6 +19,8 @@ use bwoc_core::manifest::Manifest;
 
 mod i18n;
 #[cfg(unix)]
+mod task_watch;
+#[cfg(unix)]
 mod trust;
 
 fn main() -> ExitCode {
@@ -238,6 +240,22 @@ fn serve_loop(cwd: &std::path::Path, manifest: &Manifest) -> ExitCode {
         }
     }
 
+    // Saṅgha task watch (Phase B, announce-only). Reuses the workspace
+    // root the trust context already resolved. Snapshots currently-
+    // claimable tasks at startup (no replay) and announces new ones to
+    // stderr. Polled at a slower cadence than the inbox — tasks change
+    // rarely.
+    let mut task_watch =
+        task_watch::TaskWatch::build(&manifest.agent_id, trust_ctx.workspace_root.as_deref());
+    if !task_watch.is_inert() {
+        eprintln!(
+            "bwoc-agent --serve: watching Saṅgha tasks for member '{}'",
+            manifest.agent_id
+        );
+    }
+    const TASK_POLL_EVERY: Duration = Duration::from_secs(2);
+    let mut last_task_poll = Instant::now();
+
     // Single-threaded accept loop with poll. Each accept is non-blocking
     // and yields control quickly so the signal check stays responsive.
     while running.load(Ordering::SeqCst) {
@@ -250,6 +268,12 @@ fn serve_loop(cwd: &std::path::Path, manifest: &Manifest) -> ExitCode {
                 if new_pos != inbox_pos {
                     inbox_pos = new_pos;
                     save_cursor(&cursor_path, inbox_pos);
+                }
+                // Saṅgha tasks change rarely — poll on a slower cadence than
+                // the 100ms inbox tick to avoid re-reading team files 10×/s.
+                if !task_watch.is_inert() && last_task_poll.elapsed() >= TASK_POLL_EVERY {
+                    task_watch.poll();
+                    last_task_poll = Instant::now();
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }

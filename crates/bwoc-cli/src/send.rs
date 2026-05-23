@@ -658,7 +658,7 @@ mod tests {
             "local-hit-peer",
             "agent-remote",
             &format!(
-                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = '{}'\n",
                 peer.display()
             ),
         );
@@ -692,7 +692,7 @@ mod tests {
             "exact-peer",
             "agent-remote",
             &format!(
-                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = '{}'\n",
                 // Need real path — will substitute below after peer is created.
                 // Use a placeholder; we'll overwrite routes.toml after setup.
                 "/tmp/placeholder"
@@ -702,7 +702,7 @@ mod tests {
         fs::write(
             local.join(".bwoc/interconnect/routes.toml"),
             format!(
-                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = '{}'\n",
                 peer.display()
             ),
         )
@@ -740,7 +740,7 @@ mod tests {
         fs::write(
             local.join(".bwoc/interconnect/routes.toml"),
             format!(
-                "[[route]]\nnamespace = \"agent-team-b\"\nworkspace = \"{}\"\n",
+                "[[route]]\nnamespace = \"agent-team-b\"\nworkspace = '{}'\n",
                 peer.display()
             ),
         )
@@ -884,7 +884,7 @@ mod tests {
         fs::write(
             local.join(".bwoc/interconnect/routes.toml"),
             format!(
-                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = '{}'\n",
                 peer.display()
             ),
         )

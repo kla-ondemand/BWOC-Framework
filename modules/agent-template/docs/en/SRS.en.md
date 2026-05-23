@@ -75,7 +75,7 @@ The system under specification is a **template repository**, not a runtime.
 | FR-4.4 | M | Agents SHALL NOT switch branches in place; they SHALL use worktrees | A |
 | FR-4.5 | M | Commits SHALL be scoped to files the agent created or modified in this task | A |
 | FR-4.6 | M | The history strategy SHALL be rebase, not merge | A |
-| FR-4.7 | M | Branch names SHALL follow: `feature/{{taskId}}`, `fix/{{taskId}}`, `refactor/{{taskId}}`, `agent/{{agentId}}/{{taskId}}`, `release/{{version}}`, `hotfix/{{taskId}}` | T |
+| FR-4.7 | M | Branch names SHALL be `<type>/{{taskId}}` where `<type>` ∈ {`feat fix docs refactor test chore perf style ci`}; the multi-agent collision guard prefixes `agent/{{agentId}}/`. There SHALL be no `release/*` or `hotfix/*` branches — version tags are cut directly on `main` (trunk-based) | T |
 | FR-4.8 | M | After merge, the worktree SHALL be removed and the local branch deleted (*anattā* — release) | A |
 
 ### Pillar 5 — Sammā-ājīva (Right Livelihood): Trust & Neutrality

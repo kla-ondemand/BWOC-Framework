@@ -18,12 +18,15 @@ By participating in this project, you agree to abide by our [Code of Conduct](CO
 
 ## Development Workflow
 
-1. **Fork** the repository and create a topic branch from `main`:
+We use a single **trunk-based** branching standard across every BWOC repo: `main` is the only long-lived branch and is always releasable; all work happens on short-lived topic branches that are deleted after merge. The canonical naming rules live in [`modules/agent-template/conventions.md`](modules/agent-template/conventions.md#branch-names-typetask-id).
+
+1. **Fork** the repository and create a topic branch from `main`. Branch `type` uses the same vocabulary as commit types (`feat fix docs refactor test chore perf style ci`):
    ```bash
    git checkout -b feat/<short-name>     # for features
    git checkout -b fix/<short-name>      # for bug fixes
    git checkout -b docs/<short-name>     # for documentation
    ```
+   No `release/*` or `hotfix/*` branches — version tags (CalVer `v<YYYY>.<M>.<D>-<patch>`) are cut directly on `main`.
 2. **Make your changes** — keep diffs focused. One concern per PR.
 3. **Verify** before committing:
    - Documentation renders correctly (Markdown lint, link check).

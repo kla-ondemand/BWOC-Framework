@@ -83,7 +83,7 @@ Every task MUST be logged in `task-log.jsonl` (append-only):
 {
   "taskId":        "TASK-001",
   "moduleName":    "{{moduleName}}",
-  "branchName":    "feature/TASK-001",
+  "branchName":    "feat/TASK-001",
   "worktreePath":  "/tmp/{{agentId}}/TASK-001",
   "status":        "in_progress",
   "startedAt":     "2026-05-22T10:00:00Z",
@@ -136,7 +136,7 @@ Error messages MUST name:
 Every task runs in its own isolated worktree:
 
 ```bash
-git worktree add {{worktreeBase}}/{{taskId}} -b feature/{{taskId}}
+git worktree add {{worktreeBase}}/{{taskId}} -b feat/{{taskId}}
 ```
 
 - NEVER share a working directory with another agent
@@ -146,14 +146,22 @@ git worktree add {{worktreeBase}}/{{taskId}} -b feature/{{taskId}}
 
 ### 4.2 Branch Naming
 
+Trunk-based: `main` is the only long-lived branch and is always releasable. Every other branch is short-lived and is deleted after merge (4.4).
+
 ```
-feature/{{taskId}}
-fix/{{taskId}}
-refactor/{{taskId}}
-agent/{{agentId}}/{{taskId}}
-release/{{version}}
-hotfix/{{taskId}}
+feat/{{taskId}}        fix/{{taskId}}        docs/{{taskId}}
+refactor/{{taskId}}    test/{{taskId}}       chore/{{taskId}}
 ```
+
+Multi-agent collision guard — prefix with the agent id when several agents may touch the same repo:
+
+```
+agent/{{agentId}}/feat/{{taskId}}
+```
+
+- Branch `type` uses the Conventional Commit vocabulary: `feat fix docs refactor test chore perf style ci`.
+- No `release/*` or `hotfix/*` branches — version tags are cut directly on `main`.
+- Never work on `main` directly (4.1); never create merge commits on `main` — rebase (4.3).
 
 ### 4.3 Commit Discipline
 
@@ -168,7 +176,7 @@ hotfix/{{taskId}}
 After a task merges:
 ```bash
 git worktree remove {{worktreeBase}}/{{taskId}}
-git branch -d feature/{{taskId}}
+git branch -d feat/{{taskId}}
 ```
 No clinging. The branch is not "yours."
 
@@ -368,7 +376,7 @@ When switching between active tasks mid-session:
 1. Save current task state to `task-log.jsonl`
 2. Check if target worktree exists: `git worktree list`
 3. If exists: `cd` to it, `git pull --rebase`
-4. If not: `git worktree add /tmp/{{taskId}} -b feature/{{taskId}}`
+4. If not: `git worktree add /tmp/{{taskId}} -b feat/{{taskId}}`
 5. Update `task-log.jsonl` (new task: `in_progress`)
 
 ---

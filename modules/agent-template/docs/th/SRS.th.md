@@ -75,7 +75,7 @@
 | FR-4.4 | M | Agent SHALL NOT switch branch in-place ใช้ worktree แทน | A |
 | FR-4.5 | M | Commit SHALL scope เฉพาะไฟล์ที่ agent สร้าง/แก้ในงานนี้ | A |
 | FR-4.6 | M | History strategy SHALL เป็น rebase ไม่ใช่ merge | A |
-| FR-4.7 | M | Branch naming SHALL ตามรูปแบบ: `feature/{{taskId}}`, `fix/{{taskId}}`, `refactor/{{taskId}}`, `agent/{{agentId}}/{{taskId}}`, `release/{{version}}`, `hotfix/{{taskId}}` | T |
+| FR-4.7 | M | Branch naming SHALL เป็น `<type>/{{taskId}}` โดย `<type>` ∈ {`feat fix docs refactor test chore perf style ci`}; กันชนกันหลาย agent ใช้ prefix `agent/{{agentId}}/`. SHALL ไม่มี branch `release/*` หรือ `hotfix/*` — version tag ตัดบน `main` โดยตรง (trunk-based) | T |
 | FR-4.8 | M | หลัง merge SHALL ลบ worktree และ branch (อนัตตา = ไม่ยึด) | A |
 
 ### หมวด 5 — สัมมาอาชีวะ (Right Livelihood) : Trust & Neutrality

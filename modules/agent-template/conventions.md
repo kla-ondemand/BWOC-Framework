@@ -100,7 +100,7 @@ Double curly braces, camelCase:
 | `{{name}}` | Agent name (short) | `oracle-coding` |
 | `{{taskId}}` | Task identifier | `PROJ-42` |
 | `{{moduleName}}` | Module path | `my-module` |
-| `{{branchName}}` | Git branch | `feature/proj-42` |
+| `{{branchName}}` | Git branch | `feat/PROJ-42` |
 | `{{worktreePath}}` | Worktree directory | `/tmp/proj-42` |
 | `{{memoryPath}}` | File-based memory dir | `memories/` |
 | `{{sessionsPath}}` | Session data dir | `~/.claude/projects/` |
@@ -127,14 +127,16 @@ Never hardcode these in `AGENTS.md` or base template files:
 
 ### Branch Names: `type/task-id`
 
+Trunk-based: `main` is the only long-lived branch. Branch `type` uses the Conventional Commit vocabulary (`feat fix docs refactor test chore perf style ci`).
+
 ```
-feature/PROJ-42
+feat/PROJ-42
 fix/PROJ-43
-refactor/PROJ-44
-agent/agent-oracle/PROJ-45
-release/v2.0.0
-hotfix/PROJ-46
+docs/branching-standard
+agent/agent-oracle/feat/PROJ-45
 ```
+
+No `release/*` or `hotfix/*` branches — CalVer tags (`v<YYYY>.<M>.<D>-<patch>`) are cut directly on `main`. Delete the branch after merge (Anattā).
 
 ### Task IDs: `UPPER-N`
 
@@ -167,7 +169,7 @@ Scope = PascalCase. Action = lowercase imperative. Under 72 characters.
 TaskLogEntry:
   taskId: string           # "PROJ-42"
   moduleName: string       # "my-module"
-  branchName: string       # "feature/proj-42"
+  branchName: string       # "feat/proj-42"
   worktreePath: string     # "/tmp/proj-42"
   status: TaskStatus
   startedAt: string        # ISO 8601

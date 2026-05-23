@@ -14,6 +14,18 @@ Sequenced the four open Phase 3 items into a build order and resolved the worktr
 4. **git via shell-out, no `git2`/`gitoxide` dependency** — matches the existing process-spawn style in the CLI.
 5. **Tier 2 memory and Trust v2 deferred** — neither is on the Phase 3 DoD ("life ends cleanly + coordinate without a central authority"). Trust v2 stays gated on v1 telemetry; its cross-workspace part also depends on Track A.
 
+## Track A — interconnect routing design (drafted same session)
+
+Grounded in `crates/bwoc-cli/src/send.rs:88-124` (recipient = local registry lookup → append to `<entry.path>/.bwoc/inbox.jsonl`; sender `--from` must be in the same registry).
+
+- **Config:** `.bwoc/interconnect/routes.toml`, per-workspace, peer-declared (no central directory). Routes map an exact `agent` id or a `namespace` prefix to a peer `workspace` root.
+- **Resolution order in `send` (additive — current behaviour is the fallback, no regression):** local registry → `routes.toml` peer lookup (load the peer's registry, append to the peer agent's inbox) → existing `NotFound`.
+- **v1 scope:** peer workspaces reachable over the **local filesystem** only; ssh/http transport deferred (belongs with Trust v2 cross-workspace).
+- **Composes with Trust v2, does not block on it:** with `BWOC_TRUST_GATING=1` the recipient daemon resolves `from` in its own registry, so a cross-workspace sender is `unknown_sender` → refused to `refusals.jsonl` = correct safe default. Gating off (default) → delivers.
+- **Seam for Trust v2:** envelope `from` may need to become workspace-qualified (`agent-oracle@peer-ws`); kept bare in v1, marked.
+
+Queued to agent-pi (`msg-20260523T104333Z`). Formalized at operator request into `modules/agent-template/interconnect/routing.md` (+ `routing.th.md`) — canonical source SN 22.59 (Anattā: no central self → no central broker), mapping flagged in-doc for operator verification. Joins the interconnect cluster alongside trust / messaging / sangha.
+
 ## Alternatives considered
 
 - **Defensive-cleanup-only retire** (don't build worktree creation): leaner, met the DoD literally — rejected by user in favour of full lifecycle.

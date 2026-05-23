@@ -4,7 +4,7 @@
 //!   1. Build messages (system prompt + history + tool schemas).
 //!   2. Call the provider (`stream=false` first; streaming path also present).
 //!   3. Accumulate `tool_calls` from the response.
-//!   4. Dispatch each tool call → capture result.
+//!   4. **For each tool call: GUARDRAILS → PERMISSION → SANDBOX → execute.**
 //!   5. Append `assistant(tool_calls)` + `tool` result messages to history.
 //!   6. Repeat.
 //!
@@ -14,11 +14,27 @@
 //!   - External cancel signal (future P3 queue integration — stub for now).
 //!
 //! Context compaction (summarise / truncate) is P4 — not implemented here.
+//!
+//! # P2 Safety pipeline
+//!
+//! Every tool call passes through the three-layer pipeline before execution:
+//!
+//! ```text
+//! GUARDRAILS (hard, non-overridable)
+//!   → PERMISSION (per-tool allow|ask|deny from policy)
+//!     → SANDBOX (worktree confinement + env scrub + arg scan)
+//!       → tool execute
+//! ```
+//!
+//! A blocked call returns the blocking reason as the tool result message so
+//! the model can adapt — it is NOT a hard error that stops the loop.
 
 use std::sync::Arc;
 
 use crate::error::{HarnessError, HarnessResult};
+use crate::policy::{Policy, PolicyOutcome, run_pipeline};
 use crate::provider::{ChatMessage, ProviderClient, ToolCall};
+use crate::sandbox::{self, NoopOsSandbox};
 use crate::tools::registry::dispatch;
 use crate::tools::{ToolContext, ToolRegistry};
 
@@ -32,6 +48,12 @@ pub struct LoopConfig {
     /// Whether to use streaming mode (SSE) for token deltas.
     /// `false` = use the blocking complete() path (simpler, spike-proven).
     pub stream: bool,
+    /// Permission policy (loaded from `.bwoc/harness-policy.toml` or default).
+    /// Default = fail-safe deny-all.
+    pub policy: Policy,
+    /// Whether the harness has a controlling TTY for `ask`-mode prompts.
+    /// `false` = autonomous / non-TTY mode; `ask` falls back to `deny`.
+    pub is_tty: bool,
 }
 
 impl Default for LoopConfig {
@@ -40,6 +62,8 @@ impl Default for LoopConfig {
             model: "gemma4".to_string(),
             max_iterations: 20,
             stream: false,
+            policy: Policy::default(), // fail-safe deny-all
+            is_tty: false,
         }
     }
 }
@@ -121,7 +145,7 @@ pub async fn run_loop(
         // results — this is required by the OpenAI spec.
         history.push(completion);
 
-        let results = execute_tool_calls(&tool_calls, &registry, &ctx).await;
+        let results = execute_tool_calls(&tool_calls, &registry, &ctx, &config).await;
 
         for result in results {
             history.push(ChatMessage::tool_result(result.call_id, result.content));
@@ -134,16 +158,70 @@ pub async fn run_loop(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Dispatch all tool calls in a turn concurrently, preserving order.
+/// Dispatch all tool calls in a turn sequentially, passing each through the
+/// full safety pipeline: GUARDRAILS → PERMISSION → SANDBOX → execute.
+///
+/// A blocked call returns the blocking reason as the tool result content so
+/// the model can adapt.  It is NOT a hard error that stops the loop.
 async fn execute_tool_calls(
     calls: &[ToolCall],
     registry: &ToolRegistry,
     ctx: &ToolContext,
+    config: &LoopConfig,
 ) -> Vec<ToolCallResult> {
-    // P1: sequential execution (concurrent tool execution is P3).
+    // P2: sequential execution (concurrent tool execution is P3).
     let mut results = Vec::with_capacity(calls.len());
+    let os_sandbox = NoopOsSandbox;
+
     for call in calls {
-        let content = dispatch(registry, &call.function.name, &call.function.arguments, ctx).await;
+        let tool_name = &call.function.name;
+        let args_json = &call.function.arguments;
+
+        // ── Layer 1 + 2: Guardrails → Permission ────────────────────────────
+        let outcome = run_pipeline(
+            tool_name,
+            args_json,
+            &ctx.workdir,
+            &config.policy,
+            config.is_tty,
+        );
+
+        let content = match outcome {
+            PolicyOutcome::Proceed => {
+                // ── Layer 3: Sandbox ─────────────────────────────────────────
+                // For run_command: use the sandboxed runner (env scrub + arg scan + cwd lock).
+                // For all other tools: the sandbox path-confinement is already enforced
+                // by ToolContext::resolve_path; run through dispatch as before.
+                if tool_name == "run_command" {
+                    // Extract the command string from the JSON args.
+                    match serde_json::from_str::<serde_json::Value>(args_json)
+                        .ok()
+                        .and_then(|v| v["command"].as_str().map(|s| s.to_string()))
+                    {
+                        Some(cmd) => {
+                            match sandbox::run_sandboxed(&cmd, &ctx.workdir, &os_sandbox).await {
+                                Ok(output) => output.into_tool_result(),
+                                Err(e) => format!("error: {e}"),
+                            }
+                        }
+                        None => {
+                            // Malformed args: fall through to dispatch which will
+                            // return a proper "missing command argument" error.
+                            dispatch(registry, tool_name, args_json, ctx).await
+                        }
+                    }
+                } else {
+                    dispatch(registry, tool_name, args_json, ctx).await
+                }
+            }
+            blocked => {
+                // Feed the denial back to the model as the tool result.
+                blocked
+                    .into_tool_result()
+                    .unwrap_or_else(|| "blocked".to_string())
+            }
+        };
+
         results.push(ToolCallResult {
             call_id: call.id.clone(),
             tool_name: call.function.name.clone(),
@@ -257,6 +335,7 @@ struct ToolCallAccumulator {
 mod tests {
     use super::*;
     use crate::error::HarnessError;
+    use crate::policy::{Mode, Policy};
     use crate::provider::types::FunctionCall;
     use crate::provider::{
         ChatCompletion, ChatMessage, Choice, FinishReason, ProviderClient, StreamChunk, Tool,
@@ -351,7 +430,27 @@ mod tests {
         }
     }
 
-    // ── Tests ────────────────────────────────────────────────────────────────
+    /// A permissive policy for tests that need tool execution to proceed.
+    fn allow_all_policy() -> Policy {
+        Policy {
+            default_mode: Mode::Allow,
+            tools: std::collections::HashMap::new(),
+            patterns: Vec::new(),
+        }
+    }
+
+    /// Build a LoopConfig with allow-all policy for basic loop tests.
+    fn test_config(max_iterations: u32) -> LoopConfig {
+        LoopConfig {
+            model: "mock".to_string(),
+            max_iterations,
+            stream: false,
+            policy: allow_all_policy(),
+            is_tty: false,
+        }
+    }
+
+    // ── Core loop tests ──────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn loop_immediate_final_answer() {
@@ -361,17 +460,12 @@ mod tests {
         )]));
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
-        let config = LoopConfig {
-            model: "mock".to_string(),
-            max_iterations: 5,
-            stream: false,
-        };
 
         let result = run_loop(
             provider,
             registry,
             ctx,
-            config,
+            test_config(5),
             "You are a helpful assistant.".to_string(),
             vec![ChatMessage::user("Say hello")],
         )
@@ -400,17 +494,12 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
-        let config = LoopConfig {
-            model: "mock".to_string(),
-            max_iterations: 5,
-            stream: false,
-        };
 
         let result = run_loop(
             provider,
             registry,
             ctx,
-            config,
+            test_config(5),
             "You are a helpful assistant.".to_string(),
             vec![ChatMessage::user("What is in note.txt?")],
         )
@@ -436,17 +525,12 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
-        let config = LoopConfig {
-            model: "mock".to_string(),
-            max_iterations: 3,
-            stream: false,
-        };
 
         let err = run_loop(
             provider,
             registry,
             ctx,
-            config,
+            test_config(3),
             "system".to_string(),
             vec![ChatMessage::user("loop forever")],
         )
@@ -469,17 +553,12 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
-        let config = LoopConfig {
-            model: "mock".to_string(),
-            max_iterations: 5,
-            stream: false,
-        };
 
         let result = run_loop(
             provider,
             registry,
             ctx,
-            config,
+            test_config(5),
             "system".to_string(),
             vec![ChatMessage::user("write a file")],
         )
@@ -493,5 +572,152 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(content, "done");
+    }
+
+    // ── P2 Safety pipeline integration tests ─────────────────────────────────
+    //
+    // These verify that denials from guardrails and permission reach the model
+    // as tool results (not as hard errors), and that the loop continues.
+
+    /// A guardrail-blocked call must return its reason as the tool result and
+    /// the loop must continue to the next turn (the model sees the denial and
+    /// can give a final answer).
+    #[tokio::test]
+    async fn guardrail_denial_is_fed_back_as_tool_result() {
+        let tmp = TempDir::new().unwrap();
+
+        // Turn 1: model tries to `rm -rf /` → blocked by guardrail.
+        // Turn 2: model gives up and returns a final answer.
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response("run_command", r#"{"command": "rm -rf /"}"#),
+            make_final_response("I cannot do that"),
+        ]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            test_config(5),
+            "system".to_string(),
+            vec![ChatMessage::user("wipe everything")],
+        )
+        .await
+        .unwrap();
+
+        // The loop must complete (not panic or return Err).
+        assert_eq!(result.final_response, "I cannot do that");
+        assert_eq!(result.turns, 2);
+
+        // The history must contain a tool result message with the guardrail reason.
+        let tool_result = result.history.iter().find(|m| {
+            m.tool_call_id.is_some()
+                && m.content
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("sila_panatatipata")
+        });
+        assert!(
+            tool_result.is_some(),
+            "guardrail violation reason not found in history"
+        );
+    }
+
+    /// A permission-denied call must return the denial reason as the tool
+    /// result message.
+    #[tokio::test]
+    async fn permission_denial_is_fed_back_as_tool_result() {
+        let tmp = TempDir::new().unwrap();
+
+        // Turn 1: model tries run_command → denied by policy.
+        // Turn 2: model returns a final answer.
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response("run_command", r#"{"command": "echo hi"}"#),
+            make_final_response("cannot run that"),
+        ]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+
+        // Deny all policy.
+        let deny_config = LoopConfig {
+            model: "mock".to_string(),
+            max_iterations: 5,
+            stream: false,
+            policy: Policy {
+                default_mode: Mode::Deny,
+                tools: std::collections::HashMap::new(),
+                patterns: Vec::new(),
+            },
+            is_tty: false,
+        };
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            deny_config,
+            "system".to_string(),
+            vec![ChatMessage::user("run echo hi")],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_response, "cannot run that");
+
+        // History must contain a tool result with the denial reason.
+        let tool_result = result.history.iter().find(|m| {
+            m.tool_call_id.is_some()
+                && m.content
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("DENIED by permission policy")
+        });
+        assert!(
+            tool_result.is_some(),
+            "permission denial not found in tool result history"
+        );
+    }
+
+    /// Blocking a call via no-verify guardrail must surface the rule name.
+    #[tokio::test]
+    async fn guardrail_no_verify_surfaces_in_tool_result() {
+        let tmp = TempDir::new().unwrap();
+
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response(
+                "run_command",
+                r#"{"command": "git commit --no-verify -m 'skip hooks'"}"#,
+            ),
+            make_final_response("ok"),
+        ]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            test_config(5),
+            "system".to_string(),
+            vec![ChatMessage::user("commit")],
+        )
+        .await
+        .unwrap();
+
+        let tool_result = result.history.iter().find(|m| {
+            m.tool_call_id.is_some()
+                && m.content
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("sila_surameraya")
+        });
+        assert!(
+            tool_result.is_some(),
+            "sila_surameraya not found in tool result"
+        );
     }
 }

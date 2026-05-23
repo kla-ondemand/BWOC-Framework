@@ -10,10 +10,11 @@ use std::sync::Arc;
 use clap::Parser;
 
 use bwoc_harness::{
-    agent_loop::{LoopConfig, run_loop},
+    agent_loop::{run_loop, LoopConfig},
     error::HarnessResult,
+    policy::{HarnessPolicy, Policy},
     provider::{ChatMessage, OllamaClient, ProviderClient},
-    tools::{ToolContext, registry::default_registry},
+    tools::{registry::default_registry, ToolContext},
 };
 
 // ---------------------------------------------------------------------------
@@ -109,13 +110,31 @@ async fn run() -> HarnessResult<()> {
     let registry = Arc::new(default_registry());
 
     // ── Context ───────────────────────────────────────────────────────────
-    let ctx = ToolContext::new(workdir);
+    let ctx = ToolContext::new(&workdir);
+
+    // ── Permission policy ─────────────────────────────────────────────────
+    // Load from .bwoc/harness-policy.toml relative to the workdir.
+    // Falls back to a fail-safe deny-all policy if the file is absent.
+    let policy: Policy = HarnessPolicy::load(&workdir)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "[bwoc-harness] warning: could not load harness-policy.toml: {e}. \
+                 Using fail-safe deny-all policy."
+            );
+            bwoc_harness::policy::HarnessPolicy::default()
+        })
+        .into();
+
+    // Detect TTY: if stderr is a terminal, the operator can respond to `ask` prompts.
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stderr());
 
     // ── Loop config ───────────────────────────────────────────────────────
     let config = LoopConfig {
         model: args.model.clone(),
         max_iterations: args.max_iterations,
         stream: args.stream,
+        policy,
+        is_tty,
     };
 
     // ── Run ───────────────────────────────────────────────────────────────

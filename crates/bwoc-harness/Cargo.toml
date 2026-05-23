@@ -30,6 +30,9 @@ bytes = "1"
 # Async trait support
 async-trait = "0.1"
 
+# TOML config parsing for .bwoc/harness-policy.toml
+toml = "0.8"
+
 [dev-dependencies]
 # HTTP mock server for offline provider tests
 wiremock = "0.6"

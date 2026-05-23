@@ -52,6 +52,7 @@ A new top-level `trust` block in `config.manifest.json`. Both halves are optiona
   "agentId": "agent-{{name}}",
   "role": "{{agentRole}}",
   "trust": {
+    "schemaVersion": 1,
     "declared": {
       "piyo": true,
       "garu": false,
@@ -61,12 +62,22 @@ A new top-level `trust` block in `config.manifest.json`. Both halves are optiona
       "gambhira": false,
       "noCatthana": true
     },
-    "requiredTrust": ["vatta", "vacanakkhamo", "noCatthana"]
+    "requiredTrust": ["vatta", "noCatthana"]
   }
 }
 ```
 
 > [!note] `declared` describes **this agent's claim about itself**; `requiredTrust` describes **what this agent demands from peers who want to message it**. They are independent — an agent can require qualities it doesn't itself claim, and that's legitimate (recipients are entitled to their own bar).
+
+### `schemaVersion`
+
+The `trust` block carries an explicit `schemaVersion: 1` integer so future spec revisions can add fields without silently breaking recipients. **Rule for missing fields in `declared`: treat as `false`.** If a v2 spec adds a quality `mudu` and a v1 agent's manifest doesn't declare it, recipients running v2 see `declared.mudu === undefined`, which the framework treats as `false`. The recipient's refusal logic then applies normally — no silent acceptance, no silent refusal of every v1 peer.
+
+A v1 daemon reading a v2 manifest ignores unknown fields entirely (forward-compat through ignorance). This is **Anicca** — the seam is laid before the change.
+
+### Manifest scaffolding
+
+The `incarnate.sh` template and (future) `bwoc new` will seed the `trust` block with a sensible floor: `requiredTrust: ["vatta", "noCatthana"]` — "speaks beneficial truth" + "does not lead astray". These are the two qualities Pi identified as the **minimum civic floor** every peer should reasonably demand. Newly incarnated agents are therefore "strict-ish out of the box" while the framework-wide default stays permissive (existing agents are unaffected; scaffold-driven adoption ≠ default flip). This avoids the **vestigial-feature risk** of a refusal mechanism nobody opts into.
 
 ## Evidence Rules (what `bwoc check` verifies)
 
@@ -79,7 +90,7 @@ A declared quality is **only valid if** the corresponding evidence exists. `bwoc
 | `bhavaniyo` | `mindsets/` contains an entry whose name or content references improvement / verification / right-amount (Yoniso Manasikāra / Mattaññutā tags). Helping peers improve presumes an explicit improvement frame. |
 | `vatta` | The persona's out-of-scope (anti-scope) is non-empty. Speaking beneficial truth requires being honest about what you DON'T do. Empty anti-scope ≡ no commitment to truthful refusal. |
 | `vacanakkhamo` | An inbox flow has been exercised at least once (`.bwoc/inbox.jsonl` exists and is non-empty, OR `interconnect/feedback.md` documents how the agent handles feedback). |
-| `gambhira` | At least one skill or doc file under the agent root is ≥ 50 lines AND mentions philosophy linkage (Pali term OR philosophical framework name). Profundity needs concrete depth, not just claims. |
+| `gambhira` | At least one doc file under the agent root is ≥ 50 lines AND contains a `[[PHILOSOPHY.en.md]]` (or `[[PHILOSOPHY.th.md]]`) wikilink. Profundity needs to be *anchored to canon* — a backlink into the philosophy graph proves the depth claim integrates with the framework, not just sprinkles Pali keywords. (Earlier draft accepted "Pali term mention" as evidence; Pi pointed out that's the most-padded check in the table — keyword sniff with zero structural commitment. Backlink is harder to fake: the link only works if `PHILOSOPHY.en.md` exists at the right relative path, which forces the doc to live in the right tree.) |
 | `noCatthana` | `persona/README.md` Section "Anti-scope" exists AND includes at least one explicit "will refuse" entry. Refusing inappropriate requests is the foundation of not leading astray. |
 
 These rules are deliberately mechanical. They don't measure *actual* trustworthiness — they measure whether the agent has the structural pieces in place to even attempt the quality. Honest claims still depend on the human operator. The framework's role is to **catch obvious lies** (claim `gambhira` with no docs), not to certify virtue.
@@ -113,14 +124,35 @@ When `bwoc send <recipient> <message>` (or future agent-originated send) appends
 
 Sender == `user` is a special case: user-originated messages always pass (the user is by definition above the trust gate). Trust gates govern agent→agent messaging only.
 
-Default behavior — `trust.requiredTrust` empty or absent — is **no gating**. The framework ships permissive by default; recipients opt in to refusal.
+Default behavior — `trust.requiredTrust` empty or absent — is **no gating**. The framework ships permissive by default; recipients opt in to refusal. Newly-incarnated agents inherit a non-empty default from the template scaffold (`["vatta", "noCatthana"]`) — see [Manifest scaffolding](#manifest-scaffolding) — so the feature isn't vestigial in practice while staying permissive at the policy layer.
+
+### Refusal modes (planned for v2)
+
+v1 has 2 states per quality per envelope: pass / refuse. v2 should add **warn-by-default** to make trust observable before policy hardens:
+
+| Mode | When envelope arrives with missing required quality |
+|---|---|
+| `off` | (v1 default behavior when `requiredTrust` is empty) — envelope passes; no log entry |
+| `warn` (planned v2 default for declared `requiredTrust`) | Envelope passes BUT the daemon logs a `trust_warn` line referencing which qualities were missing. Recipient sees the pattern in `bwoc log -f` and can decide whether to upgrade to `refuse` |
+| `refuse` (v1 behavior when `requiredTrust` non-empty) | Envelope marked `refused`, written to inbox with `refused: { reason, missing }` block, never deleted |
+
+This 3-state design is Oracle's suggestion. The motivation: strict-by-default for a self-declared (un-signed) trust model is **security theater** — an adversary can lie in their manifest. Warn-by-default gives recipients data to decide whether refusal is warranted without committing the framework to false-strict semantics. v1 ships with 2 states (`off` and `refuse`); v2 adds `warn` as an intermediate when telemetry shows it's needed.
 
 ## What This Spec Does NOT Cover
 
 - **Runtime adjustments.** v1 is strictly declared; no telemetry-driven score changes. Hybrid model deferred to v2.
-- **Signing / proof of identity.** A malicious clone could lie in its `config.manifest.json`. Identity proofing (signed manifests, etc.) is a separate Phase 3 work item — this spec assumes honest declarations from agents within a workspace boundary.
+- **Signing / proof of identity.** A malicious clone could lie in its `config.manifest.json`. Identity proofing (signed manifests, etc.) is a separate Phase 3 work item — this spec assumes honest declarations from agents within a workspace boundary. **This is also why `requiredTrust` must not be strict-by-default at the framework level:** strict refusal against an un-signed manifest is security theater. The scaffolded floor (`["vatta", "noCatthana"]`) on new agents is acceptable because new agents OPT IN at incarnation time; the policy was never imposed framework-wide.
 - **Reputation across workspaces.** Trust is per-workspace. A trusted agent in workspace A is a stranger in workspace B until incarnated there.
 - **Notification of refusal back to sender.** Deliberately omitted — refusal is the recipient's prerogative, not a contract to inform the sender. Listening is the sender's responsibility.
+
+## Spec Revision History
+
+- **v1 / 2026-05-23 (initial draft):** 7 declared booleans + `requiredTrust` array, evidence-rule table, refusal semantics. Permissive default. No scaffolding floor.
+- **v1.1 / 2026-05-23 (Oracle + Pi review):**
+  - `gambhira` evidence rule rewritten from "≥50 lines + Pali term mention" → "≥50 lines + `[[PHILOSOPHY.en.md]]` wikilink" per Pi (catches the keyword-sniff loophole, reuses existing wikilink infrastructure).
+  - `trust.schemaVersion: 1` added; explicit "missing fields in `declared` → `false`" rule documented per Pi (Anicca seam for future v2 fields).
+  - Scaffolding clause: incarnate.sh / `bwoc new` seed `requiredTrust: ["vatta", "noCatthana"]` per Pi (vestigial-feature defense without flipping framework default).
+  - "Refusal modes" section added planning 3-state (`off` / `warn` / `refuse`) for v2 per Oracle (warn-by-default avoids security theater while gathering data).
 
 ## Implementation Order (when code work begins)
 

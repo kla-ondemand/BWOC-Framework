@@ -6,7 +6,29 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-Phase 1 v2.0 work in progress — first implementation cycle against the v2.0 specification.
+Phase 3 work in progress beyond the v2026.5.23-1 release. Items shipped here will land in the next CalVer tag.
+
+## [v2026.5.23-1] — 2026-05-23
+
+### Fixed
+
+- **Release workflow race condition** — five parallel matrix jobs each called `softprops/action-gh-release@v2` with create-or-update semantics; one created the release first, then the next-arriving job raced and failed with "Validation Failed: already_exists". Refactored into one `create-release` job (`gh release create --generate-notes`) + per-target matrix jobs that only `gh release upload --clobber`. `v2026.5.23-1` shipped all 10 assets (5 binaries + 5 sha256) on the first run, no rerun needed.
+
+## [v2026.5.23-0] — 2026-05-23
+
+First public release of the BWOC framework. CalVer scheme: `v<YYYY>.<M>.<D>-<patch>`.
+
+### Added
+
+Everything documented under the prior `[Unreleased]` "Phase 1 v2.0 work in progress" rollup is included in this release. Highlights:
+
+**Open-source project hygiene**
+
+- `VISION.md` + `VISION.th.md` — project purpose, the arc BWOC models, success criteria, non-goals, tradeoff principles. Bilingual (EN canonical, TH translation).
+- `SECURITY.md` — coordinated disclosure process; scope; links to the existing threat model.
+- `CODE_OF_CONDUCT.md` — BWOC-native (Sīla 5 prohibitions + Brahmavihāra 4 dispositions); explicitly non-sectarian.
+- `VERSION.md` — current version mirror, source-of-truth pointer to `Cargo.toml`, SemVer policy, phase-vs-version distinction.
+- Root `README.md` Tech Stack section, badges (License · Rust · platforms · languages · status), table of contents, and footer (Contributing · Security · CoC · License).
 
 ### Added
 

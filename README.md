@@ -314,6 +314,8 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 **Current phase:** Phase 2 — *ṭhiti operations* — in progress. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend).
 
+**First public release:** [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) shipped 2026-05-23 with cross-platform binaries for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`. CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`; SHA-256 checksums shipped alongside each binary.
+
 | Area | Status |
 |---|---|
 | Specification (Philosophy, PRD, SRS, Threat) | Ready |

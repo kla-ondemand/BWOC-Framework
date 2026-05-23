@@ -976,7 +976,11 @@ mod tests {
     }
 
     // ---- Incarnation-mode audit end-to-end ----------------------------------
+    // Unix-only: exercises real backend symlinks → AGENTS.md. Windows symlink
+    // support is deferred to Phase 2 (see new.rs::create_symlinks), so these
+    // end-to-end audits don't apply there.
 
+    #[cfg(unix)]
     fn write_temp_agent(label: &str, manifest_name: &str, agents_body: &str) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("bwoc-check-{label}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -1005,6 +1009,7 @@ mod tests {
         root
     }
 
+    #[cfg(unix)]
     #[test]
     fn incarnated_with_unsubstituted_placeholder_fails() {
         let root = write_temp_agent(
@@ -1025,6 +1030,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn incarnated_clean_doc_passes() {
         let root = write_temp_agent(
@@ -1054,6 +1060,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn template_mode_still_checks_placeholders_exist() {
         let root = write_temp_agent(

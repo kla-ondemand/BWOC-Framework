@@ -131,11 +131,24 @@ async fn run() -> HarnessResult<()> {
     // ── Loop config ───────────────────────────────────────────────────────
     let config = LoopConfig {
         model: args.model.clone(),
+        fallback_models: Vec::new(),
+        vetted_models: Vec::new(),
         max_iterations: args.max_iterations,
         stream: args.stream,
         policy,
         is_tty,
+        context_limit: 0, // no compaction by default; operator sets via config
     };
+
+    // ── Telemetry ─────────────────────────────────────────────────────────
+    let session_id = format!(
+        "sess-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
+    let mut telemetry = bwoc_harness::telemetry::Telemetry::new(session_id, "bwoc-harness");
 
     // ── Run ───────────────────────────────────────────────────────────────
     println!("\ntask: {}", args.task);
@@ -148,8 +161,15 @@ async fn run() -> HarnessResult<()> {
         config,
         system_prompt,
         vec![ChatMessage::user(&args.task)],
+        &mut telemetry,
     )
     .await?;
+
+    // Persist session metrics (best-effort; non-fatal if it fails).
+    let metrics_path = args.workdir.join("session-metrics.jsonl");
+    if let Err(e) = telemetry.finish(&metrics_path) {
+        eprintln!("[bwoc-harness] warning: could not write session metrics: {e}");
+    }
 
     println!("─────────────────────────────────────────────");
     println!("done in {} turn(s).\n", result.turns);

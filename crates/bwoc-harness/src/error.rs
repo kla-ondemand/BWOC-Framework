@@ -9,12 +9,30 @@ pub enum HarnessError {
     #[error("provider error: {0}")]
     Provider(String),
 
+    /// Transient provider error — network connectivity, 5xx, or timeout.
+    /// These are safe to retry with exponential backoff.
+    /// Non-transient errors (4xx, model-not-found) use other variants.
+    #[error("transient provider error (retryable): {0}")]
+    TransientProvider(String),
+
     /// The requested model was not found at the endpoint (HTTP 404 or absent
     /// from the models list).  The spike confirmed Ollama returns 404 for
     /// wrong model tags — surface this clearly rather than letting it
     /// manifest as a mysterious JSON parse failure.
     #[error("model not found: `{0}` — check the model tag with `ollama list`")]
     ModelNotFound(String),
+
+    /// All models in the fallback chain failed or were exhausted.
+    #[error("all models exhausted: tried {tried:?}; last error: {last_error}")]
+    AllModelsExhausted {
+        tried: Vec<String>,
+        last_error: String,
+    },
+
+    /// The model returned malformed or unparseable tool calls repeatedly
+    /// and all retry/fallback attempts were exhausted.
+    #[error("malformed tool calls from model `{model}` after {attempts} attempts")]
+    MalformedToolCalls { model: String, attempts: u32 },
 
     /// A tool invocation failed.
     #[error("tool `{tool}` failed: {reason}")]
@@ -39,6 +57,17 @@ pub enum HarnessError {
     /// Catch-all for unexpected conditions.
     #[error("{0}")]
     Other(String),
+}
+
+impl HarnessError {
+    /// Returns `true` if this error is transient and safe to retry.
+    ///
+    /// Transient: network failures, 5xx responses, request timeouts.
+    /// Non-transient: 4xx, model-not-found, malformed tool calls, I/O errors
+    /// from the harness itself, path escapes.
+    pub fn is_transient(&self) -> bool {
+        matches!(self, HarnessError::TransientProvider(_))
+    }
 }
 
 /// Convenience alias.

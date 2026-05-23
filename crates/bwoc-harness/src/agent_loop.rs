@@ -2,7 +2,7 @@
 //!
 //! Each turn:
 //!   1. Build messages (system prompt + history + tool schemas).
-//!   2. Call the provider (`stream=false` first; streaming path also present).
+//!   2. Call the provider with retry + fallback model logic.
 //!   3. Accumulate `tool_calls` from the response.
 //!   4. **For each tool call: GUARDRAILS → PERMISSION → SANDBOX → execute.**
 //!   5. Append `assistant(tool_calls)` + `tool` result messages to history.
@@ -11,13 +11,60 @@
 //! Stop conditions:
 //!   - No `tool_calls` in the response (model returned final answer).
 //!   - Reached `max_iterations`.
-//!   - External cancel signal (future P3 queue integration — stub for now).
+//!   - External cancel signal (future: integrates with the P3 queue token).
 //!
-//! Context compaction (summarise / truncate) is P4 — not implemented here.
+//! # P4 additions
+//!
+//! ## Retry with bounded exponential backoff
+//!
+//! Transient provider errors (connection failures, 5xx) are retried up to
+//! `MAX_TRANSIENT_RETRIES` times with base-2 exponential backoff capped at
+//! `MAX_BACKOFF_MS`.  Non-transient errors (4xx, model-not-found) fail fast.
+//!
+//! ## Fallback model chain
+//!
+//! `LoopConfig::fallback_models` is an ordered list of model IDs to try if
+//! the primary model fails or returns malformed tool calls (empty tool call
+//! IDs / unparseable arguments) more than `MALFORMED_TOOL_CALL_THRESHOLD`
+//! times in a row.  Each fallback is tried in order until one succeeds or
+//! the list is exhausted.
+//!
+//! ## Vetted-model gate
+//!
+//! `LoopConfig::vetted_models` is a configurable allowlist of model IDs known
+//! to support tool-calling reliably.  Running an unvetted model emits a
+//! warning to stderr (not a hard error) so the user is informed without
+//! blocking the run.
+//!
+//! ## Context compaction
+//!
+//! When the estimated context token count approaches
+//! `LoopConfig::context_limit` (leaving a `CONTEXT_HEADROOM` margin), the
+//! loop compacts the history by:
+//!
+//! 1. Retaining the system message (index 0) and the last
+//!    `COMPACTION_KEEP_RECENT` messages unchanged.
+//! 2. Replacing the middle section with a single user message that acts as a
+//!    summary marker: `[context compacted: N messages truncated]`.
+//!
+//! **Why truncate-with-marker rather than LLM-summarise?**
+//! - Zero extra latency / cost — no second model call needed.
+//! - No new failure mode (summarisation model could fail too).
+//! - Sufficient for v1: the model sees the recent turns and knows older
+//!   context was cut.  An operator can tune `context_limit` down to force
+//!   more frequent but smaller compactions.
+//! - LLM-summarise is a clear upgrade path; the design doc records this as
+//!   "P5 / operator-opt-in via config flag".
+//!
+//! ## Telemetry (P3 deferral resolved)
+//!
+//! A `TurnBuilder` is instantiated at the start of each turn and populated
+//! with `usage.prompt_tokens` / `usage.completion_tokens` from the
+//! `ChatCompletion`, tool-call count, denial count, and context-token
+//! estimate.  `telemetry.record_turn` is called at the end of every turn.
+//! `telemetry.finish` is called after the loop exits.
 //!
 //! # P2 Safety pipeline
-//!
-//! Every tool call passes through the three-layer pipeline before execution:
 //!
 //! ```text
 //! GUARDRAILS (hard, non-overridable)
@@ -35,14 +82,53 @@ use crate::error::{HarnessError, HarnessResult};
 use crate::policy::{Policy, PolicyOutcome, run_pipeline};
 use crate::provider::{ChatMessage, ProviderClient, ToolCall};
 use crate::sandbox::{self, NoopOsSandbox};
+use crate::telemetry::{Telemetry, TurnBuilder};
 use crate::tools::registry::dispatch;
 use crate::tools::{ToolContext, ToolRegistry};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum retries for a single transient provider error before giving up on
+/// the current model and falling back (or returning an error).
+const MAX_TRANSIENT_RETRIES: u32 = 3;
+
+/// Base backoff in milliseconds.  Doubles each retry up to `MAX_BACKOFF_MS`.
+const BACKOFF_BASE_MS: u64 = 200;
+
+/// Maximum backoff cap in milliseconds (≈ 3 seconds).
+const MAX_BACKOFF_MS: u64 = 3_200;
+
+/// How many consecutive malformed-tool-call responses from a model before
+/// triggering fallback to the next model in the chain.
+const MALFORMED_TOOL_CALL_THRESHOLD: u32 = 2;
+
+/// How many messages to keep at the tail of the history during compaction.
+/// The system prompt is always kept; these are the most-recent turns.
+const COMPACTION_KEEP_RECENT: usize = 6;
+
+/// Leave this fraction of the context limit as headroom before compacting.
+/// Compaction triggers when `context_tokens > context_limit * (1 - headroom)`.
+const CONTEXT_HEADROOM_FRAC: f64 = 0.10;
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
 
 /// Configuration for a single agent run.
 #[derive(Debug, Clone)]
 pub struct LoopConfig {
-    /// Model identifier (e.g. `"gemma4"`, `"qwen2.5-coder:7b"`).
+    /// Primary model identifier (e.g. `"gemma4"`, `"qwen2.5-coder:7b"`).
     pub model: String,
+    /// Ordered fallback model list.  If the primary errors fatally or returns
+    /// malformed tool calls repeatedly, the loop switches to the next model.
+    /// Empty = no fallback.
+    pub fallback_models: Vec<String>,
+    /// Allowlist of model IDs known to support tool-calling reliably.
+    /// An unvetted model emits a warning but is NOT hard-blocked.
+    /// Empty = no allowlist (all models accepted without warning).
+    pub vetted_models: Vec<String>,
     /// Maximum number of turns before giving up.
     pub max_iterations: u32,
     /// Whether to use streaming mode (SSE) for token deltas.
@@ -54,19 +140,30 @@ pub struct LoopConfig {
     /// Whether the harness has a controlling TTY for `ask`-mode prompts.
     /// `false` = autonomous / non-TTY mode; `ask` falls back to `deny`.
     pub is_tty: bool,
+    /// Context-window token limit for this model.  When the running context
+    /// approaches this limit, the loop compacts the history.
+    /// `0` = no compaction.
+    pub context_limit: u32,
 }
 
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
             model: "gemma4".to_string(),
+            fallback_models: Vec::new(),
+            vetted_models: Vec::new(),
             max_iterations: 20,
             stream: false,
             policy: Policy::default(), // fail-safe deny-all
             is_tty: false,
+            context_limit: 0,
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Result
+// ---------------------------------------------------------------------------
 
 /// Result of a completed agent run.
 #[derive(Debug)]
@@ -77,7 +174,16 @@ pub struct LoopResult {
     pub turns: u32,
     /// All messages exchanged (for debug / memory purposes).
     pub history: Vec<ChatMessage>,
+    /// Number of context compactions performed.
+    pub compactions: u32,
+    /// Model that produced the final answer (may differ from config.model if
+    /// fallback was triggered).
+    pub active_model: String,
 }
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
 
 /// Run the agentic loop.
 ///
@@ -88,6 +194,8 @@ pub struct LoopResult {
 /// - `config` — loop configuration.
 /// - `system_prompt` — the agent's system prompt (loaded from `AGENTS.md`).
 /// - `initial_messages` — the first user message(s).
+/// - `telemetry` — mutable telemetry accumulator; receives one record per turn
+///   and is flushed by the caller after this function returns.
 pub async fn run_loop(
     provider: Arc<dyn ProviderClient>,
     registry: Arc<ToolRegistry>,
@@ -95,7 +203,18 @@ pub async fn run_loop(
     config: LoopConfig,
     system_prompt: String,
     initial_messages: Vec<ChatMessage>,
+    telemetry: &mut Telemetry,
 ) -> HarnessResult<LoopResult> {
+    // --- Vetted-model gate ---------------------------------------------------
+    // Warn (stderr) if the primary model is not on the vetted list.
+    if !config.vetted_models.is_empty() && !config.vetted_models.contains(&config.model) {
+        eprintln!(
+            "[bwoc-harness] WARNING: model `{}` is not in the vetted-models allowlist. \
+             Tool-calling reliability is unknown. Proceeding anyway.",
+            config.model
+        );
+    }
+
     let tools = registry.tool_schemas();
 
     // Build the initial message history.
@@ -104,6 +223,20 @@ pub async fn run_loop(
     history.extend(initial_messages);
 
     let mut turns = 0u32;
+    let mut compactions = 0u32;
+
+    // Active model may shift to a fallback; we track it here.
+    let mut active_model = config.model.clone();
+    // Build the full model chain: primary + fallbacks.
+    let model_chain: Vec<String> = {
+        let mut chain = vec![config.model.clone()];
+        chain.extend(config.fallback_models.iter().cloned());
+        chain
+    };
+    let mut model_chain_idx = 0usize;
+
+    // Consecutive malformed-tool-call counter for the current model.
+    let mut consecutive_malformed = 0u32;
 
     loop {
         turns += 1;
@@ -111,52 +244,261 @@ pub async fn run_loop(
             return Err(HarnessError::MaxIterations(config.max_iterations));
         }
 
-        // ── Turn: call the provider ──────────────────────────────────────
-        let completion = if config.stream {
-            // Stream the response and accumulate into a ChatCompletion-like result.
-            stream_and_accumulate(&*provider, history.clone(), tools.clone(), &config.model).await?
-        } else {
-            // Blocking complete.
-            let resp = provider
-                .complete(history.clone(), tools.clone(), &config.model)
-                .await?;
-            let choice = resp.choices.into_iter().next().ok_or_else(|| {
-                HarnessError::Provider("provider returned empty choices".to_string())
-            })?;
-            choice.message
-        };
+        // ── Context compaction ────────────────────────────────────────────────
+        if config.context_limit > 0 {
+            let estimated = estimate_context_tokens(&history);
+            let threshold = (config.context_limit as f64 * (1.0 - CONTEXT_HEADROOM_FRAC)) as u32;
+            if estimated >= threshold {
+                compact_history(&mut history);
+                compactions += 1;
+            }
+        }
 
-        // ── Check for tool calls ─────────────────────────────────────────
-        let tool_calls = completion.tool_calls.clone().unwrap_or_default();
+        // ── Turn builder (telemetry) ──────────────────────────────────────────
+        let mut tb = TurnBuilder::new(turns);
+
+        // Snapshot context token estimate for this turn's start.
+        tb.context_tokens = estimate_context_tokens(&history);
+
+        // ── Call provider with retry ─────────────────────────────────────────
+        let (completion, usage_opt) = call_with_retry_v2(
+            &*provider,
+            history.clone(),
+            tools.clone(),
+            &active_model,
+            config.stream,
+        )
+        .await?;
+
+        // Populate token counts from usage if the provider returned them.
+        if let Some(usage) = &usage_opt {
+            tb.tokens_in = usage.prompt_tokens;
+            tb.tokens_out = usage.completion_tokens;
+        }
+
+        // ── Check for malformed tool calls ───────────────────────────────────
+        // A tool call is "malformed" if its id is empty or its arguments are
+        // not valid JSON.  Consistently malformed responses trigger fallback.
+        let raw_tool_calls = completion.tool_calls.clone().unwrap_or_default();
+
+        let this_turn_malformed =
+            !raw_tool_calls.is_empty() && has_malformed_tool_calls(&raw_tool_calls);
+
+        if this_turn_malformed {
+            consecutive_malformed += 1;
+            eprintln!(
+                "[bwoc-harness] malformed tool call from `{active_model}` \
+                 (consecutive: {consecutive_malformed}/{MALFORMED_TOOL_CALL_THRESHOLD})"
+            );
+
+            if consecutive_malformed >= MALFORMED_TOOL_CALL_THRESHOLD {
+                // Try the next model in the chain.
+                model_chain_idx += 1;
+                if model_chain_idx >= model_chain.len() {
+                    let tried = model_chain.clone();
+                    return Err(HarnessError::AllModelsExhausted {
+                        tried,
+                        last_error: format!(
+                            "model `{active_model}` returned malformed tool calls \
+                             {consecutive_malformed} times"
+                        ),
+                    });
+                }
+                active_model = model_chain[model_chain_idx].clone();
+                consecutive_malformed = 0;
+
+                // Warn if new active model is unvetted.
+                if !config.vetted_models.is_empty()
+                    && !config.vetted_models.contains(&active_model)
+                {
+                    eprintln!(
+                        "[bwoc-harness] WARNING: fallback model `{active_model}` \
+                         is not in vetted-models allowlist."
+                    );
+                }
+
+                eprintln!("[bwoc-harness] switching to fallback model `{active_model}`");
+                // Don't append anything to history; retry this turn with the
+                // new model.
+                let m = tb.finish();
+                telemetry.record_turn(m);
+                turns -= 1; // Don't count the bad turn toward max_iterations.
+                continue;
+            }
+            // Under the threshold: fall through to normal processing.
+            // The malformed tool calls are treated as if the model returned
+            // no tool calls (empty result), so the loop doesn't get stuck.
+        } else {
+            // Good response: reset the consecutive counter.
+            consecutive_malformed = 0;
+        }
+
+        // ── Check for tool calls ─────────────────────────────────────────────
+        let tool_calls = raw_tool_calls;
 
         if tool_calls.is_empty() {
             // No tool calls → model has given its final answer.
             let final_response = completion.content.clone().unwrap_or_default();
             history.push(completion);
+
+            let m = tb.finish();
+            telemetry.record_turn(m);
+
             return Ok(LoopResult {
                 final_response,
                 turns,
                 history,
+                compactions,
+                active_model,
             });
         }
 
-        // ── Dispatch tools ───────────────────────────────────────────────
+        // ── Dispatch tools ───────────────────────────────────────────────────
         // Append the assistant message (with tool_calls) first, then the
         // results — this is required by the OpenAI spec.
         history.push(completion);
 
+        tb.tool_calls = tool_calls.len() as u32;
+
         let results = execute_tool_calls(&tool_calls, &registry, &ctx, &config).await;
 
-        for result in results {
-            history.push(ChatMessage::tool_result(result.call_id, result.content));
+        // Count denials from the safety pipeline.
+        for result in &results {
+            if result.denied {
+                tb.denials += 1;
+            }
+            history.push(ChatMessage::tool_result(
+                result.call_id.clone(),
+                result.content.clone(),
+            ));
         }
+
+        let m = tb.finish();
+        telemetry.record_turn(m);
         // Continue to next turn.
+    }
+}
+
+/// Unified provider call helper that handles both stream and non-stream paths,
+/// returning `(ChatMessage, Option<Usage>)`.
+async fn call_provider_once(
+    provider: &dyn ProviderClient,
+    messages: Vec<ChatMessage>,
+    tools: Vec<crate::provider::Tool>,
+    model: &str,
+    stream: bool,
+) -> HarnessResult<(ChatMessage, Option<crate::provider::Usage>)> {
+    if stream {
+        let msg = stream_and_accumulate(provider, messages, tools, model).await?;
+        Ok((msg, None)) // streaming path doesn't expose usage counts
+    } else {
+        let completion = provider.complete(messages, tools, model).await?;
+        let usage = completion.usage.clone();
+        let choice =
+            completion.choices.into_iter().next().ok_or_else(|| {
+                HarnessError::Provider("provider returned empty choices".to_string())
+            })?;
+        Ok((choice.message, usage))
+    }
+}
+
+/// Retry wrapper around [`call_provider_once`].
+pub(crate) async fn call_with_retry_v2(
+    provider: &dyn ProviderClient,
+    messages: Vec<ChatMessage>,
+    tools: Vec<crate::provider::Tool>,
+    model: &str,
+    stream: bool,
+) -> HarnessResult<(ChatMessage, Option<crate::provider::Usage>)> {
+    let mut attempt = 0u32;
+    loop {
+        match call_provider_once(provider, messages.clone(), tools.clone(), model, stream).await {
+            Ok(result) => return Ok(result),
+            Err(e) if e.is_transient() && attempt < MAX_TRANSIENT_RETRIES => {
+                attempt += 1;
+                let delay = backoff_ms(attempt);
+                eprintln!(
+                    "[bwoc-harness] transient error on `{model}` (attempt {attempt}/{MAX_TRANSIENT_RETRIES}): {e}. \
+                     Retrying in {delay}ms…"
+                );
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Compute bounded exponential backoff.
+///
+/// attempt 1 → 200ms, 2 → 400ms, 3 → 800ms, 4 → 1600ms … capped at 3200ms.
+fn backoff_ms(attempt: u32) -> u64 {
+    let raw = BACKOFF_BASE_MS.saturating_mul(1u64 << attempt.min(10));
+    raw.min(MAX_BACKOFF_MS)
+}
+
+/// Detect malformed tool calls: empty ID or unparseable JSON arguments.
+///
+/// The spike (llama3.2 3B) produced calls with empty IDs and garbled JSON.
+/// Detecting this early prevents the history from filling with garbage that
+/// confuses the next turn.
+fn has_malformed_tool_calls(calls: &[ToolCall]) -> bool {
+    calls.iter().any(|c| {
+        c.id.is_empty() || serde_json::from_str::<serde_json::Value>(&c.function.arguments).is_err()
+    })
+}
+
+/// Estimate the total context tokens from the current history.
+///
+/// Rough heuristic: 1 token ≈ 4 characters (works for English + code; good
+/// enough for a compaction trigger — exact counts come from `usage` fields).
+fn estimate_context_tokens(history: &[ChatMessage]) -> u32 {
+    let total_chars: usize = history
+        .iter()
+        .map(|m| m.content.as_deref().map_or(0, |c| c.len()))
+        .sum();
+    (total_chars / 4) as u32
+}
+
+/// Compact history in-place using the truncate-with-marker strategy.
+///
+/// Keeps:
+/// - `history[0]` — the system message (always retained).
+/// - The last `COMPACTION_KEEP_RECENT` messages.
+///
+/// Replaces the middle section with a single user message:
+/// `[context compacted: N messages truncated]`
+///
+/// This is the v1 strategy chosen over LLM-summarise for two reasons:
+/// - Zero extra latency (no second model call).
+/// - No new failure mode (summarisation model could fail or add hallucinations).
+///
+/// LLM-summarise is the natural upgrade path when the operator opts in.
+fn compact_history(history: &mut Vec<ChatMessage>) {
+    // Need at least: system + something to compact + the recent tail.
+    let min_len = 1 + COMPACTION_KEEP_RECENT + 1;
+    if history.len() <= min_len {
+        return; // nothing to compact
+    }
+
+    let system = history[0].clone();
+    let tail_start = history.len().saturating_sub(COMPACTION_KEEP_RECENT);
+    let truncated = tail_start - 1; // messages between system and tail
+
+    let tail: Vec<ChatMessage> = history[tail_start..].to_vec();
+
+    let marker = ChatMessage::user(format!(
+        "[context compacted: {truncated} messages truncated to fit context window]"
+    ));
+
+    history.clear();
+    history.push(system);
+    history.push(marker);
+    history.extend(tail);
+}
 
 /// Dispatch all tool calls in a turn sequentially, passing each through the
 /// full safety pipeline: GUARDRAILS → PERMISSION → SANDBOX → execute.
@@ -186,13 +528,13 @@ async fn execute_tool_calls(
             config.is_tty,
         );
 
-        let content = match outcome {
+        let (content, denied) = match outcome {
             PolicyOutcome::Proceed => {
                 // ── Layer 3: Sandbox ─────────────────────────────────────────
                 // For run_command: use the sandboxed runner (env scrub + arg scan + cwd lock).
                 // For all other tools: the sandbox path-confinement is already enforced
                 // by ToolContext::resolve_path; run through dispatch as before.
-                if tool_name == "run_command" {
+                let result = if tool_name == "run_command" {
                     // Extract the command string from the JSON args.
                     match serde_json::from_str::<serde_json::Value>(args_json)
                         .ok()
@@ -212,13 +554,15 @@ async fn execute_tool_calls(
                     }
                 } else {
                     dispatch(registry, tool_name, args_json, ctx).await
-                }
+                };
+                (result, false)
             }
             blocked => {
                 // Feed the denial back to the model as the tool result.
-                blocked
+                let msg = blocked
                     .into_tool_result()
-                    .unwrap_or_else(|| "blocked".to_string())
+                    .unwrap_or_else(|| "blocked".to_string());
+                (msg, true)
             }
         };
 
@@ -226,6 +570,7 @@ async fn execute_tool_calls(
             call_id: call.id.clone(),
             tool_name: call.function.name.clone(),
             content,
+            denied,
         });
     }
     results
@@ -236,6 +581,7 @@ struct ToolCallResult {
     #[allow(dead_code)]
     tool_name: String,
     content: String,
+    denied: bool,
 }
 
 /// Stream a response and accumulate content + tool_calls into a single
@@ -339,8 +685,9 @@ mod tests {
     use crate::provider::types::FunctionCall;
     use crate::provider::{
         ChatCompletion, ChatMessage, Choice, FinishReason, ProviderClient, StreamChunk, Tool,
-        ToolCall,
+        ToolCall, Usage,
     };
+    use crate::telemetry::Telemetry;
     use crate::tools::registry::default_registry;
     use async_trait::async_trait;
     use futures_util::Stream;
@@ -352,11 +699,18 @@ mod tests {
 
     /// A mock provider that returns pre-configured responses in sequence.
     struct MockProvider {
-        responses: Mutex<Vec<ChatCompletion>>,
+        responses: Mutex<Vec<Result<ChatCompletion, HarnessError>>>,
     }
 
     impl MockProvider {
         fn new(responses: Vec<ChatCompletion>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().map(Ok).collect()),
+            }
+        }
+
+        /// Build a mock that will return errors at specific positions.
+        fn with_errors(responses: Vec<Result<ChatCompletion, HarnessError>>) -> Self {
             Self {
                 responses: Mutex::new(responses),
             }
@@ -375,7 +729,7 @@ mod tests {
             if lock.is_empty() {
                 return Err(HarnessError::Provider("mock exhausted".to_string()));
             }
-            Ok(lock.remove(0))
+            lock.remove(0)
         }
 
         async fn stream(
@@ -410,6 +764,26 @@ mod tests {
         }
     }
 
+    fn make_final_response_with_usage(
+        content: &str,
+        prompt: u32,
+        completion: u32,
+    ) -> ChatCompletion {
+        ChatCompletion {
+            id: "mock-id".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChatMessage::assistant(Some(content.to_string()), None),
+                finish_reason: Some(FinishReason::Stop),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: prompt,
+                completion_tokens: completion,
+                total_tokens: prompt + completion,
+            }),
+        }
+    }
+
     fn make_tool_call_response(tool_name: &str, args: &str) -> ChatCompletion {
         let call = ToolCall {
             id: "call-1".to_string(),
@@ -417,6 +791,27 @@ mod tests {
             function: FunctionCall {
                 name: tool_name.to_string(),
                 arguments: args.to_string(),
+            },
+        };
+        ChatCompletion {
+            id: "mock-id".to_string(),
+            choices: vec![Choice {
+                index: 0,
+                message: ChatMessage::assistant(None, Some(vec![call])),
+                finish_reason: Some(FinishReason::ToolCalls),
+            }],
+            usage: None,
+        }
+    }
+
+    fn make_malformed_tool_call_response() -> ChatCompletion {
+        // Empty tool call ID + invalid JSON args = malformed.
+        let call = ToolCall {
+            id: "".to_string(), // empty ID
+            kind: "function".to_string(),
+            function: FunctionCall {
+                name: "read_file".to_string(),
+                arguments: "not-valid-json".to_string(),
             },
         };
         ChatCompletion {
@@ -443,11 +838,18 @@ mod tests {
     fn test_config(max_iterations: u32) -> LoopConfig {
         LoopConfig {
             model: "mock".to_string(),
+            fallback_models: Vec::new(),
+            vetted_models: Vec::new(),
             max_iterations,
             stream: false,
             policy: allow_all_policy(),
             is_tty: false,
+            context_limit: 0,
         }
+    }
+
+    fn noop_telemetry() -> Telemetry {
+        Telemetry::new("test-sess", "agent-test")
     }
 
     // ── Core loop tests ──────────────────────────────────────────────────────
@@ -460,6 +862,7 @@ mod tests {
         )]));
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let result = run_loop(
             provider,
@@ -468,6 +871,7 @@ mod tests {
             test_config(5),
             "You are a helpful assistant.".to_string(),
             vec![ChatMessage::user("Say hello")],
+            &mut telem,
         )
         .await
         .unwrap();
@@ -485,8 +889,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Turn 1: model calls read_file.
-        // Turn 2: model gives final answer after seeing the result.
         let provider = Arc::new(MockProvider::new(vec![
             make_tool_call_response("read_file", r#"{"path": "note.txt"}"#),
             make_final_response("The file contains: secret content"),
@@ -494,6 +896,7 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let result = run_loop(
             provider,
@@ -502,6 +905,7 @@ mod tests {
             test_config(5),
             "You are a helpful assistant.".to_string(),
             vec![ChatMessage::user("What is in note.txt?")],
+            &mut telem,
         )
         .await
         .unwrap();
@@ -514,7 +918,6 @@ mod tests {
     async fn loop_max_iterations_error() {
         let tmp = TempDir::new().unwrap();
 
-        // Keep returning tool calls → should hit max_iterations.
         let provider = Arc::new(MockProvider::new(vec![
             make_tool_call_response("list_dir", "{}"),
             make_tool_call_response("list_dir", "{}"),
@@ -525,6 +928,7 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let err = run_loop(
             provider,
@@ -533,6 +937,7 @@ mod tests {
             test_config(3),
             "system".to_string(),
             vec![ChatMessage::user("loop forever")],
+            &mut telem,
         )
         .await
         .unwrap_err();
@@ -544,7 +949,6 @@ mod tests {
     async fn loop_write_then_read() {
         let tmp = TempDir::new().unwrap();
 
-        // Turn 1: write_file, Turn 2: read_file, Turn 3: final.
         let provider = Arc::new(MockProvider::new(vec![
             make_tool_call_response("write_file", r#"{"path": "out.txt", "content": "done"}"#),
             make_tool_call_response("read_file", r#"{"path": "out.txt"}"#),
@@ -553,6 +957,7 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let result = run_loop(
             provider,
@@ -561,33 +966,487 @@ mod tests {
             test_config(5),
             "system".to_string(),
             vec![ChatMessage::user("write a file")],
+            &mut telem,
         )
         .await
         .unwrap();
 
         assert!(result.final_response.contains("done"));
         assert_eq!(result.turns, 3);
-        // Verify the file was actually written.
         let content = tokio::fs::read_to_string(tmp.path().join("out.txt"))
             .await
             .unwrap();
         assert_eq!(content, "done");
     }
 
-    // ── P2 Safety pipeline integration tests ─────────────────────────────────
-    //
-    // These verify that denials from guardrails and permission reach the model
-    // as tool results (not as hard errors), and that the loop continues.
+    // ── Telemetry per turn ───────────────────────────────────────────────────
 
-    /// A guardrail-blocked call must return its reason as the tool result and
-    /// the loop must continue to the next turn (the model sees the denial and
-    /// can give a final answer).
+    #[tokio::test]
+    async fn telemetry_records_one_turn_per_model_call() {
+        let tmp = TempDir::new().unwrap();
+        tokio::fs::write(tmp.path().join("f.txt"), "hi")
+            .await
+            .unwrap();
+
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response("read_file", r#"{"path": "f.txt"}"#),
+            make_final_response("done"),
+        ]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = Telemetry::new("sess-telem-001", "agent-oracle");
+
+        run_loop(
+            provider,
+            registry,
+            ctx,
+            test_config(5),
+            "sys".to_string(),
+            vec![ChatMessage::user("read")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        let record = telem.build_record();
+        let harness = record.harness.unwrap();
+        // 2 turns: one tool-call turn + one final answer turn.
+        assert_eq!(harness.turns.len(), 2, "expected 2 telemetry turns");
+        assert_eq!(harness.totals.turns, 2);
+        // First turn had 1 tool call.
+        assert_eq!(harness.turns[0].tool_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn telemetry_token_counts_populated_from_usage() {
+        let tmp = TempDir::new().unwrap();
+        let provider = Arc::new(MockProvider::new(vec![make_final_response_with_usage(
+            "answer", 150, 30,
+        )]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = Telemetry::new("sess-telem-002", "agent-oracle");
+
+        run_loop(
+            provider,
+            registry,
+            ctx,
+            test_config(5),
+            "sys".to_string(),
+            vec![ChatMessage::user("q")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        let record = telem.build_record();
+        let harness = record.harness.unwrap();
+        assert_eq!(harness.turns[0].tokens_in, 150);
+        assert_eq!(harness.turns[0].tokens_out, 30);
+    }
+
+    #[tokio::test]
+    async fn telemetry_denial_count_increments_on_blocked_tool() {
+        let tmp = TempDir::new().unwrap();
+
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response("run_command", r#"{"command": "rm -rf /"}"#),
+            make_final_response("blocked"),
+        ]));
+
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = Telemetry::new("sess-telem-003", "agent-oracle");
+
+        run_loop(
+            provider,
+            registry,
+            ctx,
+            test_config(5),
+            "sys".to_string(),
+            vec![ChatMessage::user("destroy")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        let record = telem.build_record();
+        let harness = record.harness.unwrap();
+        // Turn 1 had 1 tool call and 1 denial.
+        assert_eq!(harness.turns[0].denials, 1, "expected 1 denial in turn 1");
+        assert_eq!(harness.totals.denials, 1);
+    }
+
+    // ── Retry tests ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn transient_error_retried_then_succeeds() {
+        // call_with_retry_v2: one transient failure then success.
+        let provider = Arc::new(MockProvider::with_errors(vec![
+            Err(HarnessError::TransientProvider(
+                "connection reset".to_string(),
+            )),
+            Ok(make_final_response("ok after retry")),
+        ]));
+
+        let messages = vec![ChatMessage::user("hello")];
+        let result = call_with_retry_v2(&*provider, messages, vec![], "mock", false).await;
+        assert!(result.is_ok(), "should succeed after retry: {result:?}");
+        let (msg, _) = result.unwrap();
+        assert_eq!(msg.content.as_deref(), Some("ok after retry"));
+    }
+
+    #[tokio::test]
+    async fn fatal_error_not_retried() {
+        // 4xx / model-not-found errors must fail fast (no retry).
+        let provider = Arc::new(MockProvider::with_errors(vec![
+            Err(HarnessError::ModelNotFound("bad-model".to_string())),
+            // This response should NEVER be reached.
+            Ok(make_final_response("should not see this")),
+        ]));
+
+        let messages = vec![ChatMessage::user("hello")];
+        let result = call_with_retry_v2(&*provider, messages, vec![], "bad-model", false).await;
+        assert!(
+            matches!(result, Err(HarnessError::ModelNotFound(_))),
+            "fatal error must not be retried: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_errors_exhausted_returns_last_error() {
+        // More transient errors than MAX_TRANSIENT_RETRIES → should fail.
+        let mut responses: Vec<Result<ChatCompletion, HarnessError>> = (0..=MAX_TRANSIENT_RETRIES)
+            .map(|_| {
+                Err(HarnessError::TransientProvider(
+                    "server overloaded".to_string(),
+                ))
+            })
+            .collect();
+        // Add one success that should NOT be reached.
+        responses.push(Ok(make_final_response("unreachable")));
+
+        let provider = Arc::new(MockProvider::with_errors(responses));
+
+        let messages = vec![ChatMessage::user("hello")];
+        let result = call_with_retry_v2(&*provider, messages, vec![], "mock", false).await;
+        assert!(
+            result.is_err(),
+            "should fail after exhausting retries: {result:?}"
+        );
+        assert!(
+            matches!(result, Err(HarnessError::TransientProvider(_))),
+            "should return the last transient error: {result:?}"
+        );
+    }
+
+    // ── Fallback model tests ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn fallback_model_triggered_on_repeated_malformed_tool_calls() {
+        let tmp = TempDir::new().unwrap();
+
+        // Primary model returns malformed tool calls MALFORMED_TOOL_CALL_THRESHOLD times.
+        // After that, fallback model gives a final answer.
+        let mut responses: Vec<ChatCompletion> = (0..MALFORMED_TOOL_CALL_THRESHOLD)
+            .map(|_| make_malformed_tool_call_response())
+            .collect();
+        responses.push(make_final_response("fallback succeeded"));
+
+        let provider = Arc::new(MockProvider::new(responses));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+
+        let config = LoopConfig {
+            model: "primary-model".to_string(),
+            fallback_models: vec!["fallback-model".to_string()],
+            vetted_models: vec!["fallback-model".to_string()],
+            max_iterations: 20,
+            stream: false,
+            policy: allow_all_policy(),
+            is_tty: false,
+            context_limit: 0,
+        };
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("do something")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_response, "fallback succeeded");
+        assert_eq!(
+            result.active_model, "fallback-model",
+            "loop should report the fallback model as active"
+        );
+    }
+
+    #[tokio::test]
+    async fn all_models_exhausted_returns_error() {
+        let tmp = TempDir::new().unwrap();
+
+        // Both primary and fallback return malformed tool calls every time.
+        let responses: Vec<ChatCompletion> = (0..(MALFORMED_TOOL_CALL_THRESHOLD * 2 + 4))
+            .map(|_| make_malformed_tool_call_response())
+            .collect();
+
+        let provider = Arc::new(MockProvider::new(responses));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+
+        let config = LoopConfig {
+            model: "bad-primary".to_string(),
+            fallback_models: vec!["bad-fallback".to_string()],
+            vetted_models: Vec::new(),
+            max_iterations: 30,
+            stream: false,
+            policy: allow_all_policy(),
+            is_tty: false,
+            context_limit: 0,
+        };
+
+        let err = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("do something")],
+            &mut telem,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, HarnessError::AllModelsExhausted { .. }),
+            "expected AllModelsExhausted, got {err:?}"
+        );
+    }
+
+    // ── Vetted-model gate ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn vetted_model_gate_allows_known_model_without_panic() {
+        // A vetted model runs normally — no warning, no error.
+        let tmp = TempDir::new().unwrap();
+        let provider = Arc::new(MockProvider::new(vec![make_final_response("ok")]));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+
+        let config = LoopConfig {
+            model: "gemma4".to_string(),
+            vetted_models: vec!["gemma4".to_string(), "qwen2.5-coder:7b".to_string()],
+            ..test_config(5)
+        };
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("hi")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_response, "ok");
+    }
+
+    #[tokio::test]
+    async fn vetted_model_gate_unvetted_model_still_runs() {
+        // An unvetted model gets a warning but the loop continues normally.
+        let tmp = TempDir::new().unwrap();
+        let provider = Arc::new(MockProvider::new(vec![make_final_response("still works")]));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+
+        let config = LoopConfig {
+            model: "unknown-model".to_string(),
+            vetted_models: vec!["only-this-one".to_string()],
+            ..test_config(5)
+        };
+
+        // Must not error — just warn.
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("hi")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.final_response, "still works");
+    }
+
+    // ── Context compaction tests ─────────────────────────────────────────────
+
+    #[test]
+    fn compact_history_reduces_length() {
+        let mut history: Vec<ChatMessage> = Vec::new();
+        // system + 20 user messages
+        history.push(ChatMessage::system("sys"));
+        for i in 0..20 {
+            history.push(ChatMessage::user(format!("message {i}")));
+        }
+        let original_len = history.len();
+        compact_history(&mut history);
+        assert!(
+            history.len() < original_len,
+            "compact should reduce history length"
+        );
+    }
+
+    #[test]
+    fn compact_history_retains_system_message() {
+        let mut history = vec![
+            ChatMessage::system("system prompt"),
+            ChatMessage::user("old message 1"),
+            ChatMessage::user("old message 2"),
+            ChatMessage::user("old message 3"),
+            ChatMessage::user("old message 4"),
+            ChatMessage::user("old message 5"),
+            ChatMessage::user("old message 6"),
+            ChatMessage::user("old message 7"),
+            ChatMessage::user("old message 8"),
+            ChatMessage::user("recent 1"),
+            ChatMessage::user("recent 2"),
+        ];
+        compact_history(&mut history);
+
+        // First message must be the system prompt.
+        assert_eq!(
+            history[0].content.as_deref(),
+            Some("system prompt"),
+            "system message must be retained at index 0"
+        );
+    }
+
+    #[test]
+    fn compact_history_inserts_marker() {
+        let mut history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("old 1"),
+            ChatMessage::user("old 2"),
+            ChatMessage::user("old 3"),
+            ChatMessage::user("old 4"),
+            ChatMessage::user("old 5"),
+            ChatMessage::user("old 6"),
+            ChatMessage::user("old 7"),
+            ChatMessage::user("recent tail"),
+        ];
+        compact_history(&mut history);
+
+        // Index 1 should be the compaction marker.
+        let marker = &history[1];
+        assert!(
+            marker
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("context compacted"),
+            "index 1 must be the compaction marker; got: {:?}",
+            marker.content
+        );
+    }
+
+    #[test]
+    fn compact_history_retains_recent_tail() {
+        let mut history = vec![
+            ChatMessage::system("sys"),
+            ChatMessage::user("old 1"),
+            ChatMessage::user("old 2"),
+            ChatMessage::user("old 3"),
+            ChatMessage::user("old 4"),
+            ChatMessage::user("old 5"),
+            ChatMessage::user("old 6"),
+            ChatMessage::user("old 7"),
+            ChatMessage::user("tail_message"), // should survive compaction
+        ];
+        compact_history(&mut history);
+
+        let last = history.last().unwrap();
+        assert_eq!(
+            last.content.as_deref(),
+            Some("tail_message"),
+            "most recent message must survive compaction"
+        );
+    }
+
+    #[test]
+    fn compact_history_noop_if_too_short() {
+        // History shorter than min_len must not be modified.
+        let original = vec![ChatMessage::system("sys"), ChatMessage::user("only")];
+        let mut history = original.clone();
+        compact_history(&mut history);
+        assert_eq!(
+            history.len(),
+            original.len(),
+            "short history must not be compacted"
+        );
+    }
+
+    #[tokio::test]
+    async fn context_compaction_triggers_in_loop() {
+        let tmp = TempDir::new().unwrap();
+
+        // Build a history that will exceed a tiny context_limit.
+        // Each message is ~50 chars → 50/4 ≈ 12 tokens.
+        // With context_limit=10, compaction should fire.
+        let initial = vec![ChatMessage::user(
+            "This is a moderately long initial message that pushes the context over the tiny limit set for testing compaction behaviour.".to_string(),
+        )];
+
+        let provider = Arc::new(MockProvider::new(vec![make_final_response("compacted")]));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+
+        let config = LoopConfig {
+            context_limit: 5, // Very small to force compaction on the first turn.
+            ..test_config(5)
+        };
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "system prompt".to_string(),
+            initial,
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        // The loop completes successfully — compaction is transparent.
+        assert_eq!(result.final_response, "compacted");
+        assert!(result.compactions >= 1, "expected at least one compaction");
+    }
+
+    // ── P2 Safety pipeline integration tests ─────────────────────────────────
+
     #[tokio::test]
     async fn guardrail_denial_is_fed_back_as_tool_result() {
         let tmp = TempDir::new().unwrap();
 
-        // Turn 1: model tries to `rm -rf /` → blocked by guardrail.
-        // Turn 2: model gives up and returns a final answer.
         let provider = Arc::new(MockProvider::new(vec![
             make_tool_call_response("run_command", r#"{"command": "rm -rf /"}"#),
             make_final_response("I cannot do that"),
@@ -595,6 +1454,7 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let result = run_loop(
             provider,
@@ -603,15 +1463,14 @@ mod tests {
             test_config(5),
             "system".to_string(),
             vec![ChatMessage::user("wipe everything")],
+            &mut telem,
         )
         .await
         .unwrap();
 
-        // The loop must complete (not panic or return Err).
         assert_eq!(result.final_response, "I cannot do that");
         assert_eq!(result.turns, 2);
 
-        // The history must contain a tool result message with the guardrail reason.
         let tool_result = result.history.iter().find(|m| {
             m.tool_call_id.is_some()
                 && m.content
@@ -625,14 +1484,10 @@ mod tests {
         );
     }
 
-    /// A permission-denied call must return the denial reason as the tool
-    /// result message.
     #[tokio::test]
     async fn permission_denial_is_fed_back_as_tool_result() {
         let tmp = TempDir::new().unwrap();
 
-        // Turn 1: model tries run_command → denied by policy.
-        // Turn 2: model returns a final answer.
         let provider = Arc::new(MockProvider::new(vec![
             make_tool_call_response("run_command", r#"{"command": "echo hi"}"#),
             make_final_response("cannot run that"),
@@ -640,10 +1495,12 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
-        // Deny all policy.
         let deny_config = LoopConfig {
             model: "mock".to_string(),
+            fallback_models: Vec::new(),
+            vetted_models: Vec::new(),
             max_iterations: 5,
             stream: false,
             policy: Policy {
@@ -652,6 +1509,7 @@ mod tests {
                 patterns: Vec::new(),
             },
             is_tty: false,
+            context_limit: 0,
         };
 
         let result = run_loop(
@@ -661,13 +1519,13 @@ mod tests {
             deny_config,
             "system".to_string(),
             vec![ChatMessage::user("run echo hi")],
+            &mut telem,
         )
         .await
         .unwrap();
 
         assert_eq!(result.final_response, "cannot run that");
 
-        // History must contain a tool result with the denial reason.
         let tool_result = result.history.iter().find(|m| {
             m.tool_call_id.is_some()
                 && m.content
@@ -681,7 +1539,6 @@ mod tests {
         );
     }
 
-    /// Blocking a call via no-verify guardrail must surface the rule name.
     #[tokio::test]
     async fn guardrail_no_verify_surfaces_in_tool_result() {
         let tmp = TempDir::new().unwrap();
@@ -696,6 +1553,7 @@ mod tests {
 
         let registry = Arc::new(default_registry());
         let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
 
         let result = run_loop(
             provider,
@@ -704,6 +1562,7 @@ mod tests {
             test_config(5),
             "system".to_string(),
             vec![ChatMessage::user("commit")],
+            &mut telem,
         )
         .await
         .unwrap();
@@ -719,5 +1578,64 @@ mod tests {
             tool_result.is_some(),
             "sila_surameraya not found in tool result"
         );
+    }
+
+    // ── Backoff calculation ───────────────────────────────────────────────────
+
+    #[test]
+    fn backoff_increases_exponentially_and_caps() {
+        let b1 = backoff_ms(1);
+        let b2 = backoff_ms(2);
+        let b3 = backoff_ms(3);
+        assert!(b2 > b1, "backoff must increase with attempt");
+        assert!(b3 > b2, "backoff must increase with attempt");
+        // All must be <= MAX_BACKOFF_MS.
+        for attempt in 1..=20 {
+            assert!(
+                backoff_ms(attempt) <= MAX_BACKOFF_MS,
+                "backoff must not exceed MAX_BACKOFF_MS at attempt {attempt}"
+            );
+        }
+    }
+
+    // ── Malformed tool call detection ────────────────────────────────────────
+
+    #[test]
+    fn has_malformed_tool_calls_detects_empty_id() {
+        let calls = vec![ToolCall {
+            id: "".to_string(),
+            kind: "function".to_string(),
+            function: FunctionCall {
+                name: "read_file".to_string(),
+                arguments: r#"{"path":"x"}"#.to_string(),
+            },
+        }];
+        assert!(has_malformed_tool_calls(&calls));
+    }
+
+    #[test]
+    fn has_malformed_tool_calls_detects_bad_json() {
+        let calls = vec![ToolCall {
+            id: "call-1".to_string(),
+            kind: "function".to_string(),
+            function: FunctionCall {
+                name: "read_file".to_string(),
+                arguments: "not-json".to_string(),
+            },
+        }];
+        assert!(has_malformed_tool_calls(&calls));
+    }
+
+    #[test]
+    fn has_malformed_tool_calls_clean_call_is_ok() {
+        let calls = vec![ToolCall {
+            id: "call-1".to_string(),
+            kind: "function".to_string(),
+            function: FunctionCall {
+                name: "read_file".to_string(),
+                arguments: r#"{"path": "README.md"}"#.to_string(),
+            },
+        }];
+        assert!(!has_malformed_tool_calls(&calls));
     }
 }

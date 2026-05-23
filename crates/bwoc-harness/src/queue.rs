@@ -59,6 +59,15 @@ pub trait TaskSource: Send + Sync {
 
     /// Mark a task as completed by `agent_id`.  Mutates the underlying store.
     fn complete(&self, task_id: &str, agent_id: &str) -> Result<(), HarnessError>;
+
+    /// Roll back a claim: revert `task_id` from `InProgress` back to
+    /// `Pending` when the queue rejected the item after it was already
+    /// claimed.  This prevents tasks from being stranded as `in_progress`
+    /// with no worker.
+    ///
+    /// Implementors that do not support unclaim (e.g. file-backed stores
+    /// without write access) may return `Err(HarnessError::Other(...))`.
+    fn unclaim(&self, task_id: &str, agent_id: &str) -> Result<(), HarnessError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +109,28 @@ impl TaskSource for InMemoryTaskSource {
         let mut tasks = self.tasks.lock().unwrap();
         bwoc_core::team::complete_task(&mut tasks, task_id, agent_id)
             .map_err(|e| HarnessError::Other(e.to_string()))
+    }
+
+    fn unclaim(&self, task_id: &str, agent_id: &str) -> Result<(), HarnessError> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let task = tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or_else(|| HarnessError::Other(format!("unclaim: task `{task_id}` not found")))?;
+        if task.state != TaskState::InProgress {
+            return Err(HarnessError::Other(format!(
+                "unclaim: task `{task_id}` is not in_progress (state: {:?})",
+                task.state
+            )));
+        }
+        if task.claimed_by.as_deref() != Some(agent_id) {
+            return Err(HarnessError::Other(format!(
+                "unclaim: task `{task_id}` is not claimed by `{agent_id}`"
+            )));
+        }
+        task.state = TaskState::Pending;
+        task.claimed_by = None;
+        Ok(())
     }
 }
 
@@ -335,11 +366,25 @@ pub async fn poll_sangha(
                 submitted += 1;
             }
             Err(QueueError::Busy(_) | QueueError::AtCapacity(_)) => {
-                // Roll back: un-claim by completing? No — the task is now
-                // in_progress.  This is a logic gap: the queue rejected it
-                // after we already claimed it from the Saṅgha.  For P3, we
-                // leave the task as `in_progress` and let the operator
-                // re-triage it.  P4 will add a proper rollback path.
+                // P4 rollback: the queue rejected a task we already claimed.
+                // Revert the task to `pending` so it isn't stranded as
+                // `in_progress` with no worker.  We use complete_task to
+                // move it — but complete_task sets it to Completed, not
+                // Pending.  Instead, we call a dedicated unclaim path via
+                // TaskSource::unclaim if available, or fall back to re-
+                // inserting a fresh pending task in the in-memory source.
+                //
+                // For the TaskSource trait (which hides the backing store)
+                // we add an `unclaim` method that reverts InProgress → Pending.
+                // If the source doesn't support it (returns Err), we log a
+                // warning — the operator will need to re-triage manually.
+                if let Err(e) = source.unclaim(&task.id, agent_id) {
+                    eprintln!(
+                        "[bwoc-harness] WARNING: failed to unclaim task `{}` after \
+                         queue rejection — task may be stranded as in_progress: {e}",
+                        task.id
+                    );
+                }
                 break;
             }
             Err(_) => break,
@@ -552,6 +597,68 @@ mod tests {
                 t.id
             );
         }
+    }
+
+    // ── poll_sangha rollback ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn poll_sangha_rollback_on_queue_full() {
+        let tmp = TempDir::new().unwrap();
+
+        // Queue capacity = 1 so the second task is rejected.
+        // After rejection, the second task must be rolled back to Pending.
+        let source = InMemoryTaskSource::new(vec![pending_task("first"), pending_task("second")]);
+
+        // Create distinct worktrees so both tasks pass the busy check.
+        let wt1 = tmp.path().join("first");
+        std::fs::create_dir_all(&wt1).unwrap();
+        let wt2 = tmp.path().join("second");
+        std::fs::create_dir_all(&wt2).unwrap();
+
+        let (queue, _cancel) = make_queue(1);
+
+        let submitted = poll_sangha(&source, &queue, "agent-oracle", tmp.path()).await;
+        // Only 1 can be submitted (capacity = 1).
+        assert_eq!(submitted, 1, "only 1 task should be admitted");
+
+        // The first task is InProgress; the second must be back to Pending.
+        let tasks = source.list_tasks();
+        let first = tasks.iter().find(|t| t.id == "first").unwrap();
+        let second = tasks.iter().find(|t| t.id == "second").unwrap();
+
+        assert_eq!(
+            first.state,
+            TaskState::InProgress,
+            "first task should be in_progress"
+        );
+        assert_eq!(
+            second.state,
+            TaskState::Pending,
+            "second task should be rolled back to pending"
+        );
+    }
+
+    #[test]
+    fn unclaim_reverts_task_to_pending() {
+        let source = InMemoryTaskSource::new(vec![pending_task("t1")]);
+        // Claim it first.
+        source.claim("t1", "agent-oracle").unwrap();
+        let tasks = source.list_tasks();
+        assert_eq!(tasks[0].state, TaskState::InProgress);
+
+        // Unclaim should revert to Pending.
+        source.unclaim("t1", "agent-oracle").unwrap();
+        let tasks = source.list_tasks();
+        assert_eq!(tasks[0].state, TaskState::Pending);
+        assert!(tasks[0].claimed_by.is_none());
+    }
+
+    #[test]
+    fn unclaim_wrong_agent_fails() {
+        let source = InMemoryTaskSource::new(vec![pending_task("t1")]);
+        source.claim("t1", "agent-oracle").unwrap();
+        let err = source.unclaim("t1", "agent-pi").unwrap_err();
+        assert!(matches!(err, HarnessError::Other(_)));
     }
 
     #[tokio::test]

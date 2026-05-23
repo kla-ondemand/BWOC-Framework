@@ -2,6 +2,18 @@
 //!
 //! [`ProviderClient`] is the injectable trait — tests swap in a mock.
 //! [`OllamaClient`] is the real implementation backed by `reqwest`.
+//!
+//! ## Retry classification
+//!
+//! HTTP errors are split into two buckets:
+//!
+//! - **Transient** (retry-safe): connection errors, 5xx responses, request
+//!   timeouts.  Callers with exponential-backoff retry loops use
+//!   [`HarnessError::is_transient`] to gate retries.
+//! - **Fatal** (fail-fast): 404 (`ModelNotFound`), other 4xx, JSON parse
+//!   failures.  Retrying these is pointless and misleading.
+//!
+//! The retry loop itself lives in `agent_loop` — the provider just classifies.
 
 use std::pin::Pin;
 
@@ -95,7 +107,7 @@ impl ProviderClient for OllamaClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| HarnessError::Provider(format!("HTTP request failed: {e}")))?;
+            .map_err(|e| HarnessError::TransientProvider(format!("HTTP request failed: {e}")))?;
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -103,9 +115,8 @@ impl ProviderClient for OllamaClient {
         }
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HarnessError::Provider(format!(
-                "Provider returned {status}: {text}"
-            )));
+            // 5xx = transient; 4xx = fatal.
+            return Err(classify_http_error(status.as_u16(), &text));
         }
 
         resp.json::<ChatCompletion>()
@@ -131,7 +142,7 @@ impl ProviderClient for OllamaClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| HarnessError::Provider(format!("HTTP request failed: {e}")))?;
+            .map_err(|e| HarnessError::TransientProvider(format!("HTTP request failed: {e}")))?;
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
@@ -139,9 +150,7 @@ impl ProviderClient for OllamaClient {
         }
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(HarnessError::Provider(format!(
-                "Provider returned {status}: {text}"
-            )));
+            return Err(classify_http_error(status.as_u16(), &text));
         }
 
         // Parse SSE: each line starting with "data: " is a JSON chunk.
@@ -233,6 +242,26 @@ fn build_request_body(
     }
 
     body
+}
+
+// ---------------------------------------------------------------------------
+// HTTP error classification helper
+// ---------------------------------------------------------------------------
+
+/// Classify an HTTP error as transient (5xx) or fatal (4xx).
+///
+/// - **5xx** — server-side error, may be transient: retry with backoff.
+/// - **4xx** (non-404) — client-side error (bad request, auth failure, rate
+///   limit exceeded with no retry-after, etc.) — fail fast.
+///
+/// 404 is handled before this function is called and maps to
+/// [`HarnessError::ModelNotFound`].
+pub(crate) fn classify_http_error(status: u16, body: &str) -> HarnessError {
+    if status >= 500 {
+        HarnessError::TransientProvider(format!("HTTP {status}: {body}"))
+    } else {
+        HarnessError::Provider(format!("HTTP {status}: {body}"))
+    }
 }
 
 // ---------------------------------------------------------------------------

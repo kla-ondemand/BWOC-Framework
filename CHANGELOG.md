@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+ items continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+_Trust v2 (signed envelopes, warn-mode), the production Ollama agentic harness, and Phase 3+ items continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+
+## [v2026.5.23-3] — 2026-05-23 — 2.1.0
+
+**Minor release.** Saṅgha v1 (agent teams + shared task list, daemon task-watch, opt-in auto-claim, plan-approval Pavāraṇā, blocking task hooks), the single trunk-based branching standard, the "What's New" CLI surface, and dashboard single-agent lifecycle hotkeys. Cargo SemVer `2.0.94` → `2.1.0`. CalVer per [VERSION.md policy](VERSION.md#versioning-policy--dual-namespaces).
 
 ### Added
 
@@ -31,6 +35,10 @@ _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+
 
 - **`s` (start)** — runs the selected agent from the TUI: flips registry status to active and spawns `bwoc-agent --serve`. Shells out to `bwoc start <id> --yes --json` with captured output (TUI-safe), parses `daemon_pid` / `already_running` into the footer, refreshes so status + ●/○ flip. See [`notes/2026-05-23_dashboard-start-hotkey.md`](notes/2026-05-23_dashboard-start-hotkey.md).
 - **`x` (stop)** — stops the selected agent (signal the daemon + flip status stopped). Parses `bwoc stop --json`'s `daemon_outcome` enum into a precise footer message. The dashboard now covers the full single-agent lifecycle: chat (`t`/`g`), log (`l`), inbox (`i`), start (`s`), stop (`x`), refresh (`r`). See [`notes/2026-05-23_dashboard-stop-and-start-race-fix.md`](notes/2026-05-23_dashboard-stop-and-start-race-fix.md).
+
+### Changed
+
+- **Single trunk-based branching standard** — consolidated three divergent branch-naming conventions (template `AGENTS.md` §4, `conventions.md`, root `CONTRIBUTING.md`, and SRS FR-4.7 in EN+TH) into one trunk-based / GitHub Flow standard: `main` is the only long-lived branch; topic branches are `<type>/<slug>` where `type` ∈ the Conventional Commit vocabulary (`feat fix docs refactor test chore perf style ci`); the multi-agent collision guard prefixes `agent/<agent-id>/`; no `release/*` or `hotfix/*` branches (CalVer tags cut directly on `main`); branches are deleted after merge (Anattā). See [`notes/2026-05-23_branching-standard-and-team-personas.md`](notes/2026-05-23_branching-standard-and-team-personas.md).
 
 ### Fixed
 

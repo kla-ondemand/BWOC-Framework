@@ -44,6 +44,11 @@ pub enum StartError {
     NotFound { name: String, workspace: PathBuf },
     #[error("aborted by user")]
     Aborted,
+    #[error(
+        "not a TTY and --yes not given. \
+         Pass --yes to confirm or run from an interactive shell."
+    )]
+    NotATerminal,
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("workspace error: {0}")]
@@ -60,6 +65,10 @@ pub fn run(args: StartArgs) -> i32 {
         Ok(()) => 0,
         Err(StartError::Aborted) => {
             eprintln!("bwoc start: aborted — nothing changed");
+            2
+        }
+        Err(StartError::NotATerminal) => {
+            eprintln!("bwoc start: not a TTY and --yes not given. Pass --yes to confirm or run from an interactive shell.");
             2
         }
         Err(e) => {
@@ -222,7 +231,7 @@ fn start(args: StartArgs) -> Result<(), StartError> {
             return Err(StartError::Aborted);
         }
         if !io::stdin().is_terminal() {
-            return Err(StartError::Aborted);
+            return Err(StartError::NotATerminal);
         }
         let mut stdout = io::stdout();
         write!(stdout, "Proceed? [y/N]: ")?;

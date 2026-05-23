@@ -673,8 +673,8 @@ struct StatusArgs {
     #[arg(conflicts_with = "all")]
     name: Option<String>,
     /// Print the full detail block for every agent (loops the single-agent view).
-    /// Mutually exclusive with `name`.
-    #[arg(long)]
+    /// Mutually exclusive with `name` and `--banner`.
+    #[arg(long, conflicts_with = "banner")]
     all: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
@@ -682,6 +682,10 @@ struct StatusArgs {
     /// Emit JSON to stdout instead of the human-readable layout.
     #[arg(long)]
     json: bool,
+    /// Replay the agent's startup liveness banner from its manifest (read-only, no daemon required).
+    /// Requires a named agent. Mutually exclusive with `--all`.
+    #[arg(long, requires = "name", conflicts_with = "all")]
+    banner: bool,
 }
 
 impl From<StatusArgs> for status::StatusArgs {
@@ -691,6 +695,8 @@ impl From<StatusArgs> for status::StatusArgs {
             workspace: a.workspace,
             json: a.json,
             all: a.all,
+            banner: a.banner,
+            lang: String::new(), // overwritten by main() before run() is called
         }
     }
 }
@@ -1061,7 +1067,9 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Status(args)) => {
-            let code = status::run(args.into());
+            let mut runtime: status::StatusArgs = args.into();
+            runtime.lang = lang.clone();
+            let code = status::run(runtime);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Help(args)) => {

@@ -658,6 +658,22 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
             Style::default().fg(inbox_color),
         ),
     ]));
+    let (refused_count, refused_detail) = crate::livecheck::refusal_summary(root, entry);
+    if refused_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("refused     ", key_style),
+            Span::styled(
+                format!("{refused_count} refusal(s)"),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        if let Some((reason, from)) = refused_detail {
+            lines.push(Line::from(vec![
+                Span::styled("last refused", key_style),
+                Span::raw(format!(" {reason} from {from}")),
+            ]));
+        }
+    }
     lines.push(Line::from(""));
 
     // Manifest fields (load on demand; failures shown gracefully).

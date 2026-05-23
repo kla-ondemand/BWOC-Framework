@@ -157,7 +157,7 @@ if len(reply) > MAX_LEN:
 # the sender is presumably actively reading anyway (their daemon poll will
 # surface it); --from carries this agent's identity so the recipient's trust
 # gate evaluates against our manifest.
-subprocess.run(
+result = subprocess.run(
     [
         "bwoc", "send",
         "--from", self_id,
@@ -167,7 +167,20 @@ subprocess.run(
         reply,
     ],
     check=False,
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
 )
+
+if result.returncode != 0:
+    import datetime
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    stderr_snippet = (result.stderr or b"").decode("utf-8", errors="replace")[:500]
+    diag = f"{ts} inbox-auto-reply: send to {sender} failed (exit {result.returncode}): {stderr_snippet}\n"
+    log_path = os.path.join(os.path.dirname(manifest_path), ".bwoc", "agent.log")
+    try:
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as lf:
+            lf.write(diag)
+    except OSError:
+        pass  # log write failed — still exit 0; hook must not block the agent
 PY

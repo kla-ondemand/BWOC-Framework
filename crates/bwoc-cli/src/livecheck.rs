@@ -113,6 +113,56 @@ pub fn inbox_count(root: &Path, a: &AgentEntry) -> usize {
     content.lines().filter(|l| !l.trim().is_empty()).count()
 }
 
+/// Count refusal records in the trust sidecar and return the most recent
+/// one's `(reason, envelopeFrom)` fields. Best-effort: absent or malformed
+/// sidecar returns `(0, None)`. Never loads the full inbox — only the
+/// refusals file.
+///
+/// Used by the dashboard detail pane to show "Refused: N" without re-reading
+/// all envelopes.
+pub fn refusal_summary(root: &Path, a: &AgentEntry) -> (usize, Option<(String, String)>) {
+    let path = root.join(&a.path).join(".bwoc/inbox.refusals.jsonl");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (0, None);
+    };
+
+    let mut count: usize = 0;
+    let mut latest: Option<(String, String, String)> = None; // (ts, reason, from)
+
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        count += 1;
+        let ts = v
+            .get("ts")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        let reason = v
+            .get("reason")
+            .and_then(|x| x.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let from = v
+            .get("envelopeFrom")
+            .and_then(|x| x.as_str())
+            .unwrap_or("?")
+            .to_string();
+        match &latest {
+            None => latest = Some((ts, reason, from)),
+            Some((prev_ts, _, _)) if ts > *prev_ts => latest = Some((ts, reason, from)),
+            _ => {}
+        }
+    }
+
+    let detail = latest.map(|(_, reason, from)| (reason, from));
+    (count, detail)
+}
+
 /// Count `.md` files in a directory, excluding template scaffolding
 /// (`SPEC.md`, `README.md`). Returns 0 when the directory doesn't
 /// exist or isn't readable — same shape as an empty dir.

@@ -24,11 +24,57 @@ pub struct StatusArgs {
     /// Print the full detail block for every agent (loops `print_one`).
     /// Without this, no-name + non-JSON gives the compact table view;
     /// with `--all`, you get the same output as iterating `status <each>`.
-    /// Mutually exclusive with `name` (clap-enforced).
+    /// Mutually exclusive with `name` (clap-enforced) and `--banner`.
     pub all: bool,
+    /// Replay the agent's startup liveness banner from manifest data.
+    /// Requires `name`. Mutually exclusive with `--all` (clap-enforced).
+    pub banner: bool,
+    /// Resolved language tag (from `--lang` / BWOC_LANG / $LANG / "en").
+    /// Populated by main before calling `run()`.
+    pub lang: String,
 }
 
 const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
+
+/// Build the liveness banner string from a manifest + locale bundle.
+/// Mirrors `bwoc-agent::liveness_banner` exactly — same keys, same field order.
+fn banner_string(m: &Manifest, lang: &str) -> String {
+    let bundle = crate::i18n::bundle_for(lang);
+    let mut lines = Vec::with_capacity(6);
+    lines.push(crate::i18n::t_with(
+        &bundle,
+        "status-banner-alive",
+        &[("agent_id", m.agent_id.as_str())],
+    ));
+    lines.push(crate::i18n::t_with(
+        &bundle,
+        "status-banner-role",
+        &[("role", m.agent_role.as_str())],
+    ));
+    lines.push(crate::i18n::t_with(
+        &bundle,
+        "status-banner-model",
+        &[("model", m.primary_model.as_str())],
+    ));
+    if let Some(ref fb) = m.fallback_model {
+        lines.push(crate::i18n::t_with(
+            &bundle,
+            "status-banner-fallback",
+            &[("fallback", fb.as_str())],
+        ));
+    }
+    lines.push(crate::i18n::t_with(
+        &bundle,
+        "status-banner-memory",
+        &[("memory_path", m.memory_path.as_str())],
+    ));
+    lines.push(crate::i18n::t_with(
+        &bundle,
+        "status-banner-version",
+        &[("version", m.version.as_str())],
+    ));
+    lines.join("\n")
+}
 
 pub fn run(args: StatusArgs) -> i32 {
     let Some(root) = resolve_workspace(args.workspace) else {
@@ -46,6 +92,45 @@ pub fn run(args: StatusArgs) -> i32 {
             return 1;
         }
     };
+
+    // --banner branch — manifest-driven liveness replay, no daemon needed.
+    // clap enforces: requires name, conflicts_with all.
+    if args.banner {
+        let name = args.name.as_deref().unwrap_or(""); // clap `requires` guarantees Some
+        let lookup_id = if name.starts_with("agent-") {
+            name.to_string()
+        } else {
+            format!("agent-{name}")
+        };
+        let Some(entry) = registry.agents.iter().find(|a| a.id == lookup_id) else {
+            eprintln!(
+                "bwoc status: no agent named '{name}' in workspace {}. Try `bwoc list`.",
+                root.display()
+            );
+            return 2;
+        };
+        let manifest_path = root.join(&entry.path).join("config.manifest.json");
+        let manifest = match Manifest::load_from_path(&manifest_path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("bwoc status --banner: failed to load manifest: {e}");
+                return 1;
+            }
+        };
+        let banner = banner_string(&manifest, &args.lang);
+        if args.json {
+            match serde_json::to_string_pretty(&serde_json::json!({ "banner": banner })) {
+                Ok(s) => println!("{s}"),
+                Err(e) => {
+                    eprintln!("bwoc status --banner --json: serialize error: {e}");
+                    return 1;
+                }
+            }
+        } else {
+            println!("{banner}");
+        }
+        return 0;
+    }
 
     // JSON branch — single shape for both "all" and "one" cases.
     if args.json {
@@ -388,6 +473,54 @@ mod tests {
     use super::*;
     use bwoc_core::workspace::AgentEntry;
     use std::fs;
+
+    fn sample_manifest() -> Manifest {
+        Manifest {
+            name: "demo".into(),
+            agent_id: "agent-demo".into(),
+            agent_role: "demo role".into(),
+            primary_model: "model-x".into(),
+            fallback_model: Some("model-y".into()),
+            memory_path: "memories/".into(),
+            sessions_path: None,
+            deep_memory_cmd: None,
+            lint_cmd: "true".into(),
+            format_cmd: "true".into(),
+            test_cmd: "true".into(),
+            build_cmd: "true".into(),
+            worktree_base: None,
+            scope_description: None,
+            out_of_scope: None,
+            trust: None,
+            version: "2.0".into(),
+        }
+    }
+
+    #[test]
+    fn banner_string_en_contains_required_fields() {
+        let b = banner_string(&sample_manifest(), "en");
+        assert!(b.contains("I am alive: agent-demo"), "got: {b:?}");
+        assert!(b.contains("demo role"), "got: {b:?}");
+        assert!(b.contains("model-x"), "got: {b:?}");
+        assert!(b.contains("model-y"), "got: {b:?}");
+        assert!(b.contains("memories/"), "got: {b:?}");
+        assert!(b.contains("2.0"), "got: {b:?}");
+    }
+
+    #[test]
+    fn banner_string_th_alive_line() {
+        let b = banner_string(&sample_manifest(), "th");
+        assert!(b.contains("ฉันยังมีชีวิตอยู่: agent-demo"), "got: {b:?}");
+    }
+
+    #[test]
+    fn banner_string_omits_fallback_when_none() {
+        let mut m = sample_manifest();
+        m.fallback_model = None;
+        let b = banner_string(&m, "en");
+        assert!(!b.contains("fallback:"), "got: {b:?}");
+        assert!(b.contains("I am alive:"), "got: {b:?}");
+    }
 
     #[test]
     fn probe_ok_for_complete_agent() {

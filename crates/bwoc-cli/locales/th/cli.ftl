@@ -100,3 +100,11 @@ init-created-notes-dir =   + notes/    (บันทึก implementation — YY
 init-next-steps-header = ขั้นต่อไป:
 init-next-step-validate =   bwoc workspace validate { $path }
 init-next-step-new =   bwoc new <agent-name> ...        (incarnate agent แรกที่นี่)
+
+# bwoc status --banner — replay liveness banner จาก manifest (เหมือนที่ daemon พิมพ์ตอน startup)
+status-banner-alive = ฉันยังมีชีวิตอยู่: { $agent_id }
+status-banner-role = role:     { $role }
+status-banner-model = model:    { $model }
+status-banner-fallback = fallback: { $fallback }
+status-banner-memory = memory:   { $memory_path }
+status-banner-version = version:  { $version }

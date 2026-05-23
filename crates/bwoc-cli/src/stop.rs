@@ -45,6 +45,11 @@ pub enum StopError {
     AlreadyStopped { name: String },
     #[error("aborted by user")]
     Aborted,
+    #[error(
+        "not a TTY and --yes not given. \
+         Pass --yes to confirm or run from an interactive shell."
+    )]
+    NotATerminal,
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("workspace error: {0}")]
@@ -57,6 +62,10 @@ pub fn run(args: StopArgs) -> i32 {
         Ok(()) => 0,
         Err(StopError::Aborted) => {
             eprintln!("bwoc stop: aborted — nothing changed");
+            2
+        }
+        Err(StopError::NotATerminal) => {
+            eprintln!("bwoc stop: not a TTY and --yes not given. Pass --yes to confirm or run from an interactive shell.");
             2
         }
         Err(e) => {
@@ -219,7 +228,7 @@ fn stop(args: StopArgs) -> Result<(), StopError> {
             return Err(StopError::Aborted);
         }
         if !io::stdin().is_terminal() {
-            return Err(StopError::Aborted);
+            return Err(StopError::NotATerminal);
         }
         let mut stdout = io::stdout();
         write!(stdout, "Proceed? [y/N]: ")?;

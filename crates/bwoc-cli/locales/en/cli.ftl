@@ -100,3 +100,11 @@ init-created-notes-dir =   + notes/    (implementation logs — YYYY-MM-DD_<titl
 init-next-steps-header = Next steps:
 init-next-step-validate =   bwoc workspace validate { $path }
 init-next-step-new =   bwoc new <agent-name> ...        (incarnate the first agent here)
+
+# bwoc status --banner — manifest-driven liveness replay (mirrors bwoc-agent startup output)
+status-banner-alive = I am alive: { $agent_id }
+status-banner-role = role:     { $role }
+status-banner-model = model:    { $model }
+status-banner-fallback = fallback: { $fallback }
+status-banner-memory = memory:   { $memory_path }
+status-banner-version = version:  { $version }

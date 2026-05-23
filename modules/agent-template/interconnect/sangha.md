@@ -14,7 +14,7 @@ canonical-source: Saṅgaha-vatthu (AN 4.32, DN 31) · Saṅghakamma (Vinaya, Ma
 
 # Saṅgha — Teams & Shared Task List
 
-> [!abstract] A **team** (saṅgha) groups a subset of a workspace's agents under one shared task list. The human operator is the implicit lead. Teammates **self-claim** pending, unblocked tasks; an advisory file lock makes each claim a Saṅghakamma — a communal act settled by exactly one member. This is Phase A: the CLI + on-disk foundation. Daemon task-watch, plan approval (Pavāraṇā), and team-aware dashboard are later phases.
+> [!abstract] A **team** (saṅgha) groups a subset of a workspace's agents under one shared task list. The human operator is the implicit lead. Teammates **self-claim** pending, unblocked tasks; an advisory file lock makes each claim a Saṅghakamma — a communal act settled by exactly one member. Shipped: the CLI + on-disk foundation (Phase A), daemon task-watch with opt-in wakeup + auto-claim (Phase B/B+), task hooks, and plan approval (Pavāraṇā, Phase C). A team-aware dashboard pane and a designated lead-agent remain future work.
 
 ## Motivation
 
@@ -123,10 +123,21 @@ Optional workspace-level shell hooks fire on task lifecycle, mirroring Claude Ag
 
 Each hook receives the context as environment variables: `BWOC_TASK_EVENT`, `BWOC_TEAM`, `BWOC_TASK_ID`, `BWOC_TASK_TITLE` (created), `BWOC_AGENT` (completed). A **non-zero exit blocks the operation** — the task file is left unchanged and the hook's first stderr line is surfaced to the operator (exit 2). A missing or non-executable hook is a silent no-op (hooks are opt-in). Use them for quality gates: e.g. a `task-completed` hook that runs `cargo test` and exits non-zero to refuse completion until tests pass.
 
+## Plan approval — Pavāraṇā (shipped)
+
+For risky or far-reaching work, a task can require the lead's sign-off on a plan before it completes — mapping **Pavāraṇā** (the monk's invitation, at Vassa's end, for the Saṅgha to point out his faults: submitting oneself for review before proceeding).
+
+- `bwoc task add <team> "<title>" --requires-plan` — gate this task on plan approval.
+- `bwoc task plan <team> <task> --as <agent> --plan "<text>"` (or `--plan-file`) — the claimant submits or revises a plan (must have the task `in_progress`). Re-submitting clears any prior verdict back to pending.
+- `bwoc task plan <team> <task>` (no `--as`/`--plan`) — show the current plan + verdict.
+- `bwoc task approve <team> <task>` / `bwoc task reject <team> <task>` — the lead's verdict (no `--as`; the human operator is the lead). Reject sends it back for revision.
+- `bwoc task complete` on a `requires_plan` task is refused until `plan_approved == true` — the gate lives in `bwoc-core::team::complete_task`, so it holds no matter which surface triggers completion (including a daemon auto-claim that later tries to complete).
+
+A non-plan task (`requires_plan` default false) completes exactly as before — the gate is opt-in per task.
+
 ## Deferred (later phases)
 
-- **Plan approval (Pavāraṇā)** — a teammate submits a plan, the lead approves/rejects before implementation. Maps to an envelope-kind extension on [[messaging]]. (Phase C.)
-- **Team-aware dashboard** — a task pane in `bwoc dashboard`. (Phase B+.)
+- **Team-aware dashboard** — a task pane in `bwoc dashboard` (the detail pane already shows per-agent team standing; a full team/task pane is the next step).
 - **Designated lead agent** — a `lead` field + lead-only operations. Only if the human-implicit-lead model proves limiting.
 
 ## Related

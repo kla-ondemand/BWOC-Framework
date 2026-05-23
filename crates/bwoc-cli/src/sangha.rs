@@ -355,12 +355,14 @@ fn run_task_hook(workspace: &Path, event: &str, env: &[(&str, &str)]) -> Result<
 
 // --- task commands ---------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_task_add(
     workspace: Option<PathBuf>,
     team_id: String,
     title: String,
     deps: Vec<String>,
     id_override: Option<String>,
+    requires_plan: bool,
     json: bool,
 ) -> i32 {
     let Some(ws) = resolve_workspace(workspace) else {
@@ -389,7 +391,8 @@ pub fn run_task_add(
     // Monotonic id `t<N>` (tasks are never removed, so len only grows),
     // unless the caller passed an explicit --id.
     let id = id_override.unwrap_or_else(|| format!("t{}", tasks.len() + 1));
-    let task = Task::new(&id, &title, deps);
+    let mut task = Task::new(&id, &title, deps);
+    task.requires_plan = requires_plan;
     if let Err(e) = team::add_task(&mut tasks, task) {
         eprintln!("bwoc task add: {e}");
         return 2;
@@ -574,6 +577,130 @@ fn mutate_task(
         );
     } else {
         println!("{verb}: ok ({agent} on team '{team_id}')");
+    }
+    0
+}
+
+// --- plan approval (Pavāraṇā) ----------------------------------------------
+
+/// `bwoc task plan <team> <task> [--as <agent>] [--plan … | --plan-file …]`.
+/// With plan content → submit/revise (requires `--as`, member-guarded,
+/// locked). Without → show the current plan + verdict (read-only).
+pub fn run_task_plan(
+    workspace: Option<PathBuf>,
+    team_id: String,
+    task_id: String,
+    agent: Option<String>,
+    plan: Option<String>,
+    json: bool,
+) -> i32 {
+    // Submit path: plan content present.
+    if let Some(plan_text) = plan {
+        let Some(agent) = agent else {
+            eprintln!("bwoc task plan: --as <agent> is required to submit a plan");
+            return 2;
+        };
+        return mutate_task(workspace, &team_id, &task_id, &agent, json, "plan", |tasks| {
+            team::submit_plan(tasks, &task_id, &agent, &plan_text)
+        });
+    }
+    // Show path: no plan content → print the current plan + verdict.
+    let Some(ws) = resolve_workspace(workspace) else {
+        eprintln!("bwoc task plan: no workspace found. Pass --workspace or run `bwoc init`.");
+        return 2;
+    };
+    let tasks = match load_tasks(&ws, &team_id) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("bwoc task plan: {e}");
+            return 1;
+        }
+    };
+    let Some(task) = tasks.iter().find(|t| t.id == task_id) else {
+        eprintln!("bwoc task plan: task '{task_id}' not found in team '{team_id}'");
+        return 2;
+    };
+    let verdict = match task.plan_approved {
+        None if task.plan.is_some() => "pending review",
+        None => "not submitted",
+        Some(true) => "approved",
+        Some(false) => "rejected",
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "team": team_id,
+                "task": task_id,
+                "requires_plan": task.requires_plan,
+                "plan": task.plan,
+                "verdict": verdict,
+            })
+        );
+    } else {
+        println!("Task {team_id}/{task_id} — plan: {verdict}");
+        match &task.plan {
+            Some(p) => {
+                println!("---");
+                println!("{p}");
+                println!("---");
+            }
+            None => println!("(no plan submitted yet)"),
+        }
+    }
+    0
+}
+
+/// `bwoc task approve|reject <team> <task>` — the lead's Pavāraṇā verdict.
+/// No `--as`: the human operator is the implicit lead. Locked + saved.
+pub fn run_task_review(
+    workspace: Option<PathBuf>,
+    team_id: String,
+    task_id: String,
+    approved: bool,
+    json: bool,
+) -> i32 {
+    let verb = if approved { "approve" } else { "reject" };
+    let Some(ws) = resolve_workspace(workspace) else {
+        eprintln!("bwoc task {verb}: no workspace found. Pass --workspace or run `bwoc init`.");
+        return 2;
+    };
+    if let Err(e) = load_team(&ws, &team_id) {
+        eprintln!("bwoc task {verb}: {e}");
+        return 2;
+    }
+    let task_dir = team_task_dir(&ws, &team_id);
+    let _lock = match TaskLock::acquire(&task_dir) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("bwoc task {verb}: {e}");
+            return 1;
+        }
+    };
+    let mut tasks = match load_tasks(&ws, &team_id) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("bwoc task {verb}: {e}");
+            return 1;
+        }
+    };
+    if let Err(e) = team::review_plan(&mut tasks, &task_id, approved) {
+        eprintln!("bwoc task {verb}: {e}");
+        return 2;
+    }
+    if let Err(e) = save_tasks(&ws, &team_id, &tasks) {
+        eprintln!("bwoc task {verb}: {e}");
+        return 1;
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "team": team_id, "task": task_id, "approved": approved })
+        );
+    } else if approved {
+        println!("Approved plan for {team_id}/{task_id} — claimant may now complete it");
+    } else {
+        println!("Rejected plan for {team_id}/{task_id} — claimant must revise + resubmit");
     }
     0
 }

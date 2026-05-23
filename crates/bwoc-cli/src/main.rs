@@ -183,6 +183,10 @@ enum TaskCommand {
         /// Explicit task id (default: auto `t<N>`).
         #[arg(long = "id")]
         id: Option<String>,
+        /// Gate completion on lead plan approval (Pavāraṇā): the claimant must
+        /// submit a plan and the lead must approve it before `task complete`.
+        #[arg(long = "requires-plan")]
+        requires_plan: bool,
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
         #[arg(long)]
@@ -220,6 +224,48 @@ enum TaskCommand {
         /// Completing agent id (must be the claimant).
         #[arg(long = "as")]
         agent: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Submit/revise a plan for a claimed task, or show the current plan (Pavāraṇā).
+    Plan {
+        /// Team id.
+        team: String,
+        /// Task id.
+        task: String,
+        /// Submitting agent id (the claimant). Required to submit; omit to just show.
+        #[arg(long = "as")]
+        agent: Option<String>,
+        /// Plan text. Mutually exclusive with --plan-file. Omit both to show the plan.
+        #[arg(long, conflicts_with = "plan_file")]
+        plan: Option<String>,
+        /// Read the plan body from a file. Mutually exclusive with --plan.
+        #[arg(long = "plan-file")]
+        plan_file: Option<PathBuf>,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lead approves a submitted plan — the claimant may then complete the task.
+    Approve {
+        /// Team id.
+        team: String,
+        /// Task id.
+        task: String,
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Lead rejects a submitted plan — the claimant must revise + resubmit.
+    Reject {
+        /// Team id.
+        team: String,
+        /// Task id.
+        task: String,
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
         #[arg(long)]
@@ -1266,9 +1312,10 @@ fn main() -> ExitCode {
                     title,
                     deps,
                     id,
+                    requires_plan,
                     workspace,
                     json,
-                } => sangha::run_task_add(workspace, team, title, deps, id, json),
+                } => sangha::run_task_add(workspace, team, title, deps, id, requires_plan, json),
                 TaskCommand::List {
                     team,
                     workspace,
@@ -1288,6 +1335,41 @@ fn main() -> ExitCode {
                     workspace,
                     json,
                 } => sangha::run_task_complete(workspace, team, task, agent, json),
+                TaskCommand::Plan {
+                    team,
+                    task,
+                    agent,
+                    plan,
+                    plan_file,
+                    workspace,
+                    json,
+                } => {
+                    // Resolve plan content: --plan inline, or --plan-file body.
+                    let plan_content = match (plan, plan_file) {
+                        (Some(p), _) => Some(p),
+                        (None, Some(path)) => match std::fs::read_to_string(&path) {
+                            Ok(s) => Some(s.trim_end_matches('\n').to_string()),
+                            Err(e) => {
+                                eprintln!("bwoc task plan: failed to read {}: {e}", path.display());
+                                return ExitCode::from(2);
+                            }
+                        },
+                        (None, None) => None,
+                    };
+                    sangha::run_task_plan(workspace, team, task, agent, plan_content, json)
+                }
+                TaskCommand::Approve {
+                    team,
+                    task,
+                    workspace,
+                    json,
+                } => sangha::run_task_review(workspace, team, task, true, json),
+                TaskCommand::Reject {
+                    team,
+                    task,
+                    workspace,
+                    json,
+                } => sangha::run_task_review(workspace, team, task, false, json),
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }

@@ -100,6 +100,24 @@ pub struct Task {
     /// UTC ISO 8601 completion stamp (set on complete).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
+    /// Pavāraṇā gate: when true, the task cannot be completed until its
+    /// submitted plan has been approved by the lead. Default false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub requires_plan: bool,
+    /// The plan the claimant submitted for lead review (Pavāraṇā — the
+    /// teammate invites judgment before proceeding). `None` until submitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Lead's verdict on the submitted plan: `None` = pending review,
+    /// `Some(true)` = approved, `Some(false)` = rejected (resubmit needed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_approved: Option<bool>,
+}
+
+/// serde `skip_serializing_if` helper — keeps `requires_plan: false` out
+/// of the JSONL so existing/simple tasks stay one-line and unchanged.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl Task {
@@ -112,6 +130,9 @@ impl Task {
             claimed_by: None,
             created_at: utc_now_iso8601(),
             completed_at: None,
+            requires_plan: false,
+            plan: None,
+            plan_approved: None,
         }
     }
 }
@@ -144,6 +165,12 @@ pub enum TeamError {
     },
     #[error("agent '{0}' is not a member of this team")]
     NotAMember(String),
+    #[error("task '{id}' is {state} — a plan can only be submitted for a task you've claimed")]
+    NotClaimedForPlan { id: String, state: &'static str },
+    #[error("task '{id}' has no submitted plan to review — the claimant must `bwoc task plan` first")]
+    NoPlanSubmitted { id: String },
+    #[error("task '{id}' requires plan approval before completion (plan {plan_state})")]
+    PlanNotApproved { id: String, plan_state: &'static str },
 }
 
 /// Append a new task. Rejects a duplicate id and any dependency that
@@ -231,8 +258,72 @@ pub fn complete_task(tasks: &mut [Task], id: &str, agent: &str) -> Result<(), Te
             });
         }
     }
+    // Pavāraṇā gate: a plan-required task cannot complete until the lead
+    // has approved the submitted plan.
+    if task.requires_plan && task.plan_approved != Some(true) {
+        let plan_state = match (task.plan.is_some(), task.plan_approved) {
+            (false, _) => "not submitted",
+            (true, None) => "pending review",
+            (true, Some(false)) => "rejected",
+            (true, Some(true)) => unreachable!(),
+        };
+        return Err(TeamError::PlanNotApproved {
+            id: id.to_string(),
+            plan_state,
+        });
+    }
     task.state = TaskState::Completed;
     task.completed_at = Some(utc_now_iso8601());
+    Ok(())
+}
+
+/// Submit (or revise) a plan for a task the agent has claimed — Pavāraṇā,
+/// inviting the lead's judgment before proceeding. The task must be
+/// `InProgress` and claimed by `agent`. Resets any prior verdict to
+/// pending (a resubmission after rejection awaits fresh review).
+pub fn submit_plan(
+    tasks: &mut [Task],
+    id: &str,
+    agent: &str,
+    plan: &str,
+) -> Result<(), TeamError> {
+    let task = tasks
+        .iter_mut()
+        .find(|t| t.id == id)
+        .ok_or_else(|| TeamError::TaskNotFound(id.to_string()))?;
+    if task.state != TaskState::InProgress {
+        return Err(TeamError::NotClaimedForPlan {
+            id: id.to_string(),
+            state: task.state.as_str(),
+        });
+    }
+    match &task.claimed_by {
+        Some(owner) if owner == agent => {}
+        owner => {
+            return Err(TeamError::NotClaimant {
+                id: id.to_string(),
+                owner: owner.clone().unwrap_or_else(|| "<unclaimed>".to_string()),
+                actor: agent.to_string(),
+            });
+        }
+    }
+    task.plan = Some(plan.to_string());
+    task.plan_approved = None; // fresh submission awaits review
+    Ok(())
+}
+
+/// Lead verdict on a submitted plan. `approved` true = approve, false =
+/// reject (the claimant must revise + resubmit). The task must have a
+/// plan on file. The lead is the human operator — no agent identity here.
+pub fn review_plan(tasks: &mut [Task], id: &str, approved: bool) -> Result<(), TeamError> {
+    let task = tasks
+        .iter_mut()
+        .find(|t| t.id == id)
+        .ok_or_else(|| TeamError::TaskNotFound(id.to_string()))?;
+    if task.plan.is_none() {
+        return Err(TeamError::NoPlanSubmitted { id: id.to_string() });
+    }
+    task.plan_approved = Some(approved);
     Ok(())
 }
 
@@ -348,6 +439,82 @@ mod tests {
         let mut tasks = seed();
         let err = complete_task(&mut tasks, "t1", "agent-pi").unwrap_err();
         assert!(matches!(err, TeamError::NotCompletable { .. }));
+    }
+
+    fn seed_plan_task() -> Vec<Task> {
+        let mut t = Task::new("p1", "needs a plan", vec![]);
+        t.requires_plan = true;
+        vec![t]
+    }
+
+    #[test]
+    fn plan_required_blocks_completion_until_approved() {
+        let mut tasks = seed_plan_task();
+        claim_task(&mut tasks, "p1", "agent-pi").unwrap();
+        // No plan yet → complete refused.
+        let err = complete_task(&mut tasks, "p1", "agent-pi").unwrap_err();
+        assert!(matches!(err, TeamError::PlanNotApproved { .. }));
+        // Submit a plan → still pending review → refused.
+        submit_plan(&mut tasks, "p1", "agent-pi", "1. do X\n2. do Y").unwrap();
+        assert!(matches!(
+            complete_task(&mut tasks, "p1", "agent-pi").unwrap_err(),
+            TeamError::PlanNotApproved { .. }
+        ));
+        // Approve → completion allowed.
+        review_plan(&mut tasks, "p1", true).unwrap();
+        complete_task(&mut tasks, "p1", "agent-pi").unwrap();
+        assert_eq!(tasks[0].state, TaskState::Completed);
+    }
+
+    #[test]
+    fn rejected_plan_can_be_resubmitted() {
+        let mut tasks = seed_plan_task();
+        claim_task(&mut tasks, "p1", "agent-pi").unwrap();
+        submit_plan(&mut tasks, "p1", "agent-pi", "weak plan").unwrap();
+        review_plan(&mut tasks, "p1", false).unwrap();
+        assert_eq!(tasks[0].plan_approved, Some(false));
+        // Resubmit clears the verdict back to pending.
+        submit_plan(&mut tasks, "p1", "agent-pi", "stronger plan").unwrap();
+        assert_eq!(tasks[0].plan_approved, None);
+        assert_eq!(tasks[0].plan.as_deref(), Some("stronger plan"));
+        review_plan(&mut tasks, "p1", true).unwrap();
+        complete_task(&mut tasks, "p1", "agent-pi").unwrap();
+        assert_eq!(tasks[0].state, TaskState::Completed);
+    }
+
+    #[test]
+    fn cannot_submit_plan_for_unclaimed_or_others_task() {
+        let mut tasks = seed_plan_task();
+        // Unclaimed (pending) → NotClaimedForPlan.
+        assert!(matches!(
+            submit_plan(&mut tasks, "p1", "agent-pi", "x").unwrap_err(),
+            TeamError::NotClaimedForPlan { .. }
+        ));
+        // Claimed by pi; oracle can't submit.
+        claim_task(&mut tasks, "p1", "agent-pi").unwrap();
+        assert!(matches!(
+            submit_plan(&mut tasks, "p1", "agent-oracle", "x").unwrap_err(),
+            TeamError::NotClaimant { .. }
+        ));
+    }
+
+    #[test]
+    fn cannot_review_a_plan_that_was_never_submitted() {
+        let mut tasks = seed_plan_task();
+        claim_task(&mut tasks, "p1", "agent-pi").unwrap();
+        assert!(matches!(
+            review_plan(&mut tasks, "p1", true).unwrap_err(),
+            TeamError::NoPlanSubmitted { .. }
+        ));
+    }
+
+    #[test]
+    fn non_plan_task_completes_without_plan() {
+        // requires_plan defaults false → existing behavior unchanged.
+        let mut tasks = seed();
+        claim_task(&mut tasks, "t1", "agent-pi").unwrap();
+        complete_task(&mut tasks, "t1", "agent-pi").unwrap();
+        assert_eq!(tasks[0].state, TaskState::Completed);
     }
 
     #[test]

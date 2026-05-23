@@ -202,6 +202,7 @@ fn event_loop(term: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) 
                     (KeyCode::Char('l'), _) => open_log_in_tmux(app),
                     (KeyCode::Char('i'), _) => open_inbox_in_tmux(app),
                     (KeyCode::Char('g'), _) => open_in_ghostty(app),
+                    (KeyCode::Char('s'), _) => start_selected_agent(app),
                     (KeyCode::Char('?'), _) => app.show_help = true,
                     (KeyCode::Down | KeyCode::Char('j'), _) => app.next(),
                     (KeyCode::Up | KeyCode::Char('k'), _) => app.prev(),
@@ -341,6 +342,69 @@ fn open_in_ghostty(app: &mut App) {
         }
         Err(e) => {
             app.last_action = Some(format!("ghostty: `open` exec failed: {e}"));
+        }
+    }
+}
+
+/// `s` hotkey — start (run) the selected agent: flip its registry status
+/// to active and spawn `bwoc-agent --serve` if not already alive. Shells
+/// out to `bwoc start <id> --yes --json` with output **captured** (not
+/// inherited) so the daemon's stdout/stderr never corrupts the TUI. The
+/// daemon is spawned detached by `bwoc start`, so it survives this short-
+/// lived child. Refreshes the registry on success so the row's status +
+/// the ●/○ runtime indicator flip immediately.
+fn start_selected_agent(app: &mut App) {
+    let Some(idx) = app.table_state.selected() else {
+        app.last_action = Some("(no agent selected — ↑↓ to pick first)".to_string());
+        return;
+    };
+    let Some(entry) = app.agents.get(idx).cloned() else {
+        return;
+    };
+    let Some(root) = &app.workspace else {
+        app.last_action = Some("(no workspace — nothing to start)".to_string());
+        return;
+    };
+    let root_str = root.to_string_lossy().to_string();
+
+    // `--json` requires `--yes` (no TTY prompt path in a captured child).
+    let result = std::process::Command::new("bwoc")
+        .args([
+            "start",
+            entry.id.as_str(),
+            "--yes",
+            "--json",
+            "--workspace",
+            root_str.as_str(),
+        ])
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            // Parse the JSON shape `{ daemon_spawned, daemon_pid, already_running, ... }`
+            // for a precise message; fall back to a generic one if parsing fails.
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let parsed = serde_json::from_str::<serde_json::Value>(stdout.trim()).ok();
+            let already = parsed
+                .as_ref()
+                .and_then(|v| v.get("already_running").and_then(|b| b.as_bool()))
+                .unwrap_or(false);
+            let pid = parsed
+                .as_ref()
+                .and_then(|v| v.get("daemon_pid").and_then(|p| p.as_u64()));
+            app.last_action = Some(match (already, pid) {
+                (true, _) => format!("→ '{}' already running", entry.id),
+                (false, Some(p)) => format!("→ started '{}' (daemon pid {p})", entry.id),
+                (false, None) => format!("→ started '{}' (status active)", entry.id),
+            });
+            app.refresh();
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            let first = err.trim().lines().next().unwrap_or("unknown error");
+            app.last_action = Some(format!("start '{}' failed: {first}", entry.id));
+        }
+        Err(e) => {
+            app.last_action = Some(format!("start exec failed: {e} (is bwoc on PATH?)"));
         }
     }
 }
@@ -542,6 +606,8 @@ fn draw_help_overlay(f: &mut ratatui::Frame, area: Rect) {
               (live tail the inbox)
   g           open `bwoc spawn` in a new Ghostty window
               (chat with the selected agent; macOS-only)
+  s           start (run) the selected agent
+              (flip status active + spawn bwoc-agent --serve)
 
 Press any key to dismiss.";
 
@@ -1031,6 +1097,8 @@ fn draw_footer(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Span::raw(" log    "),
         Span::styled("i", bold),
         Span::raw(" inbox    "),
+        Span::styled("s", bold),
+        Span::raw(" start    "),
         Span::styled("r", bold),
         Span::raw(format!(" {refresh}    ")),
         Span::styled("?", bold),

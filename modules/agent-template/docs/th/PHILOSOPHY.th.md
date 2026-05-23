@@ -358,7 +358,7 @@
 - พรหมวิหาร 4 → docs/PRD (Error UX section)
 - อปริหานิยธรรม → docs/FLEET-GOVERNANCE.md
 - ตัณหา 3 → docs/THREAT-MODEL.md
-- กัลยาณมิตร → docs/COORDINATION-PROTOCOL.md
+- กัลยาณมิตร → [`interconnect/trust.md`](../../interconnect/trust.md) (spec draft v2026.5.23 — boolean 7 ค่า ประกาศใน `config.manifest.json` ตรวจสอบโดย `bwoc check`)
 - สติปัฏฐาน → docs/OBSERVABILITY.md (ขยายเต็ม)
 - อริยทรัพย์ 7 → docs/LIFECYCLE.md (maturity model)
 - กรรม 3 → docs/OBSERVABILITY.md (audit trail)

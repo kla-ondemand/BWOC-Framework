@@ -109,7 +109,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 
 - **Full vaya** for `bwoc retire` — file modes shipped (default/--keep-files/--keep-memory); still pending: worktree cleanup (when worktreeBase set), branch release, interconnect deregistration (when interconnect lands).
 - **Agent → agent messaging** — Sammā-vācā channel proper; Sāraṇīyadhamma 6 cordiality rules.
-- **Trust scoring** — Kalyāṇamitta 7 qualities applied to capability declarations and message provenance.
+- **Trust scoring** — Kalyāṇamitta 7 qualities applied to capability declarations and message provenance. **Spec draft shipped 2026-05-23** at [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md) (7 declared booleans + `requiredTrust` array, verified by `bwoc check`; no Rust impl yet — 5-step implementation order documented).
 - **`.bwoc/interconnect/`** per-workspace routing config.
 - **Tier 2 memory backend reference implementation.**
 

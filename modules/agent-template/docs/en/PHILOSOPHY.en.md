@@ -358,7 +358,7 @@ Three cravings as the threat-model frame.
 - Brahmavihāra → docs/PRD (Error UX section)
 - Aparihāniya-dhamma → docs/FLEET-GOVERNANCE.md
 - Taṇhā 3 → docs/THREAT-MODEL.md
-- Kalyāṇamitta → docs/COORDINATION-PROTOCOL.md
+- Kalyāṇamitta → [`interconnect/trust.md`](../../interconnect/trust.md) (spec draft v2026.5.23 — 7 declared booleans verified by `bwoc check`)
 - Satipaṭṭhāna → docs/OBSERVABILITY.md (fully expanded)
 - Ariya-dhana 7 → docs/LIFECYCLE.md (maturity)
 - Kamma 3 → docs/OBSERVABILITY.md (audit)

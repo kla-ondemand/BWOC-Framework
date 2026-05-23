@@ -109,7 +109,7 @@
 
 - **vaya เต็มรูปแบบ** สำหรับ `bwoc retire` — file mode ship แล้ว (default/--keep-files/--keep-memory); ที่ค้าง: worktree cleanup (เมื่อ set worktreeBase), branch release, interconnect deregistration (เมื่อ interconnect ship)
 - **Agent → agent messaging** — channel สัมมาวาจาจริง; กฎ Sāraṇīyadhamma 6 ของความนุ่มนวล
-- **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ
+- **Trust scoring** — Kalyāṇamitta 7 ใช้กับการประกาศ capability และที่มาของข้อความ **Spec draft ship แล้ว 2026-05-23** ที่ [`modules/agent-template/interconnect/trust.md`](../../modules/agent-template/interconnect/trust.md) (boolean 7 ค่า + array `requiredTrust` ตรวจสอบโดย `bwoc check`; ยังไม่มี Rust impl — ลำดับ implement 5 ขั้น document ไว้)
 - **`.bwoc/interconnect/`** config routing ระดับ workspace
 - **Reference implementation ของ Tier 2 memory backend**
 

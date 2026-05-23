@@ -262,7 +262,7 @@ fn register_in_workspace(
     registry.agents.push(AgentEntry {
         id: manifest.agent_id.clone(),
         path: rel_path,
-        backend: backend.cli_name().to_string(),
+        backend: backend.display_name().to_string(),
         incarnated: utc_now_iso8601(),
         status: "active".to_string(),
     });
@@ -771,7 +771,7 @@ fn resolve_primary_model(
     let header = i18n::t_with(
         bundle,
         "new-model-picker-header",
-        &[("backend", backend.cli_name())],
+        &[("backend", backend.display_name())],
     );
     let default_hint = i18n::t(bundle, "new-model-picker-default-hint");
     writeln!(stdout, "{header}")?;
@@ -945,10 +945,10 @@ fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Force-create `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`
+/// Force-create `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md`, `OLLAMA.md` → `AGENTS.md`
 /// in the target directory. Removes any pre-existing file/symlink first.
 fn create_symlinks(target: &Path) -> Result<Vec<String>, NewError> {
-    let backends = ["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
+    let backends = ["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md", "OLLAMA.md"];
     let mut created = Vec::new();
     for backend in backends {
         let p = target.join(backend);

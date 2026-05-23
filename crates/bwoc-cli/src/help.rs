@@ -25,7 +25,7 @@ const TOPICS: &[(&str, &str, &str)] = &[
     ),
     (
         "backends",
-        "The 4 declared backends and how to switch between them",
+        "The 5 declared backends and how to switch between them",
         BACKENDS,
     ),
     (
@@ -192,35 +192,42 @@ const GETTING_STARTED: &str = "\
 
 See also:
   bwoc help workspace    — what each directory means
-  bwoc help backends     — switching between claude/agy/codex/kimi
+  bwoc help backends     — switching between claude/agy/codex/kimi/ollama
   bwoc help arc          — uppāda · ṭhiti · vaya mapping
   examples/howto/        — full walkthroughs
 ";
 
 const BACKENDS: &str = "\
-BWOC supports 4 declared backends (Samānattatā — equal treatment, no lock-in):
+BWOC supports 5 declared backends (Samānattatā — equal treatment, no lock-in):
 
-  | Backend     | CLI binary | Common models                                          |
-  |-------------|------------|--------------------------------------------------------|
-  | Claude      | claude     | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5   |
-  | Antigravity | agy        | gemini-3.5-flash-*, gemini-3.1-pro-*, claude-*-thinking, gpt-oss-120b-* |
-  | Codex       | codex      | gpt-5, gpt-5-mini, o1                                  |
-  | Kimi        | kimi       | kimi-k2, kimi-k1.5                                     |
+  | Backend     | CLI binary    | Common models                                          |
+  |-------------|---------------|--------------------------------------------------------|
+  | Claude      | claude        | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5   |
+  | Antigravity | agy           | gemini-3.5-flash-*, gemini-3.1-pro-*, claude-*-thinking, gpt-oss-120b-* |
+  | Codex       | codex         | gpt-5, gpt-5-mini, o1                                  |
+  | Kimi        | kimi          | kimi-k2, kimi-k1.5                                     |
+  | Ollama      | bwoc-harness  | qwen2.5-coder:7b, llama3.1:8b, mistral-nemo, gemma4:8b |
 
 Each agent picks ONE backend at incarnation, recorded in its
 config.manifest.json (primaryModel + optional fallbackModel) and in
 .bwoc/agents.toml.
 
-All 4 read the SAME AGENTS.md via symlinks (CLAUDE.md / AGY.md /
-CODEX.md / KIMI.md all → AGENTS.md). If your agent's instructions
-assume a specific backend, `bwoc check` flags it as a neutrality
-violation.
+All 5 read the SAME AGENTS.md via symlinks (CLAUDE.md / AGY.md /
+CODEX.md / KIMI.md / OLLAMA.md all → AGENTS.md). If your agent's
+instructions assume a specific backend, `bwoc check` flags it as a
+neutrality violation.
+
+The Ollama backend differs from the others: instead of exec'ing an external
+vendor CLI, `bwoc spawn --backend ollama` launches the `bwoc-harness` sibling
+binary, which drives the agentic loop against any OpenAI-compatible endpoint
+(default: http://localhost:11434/v1). Run `bwoc doctor` to check whether
+`bwoc-harness` is available and whether Ollama is reachable.
 
 Three ways to set the backend:
-  - At incarnation:   bwoc new my-agent --backend antigravity
+  - At incarnation:   bwoc new my-agent --backend ollama
   - Manifest edit:    edit agents/<name>/config.manifest.json then update
                       .bwoc/agents.toml's `backend = \"...\"`
-  - Per spawn:        bwoc spawn --path agents/<name> --backend kimi
+  - Per spawn:        bwoc spawn --path agents/<name> --backend ollama
                       (overrides for one session — useful for cross-
                        backend testing)
 

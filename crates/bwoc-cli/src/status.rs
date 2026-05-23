@@ -34,7 +34,7 @@ pub struct StatusArgs {
     pub lang: String,
 }
 
-const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md", "OLLAMA.md"];
 
 /// Build the liveness banner string from a manifest + locale bundle.
 /// Mirrors `bwoc-agent::liveness_banner` exactly — same keys, same field order.

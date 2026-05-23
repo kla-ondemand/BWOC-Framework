@@ -987,7 +987,7 @@ impl ListArgs {
             lang,
             json: self.json,
             status_filter: self.status,
-            backend_filter: self.backend.map(|b| b.cli_name().to_string()),
+            backend_filter: self.backend.map(|b| b.display_name().to_string()),
             running_only: self.running,
             inbox_pending_only: self.inbox_pending,
             sort: self.sort,

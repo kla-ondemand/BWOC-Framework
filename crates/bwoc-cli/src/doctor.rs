@@ -43,7 +43,7 @@ struct CheckResult {
 const WORKSPACE_EXTRAS: &[&str] = &["projects", "notes"];
 /// Backend symlink files inside each incarnated agent. Mirror of
 /// `new.rs::create_symlinks`.
-const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md"];
+const BACKEND_SYMLINKS: &[&str] = &["CLAUDE.md", "AGY.md", "CODEX.md", "KIMI.md", "OLLAMA.md"];
 
 pub fn run(args: DoctorArgs) -> i32 {
     let mut results: Vec<CheckResult> = Vec::new();
@@ -53,6 +53,11 @@ pub fn run(args: DoctorArgs) -> i32 {
 
     // 2. Backend CLIs on PATH (informational).
     results.push(check_backends());
+
+    // 2b. Ollama-specific: bwoc-harness binary + endpoint reachability.
+    for r in check_ollama() {
+        results.push(r);
+    }
 
     // 3. Workspace-level checks if we're inside one.
     let ws_root = resolve_workspace_root(args.path);
@@ -205,9 +210,10 @@ fn check_user_home(auto: bool) -> CheckResult {
 }
 
 fn check_backends() -> CheckResult {
-    let backends = ["claude", "agy", "codex", "kimi"];
+    // Vendor CLIs (external programs on PATH).
+    let vendor_backends = ["claude", "agy", "codex", "kimi"];
     let mut available = Vec::new();
-    for b in backends {
+    for b in vendor_backends {
         if which(b).is_some() {
             available.push(b);
         }
@@ -226,6 +232,59 @@ fn check_backends() -> CheckResult {
             status: Status::Pass,
         }
     }
+}
+
+/// Check the Ollama backend: verify `bwoc-harness` is reachable and that
+/// the Ollama endpoint responds.  Both are informational (WARN not FAIL) —
+/// the user may not intend to use Ollama at all.
+fn check_ollama() -> Vec<CheckResult> {
+    let mut out = Vec::new();
+
+    // 1. bwoc-harness binary availability.
+    let harness_result = match crate::spawn::Backend::harness_binary() {
+        Some(_path) => CheckResult {
+            name: "bwoc-harness binary".into(),
+            status: Status::Pass,
+        },
+        None => CheckResult {
+            name: "bwoc-harness binary".into(),
+            status: Status::Warn(
+                "bwoc-harness not found (sibling dir / PATH). \
+                 Install with `cargo install --path crates/bwoc-harness` \
+                 to use the ollama backend."
+                    .into(),
+            ),
+        },
+    };
+    out.push(harness_result);
+
+    // 2. Ollama endpoint reachability (TCP connect to localhost:11434).
+    //    We use only std::net — no HTTP dep — to keep bwoc-cli lean.
+    let endpoint_result = {
+        use std::net::TcpStream;
+        use std::time::Duration;
+        let addr = "127.0.0.1:11434";
+        let reachable =
+            TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_ok();
+        if reachable {
+            CheckResult {
+                name: "ollama endpoint (localhost:11434)".into(),
+                status: Status::Pass,
+            }
+        } else {
+            CheckResult {
+                name: "ollama endpoint (localhost:11434)".into(),
+                status: Status::Warn(
+                    "Ollama not reachable at localhost:11434. \
+                     Start with `ollama serve` to use the ollama backend."
+                        .into(),
+                ),
+            }
+        }
+    };
+    out.push(endpoint_result);
+
+    out
 }
 
 fn check_workspace_toml(root: &Path) -> CheckResult {

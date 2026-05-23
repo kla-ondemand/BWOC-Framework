@@ -66,7 +66,7 @@ pub fn run(args: ChatArgs) -> i32 {
         None => {
             eprintln!(
                 "bwoc chat: agent '{}' has unknown backend '{}' in registry — \
-                 edit .bwoc/agents.toml to one of: claude, agy, codex, kimi",
+                 edit .bwoc/agents.toml to one of: claude, agy, codex, kimi, ollama",
                 entry.id, entry.backend
             );
             return 1;
@@ -113,14 +113,14 @@ fn open_in_tmux(agent_id: &str, agent_path: &std::path::Path, backend: Backend) 
             "--path",
             path_str.as_str(),
             "--backend",
-            backend.cli_name(),
+            backend.display_name(),
         ])
         .status()
     {
         Ok(s) if s.success() => {
             println!(
                 "Opened tmux window '{agent_id}' (backend: {})",
-                backend.cli_name()
+                backend.display_name()
             );
             0
         }
@@ -167,14 +167,14 @@ fn open_in_ghostty(agent_id: &str, agent_path: &std::path::Path, backend: Backen
             "--path",
             path_str.as_str(),
             "--backend",
-            backend.cli_name(),
+            backend.display_name(),
         ])
         .status()
     {
         Ok(s) if s.success() => {
             println!(
                 "Opened Ghostty window for '{agent_id}' (backend: {})",
-                backend.cli_name()
+                backend.display_name()
             );
             0
         }
@@ -198,6 +198,7 @@ fn parse_backend(s: &str) -> Option<Backend> {
         "agy" => Some(Backend::Antigravity),
         "codex" => Some(Backend::Codex),
         "kimi" => Some(Backend::Kimi),
+        "ollama" => Some(Backend::Ollama),
         _ => None,
     }
 }

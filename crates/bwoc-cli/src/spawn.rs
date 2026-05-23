@@ -4,6 +4,20 @@
 //! discovery and `agents.toml` lookup defer to Phase 2). Validates the path is
 //! a BWOC agent (has `AGENTS.md`) before spawning. Propagates the backend's
 //! exit code.
+//!
+//! ## Ollama dispatch
+//!
+//! All non-Ollama backends exec an external vendor CLI (`claude`, `agy`, …).
+//! Ollama has no agentic CLI of its own, so `Backend::Ollama` instead execs
+//! the `bwoc-harness` sibling binary.  Resolution order:
+//!
+//! 1. Same directory as the running `bwoc` binary (`std::env::current_exe()`).
+//! 2. `cargo`-built artifact: `CARGO_BIN_EXE_bwoc-harness` env var (test only).
+//! 3. `bwoc-harness` on `$PATH`.
+//!
+//! **Dep-quarantine invariant:** `bwoc-harness` is launched as a subprocess
+//! and is never a Cargo dependency of `bwoc-cli`.  `tokio`/`reqwest`/`async-
+//! trait`/`hyper` never appear in `bwoc-cli`'s dependency tree.
 
 use std::ffi::OsString;
 use std::io;
@@ -12,22 +26,45 @@ use std::process::Command;
 
 use crate::i18n;
 
-/// Which backend CLI to invoke. Maps 1:1 to the program name on PATH.
+/// Which backend CLI to invoke.
+///
+/// Non-Ollama variants map 1:1 to an external CLI program name on PATH.
+/// `Ollama` is special: it execs the `bwoc-harness` sibling binary.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
     Claude,
     Antigravity,
     Codex,
     Kimi,
+    /// Self-hosted Ollama (or any OpenAI-compat endpoint).
+    /// Execs the `bwoc-harness` sibling binary instead of an external CLI.
+    Ollama,
 }
 
 impl Backend {
-    pub fn cli_name(self) -> &'static str {
+    /// External CLI program name for vendor backends.
+    ///
+    /// Returns `None` for `Ollama` — that backend uses `harness_binary()`
+    /// instead. Callers that only care about the human-readable name should
+    /// use `display_name()`.
+    pub fn cli_name(self) -> Option<&'static str> {
+        match self {
+            Backend::Claude => Some("claude"),
+            Backend::Antigravity => Some("agy"),
+            Backend::Codex => Some("codex"),
+            Backend::Kimi => Some("kimi"),
+            Backend::Ollama => None,
+        }
+    }
+
+    /// Short identifier used in human-readable messages and log lines.
+    pub fn display_name(self) -> &'static str {
         match self {
             Backend::Claude => "claude",
             Backend::Antigravity => "agy",
             Backend::Codex => "codex",
             Backend::Kimi => "kimi",
+            Backend::Ollama => "ollama",
         }
     }
 
@@ -53,7 +90,52 @@ impl Backend {
             ],
             Backend::Codex => &["gpt-5", "gpt-5-mini", "o1"],
             Backend::Kimi => &["kimi-k2", "kimi-k1.5"],
+            Backend::Ollama => &[
+                "qwen2.5-coder:7b",
+                "qwen2.5-coder:14b",
+                "llama3.1:8b",
+                "mistral-nemo",
+                "gemma4:8b",
+            ],
         }
+    }
+
+    /// Resolve the `bwoc-harness` binary path for the Ollama backend.
+    ///
+    /// Resolution order:
+    /// 1. Sibling of the running `bwoc` binary.
+    /// 2. `CARGO_BIN_EXE_bwoc-harness` (set by Cargo during `cargo test`).
+    /// 3. `bwoc-harness` on `$PATH`.
+    ///
+    /// Returns `None` if none of the locations yield an executable.
+    pub fn harness_binary() -> Option<PathBuf> {
+        // 1. Sibling of the running binary.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join("bwoc-harness");
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        // 2. Cargo test env var (set by `cargo test` for workspace binaries).
+        if let Ok(p) = std::env::var("CARGO_BIN_EXE_bwoc-harness") {
+            let pb = PathBuf::from(&p);
+            if pb.is_file() {
+                return Some(pb);
+            }
+        }
+
+        // 3. $PATH fallback.
+        let path_env = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path_env) {
+            let candidate = dir.join("bwoc-harness");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
     }
 }
 
@@ -72,6 +154,11 @@ pub enum SpawnError {
     NotAnAgent(PathBuf),
     #[error("backend CLI '{backend}' not found on PATH; install it or pick another --backend")]
     BackendNotFound { backend: &'static str },
+    #[error(
+        "bwoc-harness binary not found; install it (`cargo install --path crates/bwoc-harness`) \
+         or add it to PATH"
+    )]
+    HarnessNotFound,
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }
@@ -83,7 +170,8 @@ pub fn run(args: SpawnArgs) -> i32 {
         Err(
             e @ (SpawnError::PathMissing(_)
             | SpawnError::NotAnAgent(_)
-            | SpawnError::BackendNotFound { .. }),
+            | SpawnError::BackendNotFound { .. }
+            | SpawnError::HarnessNotFound),
         ) => {
             eprintln!("bwoc spawn: {e}");
             2
@@ -102,28 +190,42 @@ pub fn spawn(args: SpawnArgs) -> Result<i32, SpawnError> {
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     validate_agent_path(&path)?;
 
-    let backend = args.backend.cli_name();
+    let backend_name = args.backend.display_name();
     let path_display = path.display().to_string();
     eprintln!(
         "{}",
         i18n::t_with(
             &bundle,
             "spawn-exec-status",
-            &[("backend", backend), ("path", &path_display)],
+            &[("backend", backend_name), ("path", &path_display)],
         )
     );
 
-    let status = Command::new(backend)
-        .current_dir(&path)
-        .args(&args.extra)
-        .status()
-        .map_err(|e| {
-            if e.kind() == io::ErrorKind::NotFound {
-                SpawnError::BackendNotFound { backend }
-            } else {
-                SpawnError::Io(e)
-            }
-        })?;
+    // Ollama → exec bwoc-harness; all other backends → exec their external CLI.
+    let status = if args.backend == Backend::Ollama {
+        let harness = Backend::harness_binary().ok_or(SpawnError::HarnessNotFound)?;
+        Command::new(&harness)
+            .current_dir(&path)
+            .args(&args.extra)
+            .status()
+            .map_err(SpawnError::Io)?
+    } else {
+        let cli = args
+            .backend
+            .cli_name()
+            .expect("non-Ollama backend always has a cli_name");
+        Command::new(cli)
+            .current_dir(&path)
+            .args(&args.extra)
+            .status()
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::NotFound {
+                    SpawnError::BackendNotFound { backend: cli }
+                } else {
+                    SpawnError::Io(e)
+                }
+            })?
+    };
 
     Ok(status.code().unwrap_or(1))
 }
@@ -145,10 +247,26 @@ mod tests {
 
     #[test]
     fn backend_cli_names() {
-        assert_eq!(Backend::Claude.cli_name(), "claude");
-        assert_eq!(Backend::Antigravity.cli_name(), "agy");
-        assert_eq!(Backend::Codex.cli_name(), "codex");
-        assert_eq!(Backend::Kimi.cli_name(), "kimi");
+        assert_eq!(Backend::Claude.cli_name(), Some("claude"));
+        assert_eq!(Backend::Antigravity.cli_name(), Some("agy"));
+        assert_eq!(Backend::Codex.cli_name(), Some("codex"));
+        assert_eq!(Backend::Kimi.cli_name(), Some("kimi"));
+        // Ollama has no external CLI — uses bwoc-harness instead.
+        assert_eq!(Backend::Ollama.cli_name(), None);
+    }
+
+    #[test]
+    fn backend_display_names() {
+        assert_eq!(Backend::Claude.display_name(), "claude");
+        assert_eq!(Backend::Antigravity.display_name(), "agy");
+        assert_eq!(Backend::Codex.display_name(), "codex");
+        assert_eq!(Backend::Kimi.display_name(), "kimi");
+        assert_eq!(Backend::Ollama.display_name(), "ollama");
+    }
+
+    #[test]
+    fn ollama_has_models() {
+        assert!(!Backend::Ollama.models().is_empty());
     }
 
     #[test]

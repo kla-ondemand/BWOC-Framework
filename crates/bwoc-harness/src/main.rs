@@ -10,11 +10,11 @@ use std::sync::Arc;
 use clap::Parser;
 
 use bwoc_harness::{
-    agent_loop::{run_loop, LoopConfig},
+    agent_loop::{LoopConfig, run_loop},
     error::HarnessResult,
     policy::{HarnessPolicy, Policy},
     provider::{ChatMessage, OllamaClient, ProviderClient},
-    tools::{registry::default_registry, ToolContext},
+    tools::{ToolContext, registry::default_registry},
 };
 
 // ---------------------------------------------------------------------------

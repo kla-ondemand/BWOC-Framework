@@ -133,8 +133,8 @@ pub fn audit(target: &Path) -> AuditReport {
             .push("AGENTS.md not found — this is the single source of truth".to_string());
     }
 
-    // 2. Backend symlinks (AGY, CODEX, KIMI must symlink to AGENTS.md)
-    for backend in &["AGY.md", "CODEX.md", "KIMI.md"] {
+    // 2. Backend symlinks (AGY, CODEX, KIMI, OLLAMA must symlink to AGENTS.md)
+    for backend in &["AGY.md", "CODEX.md", "KIMI.md", "OLLAMA.md"] {
         let p = target.join(backend);
         check_symlink_to_agents(&p, backend, &mut report);
     }
@@ -986,7 +986,7 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("AGENTS.md"), agents_body).unwrap();
-        for backend in ["AGY.md", "CODEX.md", "KIMI.md", "CLAUDE.md"] {
+        for backend in ["AGY.md", "CODEX.md", "KIMI.md", "CLAUDE.md", "OLLAMA.md"] {
             std::os::unix::fs::symlink("AGENTS.md", root.join(backend)).unwrap();
         }
         let manifest = serde_json::json!({

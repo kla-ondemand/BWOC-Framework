@@ -805,6 +805,27 @@ fn draw_detail(f: &mut ratatui::Frame, area: Rect, app: &App) {
             ]));
         }
     }
+
+    // Saṅgha teams the selected agent belongs to + its task standing.
+    // Read-only view of the shared task lists (`.bwoc/teams/`); shown
+    // only when the agent is on at least one team.
+    let teams = crate::livecheck::agent_team_summaries(root, &entry.id);
+    for ts in &teams {
+        let color = if ts.available > 0 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        lines.push(Line::from(vec![
+            Span::styled("team        ", key_style),
+            Span::raw(format!("{}: ", ts.team)),
+            Span::styled(format!("{} mine", ts.claimed_by_me), Style::default().fg(Color::Cyan)),
+            Span::raw(", "),
+            Span::styled(format!("{} avail", ts.available), Style::default().fg(color)),
+            Span::raw(format!(" / {} total", ts.total)),
+        ]));
+    }
+
     lines.push(Line::from(""));
 
     // Manifest fields (load on demand; failures shown gracefully).

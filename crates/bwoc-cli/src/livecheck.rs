@@ -196,6 +196,76 @@ pub fn count_subdirs(dir: &Path) -> usize {
         .count()
 }
 
+/// Saṅgha task summary for one team, from a given agent's perspective.
+pub struct AgentTeamSummary {
+    pub team: String,
+    /// In-progress tasks this agent has claimed.
+    pub claimed_by_me: usize,
+    /// Pending tasks whose dependencies are all completed (claimable now).
+    pub available: usize,
+    pub total: usize,
+}
+
+/// For each team in `<root>/.bwoc/teams/*.toml` that `agent_id` belongs to,
+/// summarize the shared task list from that agent's perspective. Read-only;
+/// silently skips any missing/unreadable/malformed file (returns whatever
+/// it could read). Cheap enough to call on every dashboard draw — teams are
+/// few and task files are small.
+pub fn agent_team_summaries(root: &Path, agent_id: &str) -> Vec<AgentTeamSummary> {
+    use bwoc_core::team::{self, TaskState, Team};
+
+    let dir = root.join(".bwoc/teams");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("toml") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(team) = Team::from_toml(&body) else {
+            continue;
+        };
+        if !team.has_member(agent_id) {
+            continue;
+        }
+        let tasks = std::fs::read_to_string(dir.join(&team.id).join("tasks.jsonl"))
+            .ok()
+            .and_then(|b| team::parse_tasks(&b).ok())
+            .unwrap_or_default();
+        let total = tasks.len();
+        let claimed_by_me = tasks
+            .iter()
+            .filter(|t| {
+                t.state == TaskState::InProgress && t.claimed_by.as_deref() == Some(agent_id)
+            })
+            .count();
+        let available = tasks
+            .iter()
+            .filter(|t| {
+                t.state == TaskState::Pending
+                    && t.deps.iter().all(|d| {
+                        tasks
+                            .iter()
+                            .any(|x| &x.id == d && x.state == TaskState::Completed)
+                    })
+            })
+            .count();
+        out.push(AgentTeamSummary {
+            team: team.id,
+            claimed_by_me,
+            available,
+            total,
+        });
+    }
+    out.sort_by(|a, b| a.team.cmp(&b.team));
+    out
+}
+
 /// Pad `text` with trailing spaces to `width` *visual columns*, not bytes.
 /// `{:<N}` in Rust pads by byte count which misaligns CJK and Thai output;
 /// this helper uses unicode-width to compute the actual display width.
@@ -216,6 +286,44 @@ pub fn pad_visual(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_team_summaries_counts_mine_available_total() {
+        // Temp workspace with one team `squad` (members pi + oracle) and
+        // three tasks: t1 completed, t2 in_progress claimed by pi, t3
+        // pending blocked by... nothing (claimable).
+        let root = std::env::temp_dir().join(format!("bwoc-team-sum-{}", std::process::id()));
+        let teams = root.join(".bwoc/teams");
+        std::fs::create_dir_all(teams.join("squad")).unwrap();
+        std::fs::write(
+            teams.join("squad.toml"),
+            "id = \"squad\"\nmembers = [\"agent-pi\", \"agent-oracle\"]\ncreated_at = \"2026-05-23T00:00:00Z\"\n",
+        )
+        .unwrap();
+        let tasks = "\
+{\"id\":\"t1\",\"title\":\"a\",\"state\":\"completed\",\"created_at\":\"x\",\"claimed_by\":\"agent-pi\",\"completed_at\":\"y\"}
+{\"id\":\"t2\",\"title\":\"b\",\"state\":\"in_progress\",\"created_at\":\"x\",\"claimed_by\":\"agent-pi\"}
+{\"id\":\"t3\",\"title\":\"c\",\"state\":\"pending\",\"created_at\":\"x\"}
+";
+        std::fs::write(teams.join("squad/tasks.jsonl"), tasks).unwrap();
+
+        let pi = agent_team_summaries(&root, "agent-pi");
+        assert_eq!(pi.len(), 1);
+        assert_eq!(pi[0].team, "squad");
+        assert_eq!(pi[0].claimed_by_me, 1); // t2
+        assert_eq!(pi[0].available, 1); // t3 (pending, no deps)
+        assert_eq!(pi[0].total, 3);
+
+        // oracle is a member but claimed nothing.
+        let oracle = agent_team_summaries(&root, "agent-oracle");
+        assert_eq!(oracle[0].claimed_by_me, 0);
+        assert_eq!(oracle[0].available, 1);
+
+        // non-member sees no teams.
+        assert!(agent_team_summaries(&root, "agent-ghost").is_empty());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn format_uptime_under_a_minute() {

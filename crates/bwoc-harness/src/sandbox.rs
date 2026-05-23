@@ -87,35 +87,50 @@ pub fn confine_path(raw: &str, worktree_root: &Path) -> Result<PathBuf, HarnessE
         worktree_root.join(raw)
     };
 
-    // Attempt to resolve symlinks (path must exist for this to succeed).
-    let resolved = if p.exists() {
-        std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone())
+    // Canonicalize the worktree root so the comparison is consistent across
+    // platforms (e.g. macOS /tmp -> /private/tmp) and resilient to symlinks.
+    let root =
+        std::fs::canonicalize(worktree_root).unwrap_or_else(|_| normalize_path_lex(worktree_root));
+
+    // Resolve `p` by canonicalizing its deepest *existing* ancestor — which
+    // resolves any symlinks in the real part of the path — then re-appending
+    // the not-yet-existent tail lexically. An existing symlink that points
+    // outside the root is therefore rejected on every platform. (The previous
+    // parent-fallback wrongly allowed it whenever the symlink's parent was the
+    // root itself, which is the common case — a real symlink-escape hole that
+    // only macOS happened to catch via its /private canonicalization quirk.)
+    let resolved = normalize_path_lex(&resolve_existing_prefix(&p));
+
+    if resolved.starts_with(&root) {
+        Ok(resolved)
     } else {
-        normalize_path_lex(&p)
-    };
-
-    // For non-existing paths also check the parent.
-    if !resolved.starts_with(worktree_root) {
-        // Try the parent as a fallback check.
-        let parent_resolved = if let Some(parent) = p.parent() {
-            if parent.exists() {
-                std::fs::canonicalize(parent).unwrap_or_else(|_| normalize_path_lex(parent))
-            } else {
-                normalize_path_lex(parent)
-            }
-        } else {
-            return Err(HarnessError::PathEscape(raw.to_string()));
-        };
-
-        if !parent_resolved.starts_with(worktree_root) {
-            return Err(HarnessError::PathEscape(raw.to_string()));
-        }
-
-        // Parent is inside; use lexically-normalised full path.
-        return Ok(normalize_path_lex(&p));
+        Err(HarnessError::PathEscape(raw.to_string()))
     }
+}
 
-    Ok(resolved)
+/// Canonicalize the deepest existing ancestor of `p` (resolving symlinks in the
+/// real portion of the path) and re-append the non-existent tail components
+/// lexically. Lets a not-yet-created path be confined by its real parent while
+/// still resolving symlink escapes in the part that already exists.
+fn resolve_existing_prefix(p: &Path) -> PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        if cur.exists() {
+            let mut out = std::fs::canonicalize(&cur).unwrap_or_else(|_| normalize_path_lex(&cur));
+            for comp in tail.iter().rev() {
+                out.push(comp);
+            }
+            return out;
+        }
+        match (cur.file_name().map(|n| n.to_os_string()), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.push(name);
+                cur = parent.to_path_buf();
+            }
+            _ => return normalize_path_lex(p),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

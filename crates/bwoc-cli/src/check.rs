@@ -207,9 +207,339 @@ pub fn audit(target: &Path) -> AuditReport {
         }
     }
 
+    // 11. Trust evidence — Kalyāṇamitta 7. Each `true` declaration in
+    //     config.manifest.json's `trust.declared` block must have the
+    //     evidence documented in `interconnect/trust.md`. A claim without
+    //     evidence is a violation. Skipped silently if no trust block.
+    check_trust_evidence(target, &mut report);
+
     report
 }
 
+/// Verify the Kalyāṇamitta 7 evidence rules from
+/// `modules/agent-template/interconnect/trust.md`. For each quality
+/// the agent's manifest declares `true`, this checks the corresponding
+/// structural evidence. `false` declarations are always valid (no
+/// evidence needed). A missing `trust` block skips the check entirely.
+fn check_trust_evidence(target: &Path, report: &mut AuditReport) {
+    use bwoc_core::manifest::Manifest;
+    let manifest_path = target.join("config.manifest.json");
+    let Ok(m) = Manifest::load_from_path(&manifest_path) else {
+        return; // no manifest or unparseable — handled by earlier check
+    };
+    let Some(trust) = m.trust.as_ref() else {
+        return; // no trust block — nothing to verify
+    };
+    let d = &trust.declared;
+
+    if d.piyo {
+        check_piyo(target, report);
+    }
+    if d.garu {
+        check_garu(target, report);
+    }
+    if d.bhavaniyo {
+        check_bhavaniyo(target, report);
+    }
+    if d.vatta {
+        check_vatta(target, report);
+    }
+    if d.vacanakkhamo {
+        check_vacanakkhamo(target, report);
+    }
+    if d.gambhira {
+        check_gambhira(target, report);
+    }
+    if d.no_catthana {
+        check_no_catthana(target, report);
+    }
+}
+
+/// Extract a section body from a Markdown doc. Looks for `## <heading>`
+/// (case-insensitive), returns the lines between it and the next
+/// same-level heading. Returns None if heading isn't found.
+fn extract_section(content: &str, heading: &str) -> Option<String> {
+    let lower_heading = heading.to_lowercase();
+    let mut collecting = false;
+    let mut body = String::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("## ") {
+            if collecting {
+                // Reached the next ## — stop.
+                break;
+            }
+            if rest.trim().to_lowercase() == lower_heading {
+                collecting = true;
+                continue;
+            }
+        } else if collecting {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if collecting { Some(body) } else { None }
+}
+
+/// Section body is "filled in" if it contains at least one non-empty,
+/// non-placeholder line. A line with only `{{placeholder}}` doesn't
+/// count — that's an un-resolved scaffold, not content.
+fn section_is_filled(body: &str) -> bool {
+    body.lines().any(|l| {
+        let t = l.trim();
+        // Skip empty, blockquote, raw placeholder, and template labels —
+        // anything else counts as filled content.
+        !(t.is_empty()
+            || t.starts_with('>')
+            || (t.starts_with("{{") && t.ends_with("}}"))
+            || t.starts_with("**Does:**")
+            || t.starts_with("**Does not:**"))
+    })
+}
+
+/// Piyo — persona/README.md "Scope" section filled with concrete content.
+fn check_piyo(target: &Path, report: &mut AuditReport) {
+    let p = target.join("persona/README.md");
+    let Ok(content) = fs::read_to_string(&p) else {
+        report.violations.push(
+            "trust.piyo=true but persona/README.md is missing — scope cannot be declared".into(),
+        );
+        return;
+    };
+    match extract_section(&content, "Scope") {
+        Some(body) if section_is_filled(&body) => report
+            .passes
+            .push("trust.piyo: Scope section filled".into()),
+        Some(_) => report.violations.push(
+            "trust.piyo=true but persona/README.md Scope section is empty / unresolved placeholder"
+                .into(),
+        ),
+        None => report
+            .violations
+            .push("trust.piyo=true but persona/README.md has no Scope section".into()),
+    }
+}
+
+/// Garu — at least one user-authored .md (not README.md) under
+/// skills/ OR mindsets/. Respectability needs a demonstrated surface.
+fn check_garu(target: &Path, report: &mut AuditReport) {
+    let mut count = 0;
+    for sub in &["skills", "mindsets"] {
+        let dir = target.join(sub);
+        if let Ok(read) = fs::read_dir(&dir) {
+            for entry in read.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".md") && name != "README.md" {
+                    count += 1;
+                }
+            }
+        }
+    }
+    if count > 0 {
+        report
+            .passes
+            .push(format!("trust.garu: {count} skill/mindset stub(s) present"));
+    } else {
+        report
+            .violations
+            .push("trust.garu=true but no .md files under skills/ or mindsets/ (only README.md doesn't count)".into());
+    }
+}
+
+/// Bhāvanīyo — mindsets/ has a file whose name or content references
+/// improvement / verification / yoniso / mattaññutā.
+fn check_bhavaniyo(target: &Path, report: &mut AuditReport) {
+    let dir = target.join("mindsets");
+    let Ok(read) = fs::read_dir(&dir) else {
+        report
+            .violations
+            .push("trust.bhavaniyo=true but mindsets/ directory is missing".into());
+        return;
+    };
+    const KEYWORDS: &[&str] = &[
+        "improve",
+        "improvement",
+        "verify",
+        "verification",
+        "yoniso",
+        "manasikara",
+        "manasikāra",
+        "mattaññutā",
+        "mattanutata",
+        "right amount",
+    ];
+    let mut hit = false;
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if !name.ends_with(".md") || name == "readme.md" {
+            continue;
+        }
+        // name match
+        if KEYWORDS.iter().any(|k| name.contains(k)) {
+            hit = true;
+            break;
+        }
+        // content match
+        if let Ok(c) = fs::read_to_string(entry.path()) {
+            let lc = c.to_lowercase();
+            if KEYWORDS.iter().any(|k| lc.contains(k)) {
+                hit = true;
+                break;
+            }
+        }
+    }
+    if hit {
+        report.passes.push(
+            "trust.bhavaniyo: mindsets/ references improvement/verify/yoniso/mattaññutā".into(),
+        );
+    } else {
+        report.violations.push(
+            "trust.bhavaniyo=true but no mindset references improvement/verify/yoniso/mattaññutā keywords".into(),
+        );
+    }
+}
+
+/// Vattā — persona/README.md "Anti-scope" / "Out-of-scope" section filled.
+/// "Speaks beneficial truth" needs an honest declaration of what the
+/// agent DOES NOT do.
+fn check_vatta(target: &Path, report: &mut AuditReport) {
+    let p = target.join("persona/README.md");
+    let Ok(content) = fs::read_to_string(&p) else {
+        report
+            .violations
+            .push("trust.vatta=true but persona/README.md is missing".into());
+        return;
+    };
+    // Accept either "Anti-scope" or "Out-of-scope" heading.
+    let body = extract_section(&content, "Anti-scope")
+        .or_else(|| extract_section(&content, "Out-of-scope"))
+        .or_else(|| extract_section(&content, "Scope")); // fallback: Scope section may include "Does not:" line
+    match body {
+        Some(b) if section_is_filled(&b) || b.to_lowercase().contains("does not:") => report
+            .passes
+            .push("trust.vatta: anti-scope declared".into()),
+        Some(_) => report
+            .violations
+            .push("trust.vatta=true but anti-scope section is empty".into()),
+        None => report
+            .violations
+            .push("trust.vatta=true but no Anti-scope / Out-of-scope section found".into()),
+    }
+}
+
+/// Vacanakkhamo — agent has exercised inbox listening, OR has a
+/// `interconnect/feedback.md` documenting how it handles feedback.
+fn check_vacanakkhamo(target: &Path, report: &mut AuditReport) {
+    let inbox = target.join(".bwoc/inbox.jsonl");
+    let inbox_used = fs::metadata(&inbox).map(|m| m.len() > 0).unwrap_or(false);
+    let feedback_doc = target.join("interconnect/feedback.md").is_file();
+    if inbox_used || feedback_doc {
+        report
+            .passes
+            .push("trust.vacanakkhamo: inbox used OR interconnect/feedback.md present".into());
+    } else {
+        report.violations.push(
+            "trust.vacanakkhamo=true but inbox.jsonl is empty AND interconnect/feedback.md is missing".into(),
+        );
+    }
+}
+
+/// Gambhīra — at least one doc under the agent root is ≥50 lines AND
+/// contains a `[[PHILOSOPHY.en.md]]` or `[[PHILOSOPHY.th.md]]` wikilink.
+/// Pi's review: backlink-to-canon is harder to fake than keyword sniff.
+fn check_gambhira(target: &Path, report: &mut AuditReport) {
+    let mut found = None;
+    visit_md_files(target, 0, &mut |path, content| {
+        let line_count = content.lines().count();
+        if line_count >= 50
+            && (content.contains("[[PHILOSOPHY.en.md]]")
+                || content.contains("[[PHILOSOPHY.th.md]]"))
+        {
+            found = Some(path.display().to_string());
+        }
+    });
+    match found {
+        Some(p) => report
+            .passes
+            .push(format!("trust.gambhira: depth doc anchored to PHILOSOPHY at {p}")),
+        None => report.violations.push(
+            "trust.gambhira=true but no doc has ≥50 lines AND a [[PHILOSOPHY.en.md]] wikilink — backlink to canon is required (anti-padding rule from Pi review)".into(),
+        ),
+    }
+}
+
+/// No-caṭṭhāne — persona Anti-scope section exists AND contains at
+/// least one explicit "will refuse" entry (or similar refusal verb).
+fn check_no_catthana(target: &Path, report: &mut AuditReport) {
+    let p = target.join("persona/README.md");
+    let Ok(content) = fs::read_to_string(&p) else {
+        report
+            .violations
+            .push("trust.noCatthana=true but persona/README.md is missing".into());
+        return;
+    };
+    let body = extract_section(&content, "Anti-scope")
+        .or_else(|| extract_section(&content, "Out-of-scope"))
+        .or_else(|| extract_section(&content, "Scope"));
+    let Some(body) = body else {
+        report.violations.push(
+            "trust.noCatthana=true but no Anti-scope / Out-of-scope section in persona/README.md"
+                .into(),
+        );
+        return;
+    };
+    let lc = body.to_lowercase();
+    const REFUSAL_VERBS: &[&str] = &[
+        "will refuse",
+        "refuses",
+        "will not",
+        "does not",
+        "never ",
+        "must not",
+        "refuse to",
+        "decline",
+    ];
+    if REFUSAL_VERBS.iter().any(|v| lc.contains(v)) {
+        report
+            .passes
+            .push("trust.noCatthana: anti-scope contains explicit refusal entry".into());
+    } else {
+        report.violations.push(
+            "trust.noCatthana=true but anti-scope has no explicit refusal verb (will refuse / does not / never / must not / ...)".into(),
+        );
+    }
+}
+
+/// Walk all .md files under `target` (skipping `node_modules`, `target/`,
+/// `.git/`, `.bwoc/`) up to a small depth, calling `visit` per file. Used
+/// by `check_gambhira` to find the backlinked-to-canon evidence doc.
+fn visit_md_files<F: FnMut(&Path, &str)>(target: &Path, depth: usize, visit: &mut F) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(read) = fs::read_dir(target) else {
+        return;
+    };
+    for entry in read.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if path.is_dir() {
+            if matches!(name.as_str(), ".git" | ".bwoc" | "node_modules" | "target") {
+                continue;
+            }
+            visit_md_files(&path, depth + 1, visit);
+        } else if name.ends_with(".md") {
+            if let Ok(c) = fs::read_to_string(&path) {
+                visit(&path, &c);
+            }
+        }
+    }
+}
+
+/// Verify the backend entry file (`GEMINI.md`, `CODEX.md`, `KIMI.md`) is
+/// a symlink pointing at `AGENTS.md`. Missing files are warnings, not
+/// violations — an agent may not declare every backend. Symlinks
+/// pointing elsewhere are violations.
 fn check_symlink_to_agents(path: &Path, backend: &str, report: &mut AuditReport) {
     if path.is_symlink() {
         match fs::read_link(path) {

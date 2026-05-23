@@ -21,7 +21,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bwoc_core::workspace::AgentsRegistry;
+use bwoc_core::routing::Routes;
+use bwoc_core::workspace::{AgentEntry, AgentsRegistry};
 
 pub struct SendArgs {
     pub to: String,
@@ -61,6 +62,8 @@ pub enum SendError {
     Io(#[from] std::io::Error),
     #[error("workspace error: {0}")]
     Workspace(#[from] bwoc_core::workspace::WorkspaceError),
+    #[error("routing error: {0}")]
+    Routing(#[from] bwoc_core::routing::RoutingError),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
 }
@@ -89,19 +92,53 @@ fn send(args: SendArgs) -> Result<(), SendError> {
     let registry = AgentsRegistry::load(&workspace)?;
 
     let lookup_id = canonicalize(&args.to);
-    let entry = registry
-        .agents
-        .iter()
-        .find(|a| a.id == lookup_id)
-        .ok_or_else(|| SendError::NotFound {
-            name: args.to.clone(),
-            workspace: workspace.clone(),
-        })?;
+
+    // Step 1 — local registry (fast path, unchanged).
+    // Step 2 — on a local miss, consult routes.toml (peer routing).
+    // The result is a (resolved_workspace, entry) pair; everything below
+    // is identical for both local and peer hits. Only the recipient gains
+    // a peer workspace path — the sender stays anchored to the local registry.
+    let (resolved_workspace, entry): (PathBuf, AgentEntry) = {
+        // Try local registry first.
+        if let Some(local_entry) = registry.agents.iter().find(|a| a.id == lookup_id) {
+            (workspace.clone(), local_entry.clone())
+        } else {
+            // Local miss → consult routes.toml.
+            let routes = Routes::load(&workspace)?;
+            match routes.resolve(&lookup_id) {
+                Some(peer_ws) => {
+                    // Found a peer workspace via routes.toml. Load the peer
+                    // registry and locate the recipient there.
+                    let peer_ws = peer_ws.to_path_buf();
+                    let peer_registry = AgentsRegistry::load(&peer_ws)?;
+                    match peer_registry.agents.into_iter().find(|a| a.id == lookup_id) {
+                        Some(peer_entry) => (peer_ws, peer_entry),
+                        // routes.toml points at a peer that doesn't list this
+                        // agent. Treat as NotFound — the routing table is stale.
+                        None => {
+                            return Err(SendError::NotFound {
+                                name: args.to.clone(),
+                                workspace: workspace.clone(),
+                            });
+                        }
+                    }
+                }
+                // Step 3 — no match in routes.toml either. Existing behaviour.
+                None => {
+                    return Err(SendError::NotFound {
+                        name: args.to.clone(),
+                        workspace: workspace.clone(),
+                    });
+                }
+            }
+        }
+    };
 
     // Resolve sender identity. None → "user" (default, legacy behavior).
-    // Some(name) → must match an agent in the same workspace registry.
-    // Trust verification happens at the recipient daemon (trust step 4)
-    // by reading the sender's manifest — we only enforce existence here.
+    // Some(name) → must match an agent in the LOCAL registry.
+    // The sender lives in the sending workspace; only the recipient gains
+    // the peer path. The bare `from` id crossing the boundary is the
+    // intentional Trust-v2 seam — do NOT widen the envelope schema.
     let from = match args.from.as_deref() {
         None => "user".to_string(),
         Some(name) => {
@@ -118,7 +155,9 @@ fn send(args: SendArgs) -> Result<(), SendError> {
         }
     };
 
-    let agent_path = workspace.join(&entry.path);
+    // Deliver to the resolved workspace (local or peer). For local hits
+    // resolved_workspace == workspace; for peer hits it is the peer root.
+    let agent_path = resolved_workspace.join(&entry.path);
     let bwoc_dir = agent_path.join(".bwoc");
     std::fs::create_dir_all(&bwoc_dir)?;
     let inbox_path = bwoc_dir.join("inbox.jsonl");
@@ -535,5 +574,346 @@ mod tests {
         let tail = id.rsplit('-').next().unwrap();
         assert_eq!(tail.len(), 5);
         assert!(tail.chars().all(|c| c.is_ascii_hexdigit()), "hex: {id}");
+    }
+
+    // ---- inter-workspace routing (routing.md §Resolution Order) -------------
+
+    /// Build a minimal peer workspace with one agent and write routes.toml in
+    /// the local workspace pointing to it. Returns (local_root, peer_root).
+    fn setup_peer_workspace(
+        local_label: &str,
+        peer_label: &str,
+        peer_agent_id: &str,
+        route_toml: &str,
+    ) -> (PathBuf, PathBuf) {
+        let local =
+            std::env::temp_dir().join(format!("bwoc-send-{local_label}-{}", std::process::id()));
+        let peer =
+            std::env::temp_dir().join(format!("bwoc-send-{peer_label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&peer);
+
+        // Local workspace — has agent-alpha but NOT the peer agent.
+        fs::create_dir_all(local.join(".bwoc/interconnect")).unwrap();
+        fs::create_dir_all(local.join("agents/agent-alpha")).unwrap();
+        Workspace {
+            workspace: WorkspaceMeta {
+                name: local_label.into(),
+                version: "0.1.0".into(),
+                created: "2026-05-22T00:00:00Z".into(),
+            },
+            defaults: WorkspaceDefaults::default(),
+        }
+        .save(&local)
+        .unwrap();
+        let mut local_reg = AgentsRegistry::default();
+        local_reg.agents.push(AgentEntry {
+            id: "agent-alpha".into(),
+            path: "agents/agent-alpha".into(),
+            backend: "claude".into(),
+            incarnated: "2026-05-22T00:00:00Z".into(),
+            status: "active".into(),
+        });
+        local_reg.save(&local).unwrap();
+
+        // Peer workspace — has the target agent.
+        let peer_agent_path = format!("agents/{peer_agent_id}");
+        fs::create_dir_all(peer.join(".bwoc")).unwrap();
+        fs::create_dir_all(peer.join(&peer_agent_path)).unwrap();
+        Workspace {
+            workspace: WorkspaceMeta {
+                name: peer_label.into(),
+                version: "0.1.0".into(),
+                created: "2026-05-22T00:00:00Z".into(),
+            },
+            defaults: WorkspaceDefaults::default(),
+        }
+        .save(&peer)
+        .unwrap();
+        let mut peer_reg = AgentsRegistry::default();
+        peer_reg.agents.push(AgentEntry {
+            id: peer_agent_id.into(),
+            path: peer_agent_path,
+            backend: "claude".into(),
+            incarnated: "2026-05-22T00:00:00Z".into(),
+            status: "active".into(),
+        });
+        peer_reg.save(&peer).unwrap();
+
+        // Write the caller-supplied routes.toml into the local workspace.
+        fs::write(local.join(".bwoc/interconnect/routes.toml"), route_toml).unwrap();
+
+        (local, peer)
+    }
+
+    // Spec case 1: local hit — delivery path is unchanged; peer workspace
+    // is never consulted even when routes.toml exists.
+    #[test]
+    fn routing_local_hit_unchanged() {
+        let peer =
+            std::env::temp_dir().join(format!("bwoc-send-local-hit-peer-{}", std::process::id()));
+        let local_label = "local-hit-local";
+        let (local, _peer) = setup_peer_workspace(
+            local_label,
+            "local-hit-peer",
+            "agent-remote",
+            &format!(
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                peer.display()
+            ),
+        );
+
+        // Send to agent-alpha (local agent) — must deliver locally even though
+        // routes.toml exists and would otherwise resolve agent-remote.
+        send(SendArgs {
+            to: "alpha".into(),
+            message: "local delivery".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap();
+
+        let inbox = local.join("agents/agent-alpha/.bwoc/inbox.jsonl");
+        let line = fs::read_to_string(&inbox).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["to"], "agent-alpha");
+        assert_eq!(v["message"], "local delivery");
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&_peer);
+    }
+
+    // Spec case 2: exact-agent peer route — envelope lands in peer inbox.
+    #[test]
+    fn routing_exact_agent_peer_route() {
+        let (local, peer) = setup_peer_workspace(
+            "exact-local",
+            "exact-peer",
+            "agent-remote",
+            &format!(
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                // Need real path — will substitute below after peer is created.
+                // Use a placeholder; we'll overwrite routes.toml after setup.
+                "/tmp/placeholder"
+            ),
+        );
+        // Overwrite routes.toml with the real peer path.
+        fs::write(
+            local.join(".bwoc/interconnect/routes.toml"),
+            format!(
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                peer.display()
+            ),
+        )
+        .unwrap();
+
+        send(SendArgs {
+            to: "remote".into(),
+            message: "cross-ws ping".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap();
+
+        let inbox = peer.join("agents/agent-remote/.bwoc/inbox.jsonl");
+        let line = fs::read_to_string(&inbox).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["to"], "agent-remote");
+        assert_eq!(v["message"], "cross-ws ping");
+        assert_eq!(v["from"], "user");
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&peer);
+    }
+
+    // Spec case 3: namespace prefix route.
+    #[test]
+    fn routing_namespace_prefix_route() {
+        let (local, peer) = setup_peer_workspace(
+            "ns-local",
+            "ns-peer",
+            "agent-team-b-worker",
+            "/tmp/placeholder", // overwritten below
+        );
+        fs::write(
+            local.join(".bwoc/interconnect/routes.toml"),
+            format!(
+                "[[route]]\nnamespace = \"agent-team-b\"\nworkspace = \"{}\"\n",
+                peer.display()
+            ),
+        )
+        .unwrap();
+
+        send(SendArgs {
+            to: "agent-team-b-worker".into(),
+            message: "namespace routed".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap();
+
+        let inbox = peer.join("agents/agent-team-b-worker/.bwoc/inbox.jsonl");
+        let line = fs::read_to_string(&inbox).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["to"], "agent-team-b-worker");
+        assert_eq!(v["message"], "namespace routed");
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&peer);
+    }
+
+    // Spec case 4a: both-keys route → validation error at load time.
+    #[test]
+    fn routing_both_keys_validation_error() {
+        let local =
+            std::env::temp_dir().join(format!("bwoc-send-both-keys-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&local);
+        fs::create_dir_all(local.join(".bwoc/interconnect")).unwrap();
+        Workspace {
+            workspace: WorkspaceMeta {
+                name: "both-keys".into(),
+                version: "0.1.0".into(),
+                created: "2026-05-22T00:00:00Z".into(),
+            },
+            defaults: WorkspaceDefaults::default(),
+        }
+        .save(&local)
+        .unwrap();
+        // Local registry is empty — forces the routing code path.
+        AgentsRegistry::default().save(&local).unwrap();
+        fs::write(
+            local.join(".bwoc/interconnect/routes.toml"),
+            "[[route]]\nagent = \"agent-x\"\nnamespace = \"team-x\"\nworkspace = \"/srv/ws\"\n",
+        )
+        .unwrap();
+
+        let err = send(SendArgs {
+            to: "agent-x".into(),
+            message: "x".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, SendError::Routing(_)),
+            "expected Routing validation error, got {err:?}"
+        );
+        let _ = fs::remove_dir_all(&local);
+    }
+
+    // Spec case 4b: neither-key route → validation error.
+    #[test]
+    fn routing_neither_key_validation_error() {
+        let local =
+            std::env::temp_dir().join(format!("bwoc-send-neither-key-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&local);
+        fs::create_dir_all(local.join(".bwoc/interconnect")).unwrap();
+        Workspace {
+            workspace: WorkspaceMeta {
+                name: "neither-key".into(),
+                version: "0.1.0".into(),
+                created: "2026-05-22T00:00:00Z".into(),
+            },
+            defaults: WorkspaceDefaults::default(),
+        }
+        .save(&local)
+        .unwrap();
+        AgentsRegistry::default().save(&local).unwrap();
+        fs::write(
+            local.join(".bwoc/interconnect/routes.toml"),
+            "[[route]]\nworkspace = \"/srv/ws\"\n",
+        )
+        .unwrap();
+
+        let err = send(SendArgs {
+            to: "agent-y".into(),
+            message: "y".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, SendError::Routing(_)),
+            "expected Routing validation error, got {err:?}"
+        );
+        let _ = fs::remove_dir_all(&local);
+    }
+
+    // Spec case 5: no match in local registry or routes → NotFound unchanged.
+    #[test]
+    fn routing_no_match_returns_not_found() {
+        let root = setup("route-not-found");
+        // No routes.toml → empty routes, agent-zzz not in local registry.
+        let err = send(SendArgs {
+            to: "zzz".into(),
+            message: "hello".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(root.clone()),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, SendError::NotFound { .. }),
+            "expected NotFound, got {err:?}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // Spec case 6: trust-gated peer send — sender resolves as unknown_sender
+    // at the recipient side (bare id from different workspace is not in the
+    // recipient's registry). The send itself succeeds (routing delivers the
+    // envelope); trust gating is applied by the recipient daemon, not here.
+    // This test verifies the safe-default seam: the envelope's `from` is the
+    // raw local sender id (bare, no ws qualification). Trust v2 will sign it.
+    #[test]
+    fn routing_trust_gated_peer_send_delivers_bare_from_id() {
+        let (local, peer) = setup_peer_workspace(
+            "trust-local",
+            "trust-peer",
+            "agent-remote",
+            "/tmp/placeholder",
+        );
+        fs::write(
+            local.join(".bwoc/interconnect/routes.toml"),
+            format!(
+                "[[route]]\nagent = \"agent-remote\"\nworkspace = \"{}\"\n",
+                peer.display()
+            ),
+        )
+        .unwrap();
+
+        // Also register agent-alpha as a local sender in the local workspace
+        // (already done by setup_peer_workspace via agent-alpha entry).
+        send(SendArgs {
+            to: "remote".into(),
+            message: "gated ping".into(),
+            from: Some("alpha".into()), // local sender
+            reply_to: None,
+            no_wakeup: true,
+            workspace: Some(local.clone()),
+        })
+        .unwrap();
+
+        // Verify the envelope arrives in the peer inbox.
+        let inbox = peer.join("agents/agent-remote/.bwoc/inbox.jsonl");
+        let line = fs::read_to_string(&inbox).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["to"], "agent-remote");
+        // `from` is the bare local id — not workspace-qualified.
+        // The recipient daemon sees this as an unknown_sender (not in its
+        // registry) and refuses under BWOC_TRUST_GATING=1. This is the
+        // intentional v1 seam; Trust v2 will add workspace-qualified signing.
+        assert_eq!(v["from"], "agent-alpha");
+        assert_eq!(v["message"], "gated ping");
+        let _ = fs::remove_dir_all(&local);
+        let _ = fs::remove_dir_all(&peer);
     }
 }

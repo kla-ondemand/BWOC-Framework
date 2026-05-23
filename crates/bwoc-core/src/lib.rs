@@ -7,6 +7,7 @@ pub mod error;
 pub mod identity;
 pub mod lifecycle;
 pub mod manifest;
+pub mod routing;
 pub mod team;
 pub mod time;
 pub mod workspace;

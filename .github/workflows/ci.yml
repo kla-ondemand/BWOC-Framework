@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Forward-compat for the Node 24 cutover (2026-06-02). `actions/checkout@v4`
+# and other JS actions default to Node 20 which becomes unsupported on
+# 2026-09-16. Opting in early eliminates the deprecation banner now and
+# avoids a forced flip during the cutover window.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # Quality gates — fmt + clippy. Run once on Linux because the rules
   # are platform-independent and there's no value in repeating them

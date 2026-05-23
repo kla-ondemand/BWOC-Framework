@@ -27,6 +27,13 @@ on:
 permissions:
   contents: write  # required to create / upload to GitHub Release
 
+# Forward-compat for the Node 24 cutover (2026-06-02). `actions/checkout@v4`
+# and `softprops/action-gh-release@v2` both default to Node 20 which becomes
+# unsupported on 2026-09-16. Opting in early eliminates the deprecation banner
+# and avoids a forced flip during the cutover window.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   # Create the release shell once before any matrix builds — eliminates
   # the race condition where parallel matrix jobs would each call

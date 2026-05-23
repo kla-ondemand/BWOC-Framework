@@ -27,6 +27,11 @@ pub struct TaskWatch {
     /// (team_id, task_id) of claimable tasks already announced, so a task
     /// is announced once (not re-announced every poll while it stays open).
     seen: HashSet<(String, String)>,
+    /// Opt-in (`BWOC_TASK_WAKEUP=1`): on a newly-claimable task, ping the
+    /// agent's tmux session so a live Claude session notices and can claim
+    /// it — the same best-effort wakeup the inbox uses. Default off:
+    /// announce-only.
+    wakeup: bool,
 }
 
 impl TaskWatch {
@@ -40,6 +45,7 @@ impl TaskWatch {
             teams_dir,
             agent_id: agent_id.to_string(),
             seen: HashSet::new(),
+            wakeup: std::env::var_os("BWOC_TASK_WAKEUP").is_some(),
         };
         // Pre-seed `seen` with what's already open so the first poll only
         // surfaces tasks that appear *after* the daemon started.
@@ -53,6 +59,12 @@ impl TaskWatch {
     /// skip the poll entirely.
     pub fn is_inert(&self) -> bool {
         self.teams_dir.is_none()
+    }
+
+    /// Whether the opt-in tmux wakeup is enabled (`BWOC_TASK_WAKEUP=1`).
+    /// Surfaced so the daemon can log its posture at startup.
+    pub fn wakeup_enabled(&self) -> bool {
+        self.wakeup
     }
 
     /// Announce any claimable task not seen before; record it. Also drops
@@ -73,6 +85,9 @@ impl TaskWatch {
             if self.seen.insert(key) {
                 // newly inserted ⇒ not seen before ⇒ announce.
                 eprintln!("bwoc-agent: task available ← {team}/{task}: {title}");
+                if self.wakeup {
+                    wake_session(&self.agent_id, team, task, title);
+                }
             }
         }
         // Forget tasks that left the claimable set (claimed by someone, or
@@ -125,6 +140,40 @@ impl TaskWatch {
         }
         out
     }
+}
+
+/// Best-effort tmux wakeup mirroring the inbox's `notify_tmux` (send.rs):
+/// recipient `agent-<x>` → tmux session `<x>`. Sends a `[bwoc task …]`
+/// marker so a live Claude session running this agent notices the
+/// available work and can `bwoc task claim` it. Two-step send (text →
+/// 200ms → Enter) for the Claude TUI input quirk. Silent no-op when the
+/// agent isn't `agent-*`, `tmux` is missing, or no session matches.
+fn wake_session(agent_id: &str, team: &str, task: &str, title: &str) {
+    let Some(session) = agent_id.strip_prefix("agent-") else {
+        return;
+    };
+    let has_session = std::process::Command::new("tmux")
+        .args(["has-session", "-t", session])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !has_session {
+        return;
+    }
+    let notify = format!("[bwoc task {team}/{task}] {title}");
+    let _ = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", session, "--", &notify])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let _ = std::process::Command::new("tmux")
+        .args(["send-keys", "-t", session, "Enter"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 #[cfg(test)]

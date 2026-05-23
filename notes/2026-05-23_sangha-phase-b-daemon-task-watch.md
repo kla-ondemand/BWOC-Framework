@@ -46,10 +46,19 @@ Makes teams *live*: a running `bwoc-agent --serve` watches the shared task lists
 - **bwoc-agent**: 19 tests (was 15; +4 task_watch). Workspace total **139** (was 135). Clippy clean.
 - **Live end-to-end**: scratch workspace, `agent-pi` on team `squad` with one pre-existing task. Started `bwoc-agent --serve` in the agent dir → log showed `watching Saṅgha tasks for member 'agent-pi'` and did NOT announce the pre-existing task. Added a new task via `bwoc task add` while the daemon ran → within the poll window the log showed `bwoc-agent: task available ← squad/t3: fresh task after daemon start`. Daemon killed + scratch cleaned; no orphans.
 
+## Addendum — opt-in tmux wakeup (same session)
+
+Added the wakeup half right after the announce-only landing, gated opt-in so the default stays announce-only.
+
+- **`BWOC_TASK_WAKEUP=1`** — on a newly-claimable task, `TaskWatch::poll` also calls `wake_session(agent_id, team, task, title)`: `agent-<x>` → tmux session `<x>` → two-step send-keys of `[bwoc task <team>/<id>] <title>` (mirrors `send.rs::notify_tmux`; reimplemented in the agent since cli's is a private fn in a bin crate). A live Claude session running the agent sees the marker and can `bwoc task claim` it.
+- **Agent stays in control — no auto-claim.** The daemon pings but never mutates the task list. This sidesteps the stranding risk (claim a task, then fail to wake → orphaned `in_progress`). Auto-claim (daemon claims itself) is the riskier follow-up, gated separately, deferred.
+- **Startup log** names the posture: `watching Saṅgha tasks for member 'agent-pi' (BWOC_TASK_WAKEUP=1 — will ping tmux session on new tasks)`.
+- **Live-verified**: tmux session `pi` created, daemon started with `BWOC_TASK_WAKEUP=1`, `bwoc task add` → the pane received `[bwoc task squad/t1] wake me up` within the poll window. (Note: zsh aliases `tmux` to the oh-my-zsh plugin wrapper; the test used the real `/opt/homebrew/bin/tmux` binary directly.)
+
 ## Status / deferred (Phase B+ / C)
 
 - **Task hooks** — `task-created` / `task-completed` workspace-level shell hooks (mirrors Claude Agent Teams' TaskCreated/TaskCompleted).
-- **Auto-claim + wakeup** — daemon claims the next available task and wakes the agent via the inbox tmux mechanism. The autonomous-teamwork loop.
+- **Auto-claim** — daemon claims the next available task itself (behind its own opt-in). Higher risk than wakeup (autonomous mutation + stranding); deferred until the wakeup→agent-claims loop is proven.
 - **Plan approval (Pavāraṇā)** — Phase C; envelope-kind extension on messaging.
 
 ## Related

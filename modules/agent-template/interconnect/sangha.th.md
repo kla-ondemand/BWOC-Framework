@@ -108,12 +108,14 @@ bwoc task complete <team> <task> --as <agent>   # เฉพาะผู้ claim
 bwoc-agent: task available ← squad/t3: implement the parser
 ```
 
-"claim ได้" = `pending` ที่ทุก dependency `completed` ในทีมที่เป็นสมาชิก daemon snapshot งานที่เปิดอยู่แล้วตอน startup (ไม่ replay — เหมือน inbox cursor เริ่มที่ EOF) และ poll ที่ cadence 2 วินาที (งานเปลี่ยนไม่บ่อย) **announce-only**: ไม่ auto-claim หรือปลุก agent — เป็น follow-up ที่ตั้งใจหลังพิสูจน์ announce แล้ว inert เมื่อ agent ไม่อยู่ทีมใดหรือไม่มี workspace ดู [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs)
+"claim ได้" = `pending` ที่ทุก dependency `completed` ในทีมที่เป็นสมาชิก daemon snapshot งานที่เปิดอยู่แล้วตอน startup (ไม่ replay — เหมือน inbox cursor เริ่มที่ EOF) และ poll ที่ cadence 2 วินาที (งานเปลี่ยนไม่บ่อย) inert เมื่อ agent ไม่อยู่ทีมใดหรือไม่มี workspace ดู [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs)
+
+**Wakeup แบบ opt-in** (`BWOC_TASK_WAKEUP=1`): เมื่อมี task ที่ claim ได้ใหม่ daemon จะ ping tmux session ของ agent (`agent-<x>` → session `<x>`) ด้วย marker `[bwoc task <team>/<id>] <title>` — กลไก two-step send-keys best-effort เดียวกับ inbox Claude session ที่รัน agent อยู่จะเห็นแล้ว `bwoc task claim` ได้ agent ยังคุมเอง: daemon **ไม่** auto-claim หรือ mutate รายการ จึงไม่เสี่ยง strand งานที่ไม่มีใครทำ default ปิด (announce-only)
 
 ## เลื่อนไป phase ถัดไป
 
 - **Task hooks** — shell hook `task-created` / `task-completed` ระดับ workspace (mirror TaskCreated/TaskCompleted ของ Claude Agent Teams) (Phase B+)
-- **Auto-claim + wakeup** — daemon claim งานถัดไปที่ว่างและปลุก agent ผ่านกลไก tmux ที่ใช้กับ inbox อยู่แล้ว ปิด loop สู่การทำงานเป็นทีมแบบอัตโนมัติ (Phase B+)
+- **Auto-claim** — daemon claim งานถัดไปเอง (หลัง opt-in ของตัวเอง) ไม่ใช่แค่ ping เสี่ยงกว่า (autonomous mutation + strand ถ้า wakeup พลาด) จึง gate แยกและเลื่อนจนกว่า loop wakeup-แล้ว-agent-claim จะพิสูจน์แล้ว (Phase B+)
 - **Plan approval (ปวารณา)** — teammate ส่ง plan, lead approve/reject ก่อน implement map กับส่วนขยาย envelope-kind บน [[messaging]] (Phase C)
 - **Dashboard รู้จักทีม** — task pane ใน `bwoc dashboard` (Phase B+)
 - **Lead agent ที่กำหนด** — field `lead` + การกระทำเฉพาะ lead เฉพาะเมื่อโมเดล human-implicit-lead พิสูจน์ว่าจำกัดเกินไป

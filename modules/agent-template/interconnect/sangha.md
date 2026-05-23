@@ -108,12 +108,14 @@ A running `bwoc-agent --serve` watches the shared task lists of every team its a
 bwoc-agent: task available ← squad/t3: implement the parser
 ```
 
-"Claimable" = `pending` with every dependency `completed`, in a member team. The daemon snapshots what's already open at startup (no replay — like the inbox cursor starting at EOF) and polls on a 2-second cadence (tasks change rarely). **Announce-only**: it does NOT auto-claim or wake the agent — that's a deliberate follow-up once announce is proven. Inert when the agent is on no team or no workspace resolves. See [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs).
+"Claimable" = `pending` with every dependency `completed`, in a member team. The daemon snapshots what's already open at startup (no replay — like the inbox cursor starting at EOF) and polls on a 2-second cadence (tasks change rarely). Inert when the agent is on no team or no workspace resolves. See [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs).
+
+**Opt-in wakeup** (`BWOC_TASK_WAKEUP=1`): on a newly-claimable task the daemon also pings the agent's tmux session (`agent-<x>` → session `<x>`) with a `[bwoc task <team>/<id>] <title>` marker — the same best-effort two-step send-keys the inbox uses. A live Claude session running the agent sees it and can `bwoc task claim`. The agent stays in control: the daemon does **not** auto-claim or mutate the list, so there's no risk of stranding a task no one works. Default off (announce-only).
 
 ## Deferred (later phases)
 
 - **Task hooks** — `task-created` / `task-completed` shell hooks at workspace level (mirrors Claude Agent Teams' TaskCreated/TaskCompleted). (Phase B+.)
-- **Auto-claim + wakeup** — the daemon claims the next available task and wakes the agent via the tmux mechanism already used for inbox. Closes the loop to autonomous teamwork. (Phase B+.)
+- **Auto-claim** — the daemon claims the next available task itself (behind its own opt-in), not just pings. Higher risk (autonomous mutation + stranding if the wakeup misses), so gated separately and deferred until the wakeup-then-agent-claims loop is proven. (Phase B+.)
 - **Plan approval (Pavāraṇā)** — a teammate submits a plan, the lead approves/rejects before implementation. Maps to an envelope-kind extension on [[messaging]]. (Phase C.)
 - **Team-aware dashboard** — a task pane in `bwoc dashboard`. (Phase B+.)
 - **Designated lead agent** — a `lead` field + lead-only operations. Only if the human-implicit-lead model proves limiting.

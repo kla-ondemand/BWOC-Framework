@@ -119,8 +119,18 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 
 **Definition of done:** ecosystem viability proven; cross-vendor production fleet governance is achievable.
 
+### Shipped in Phase 4
+
+| Item | Notes |
+|---|---|
+| Fleet-governance spec | [`docs/en/FLEET-GOVERNANCE.en.md`](FLEET-GOVERNANCE.en.md) (+ `.th.md`) — Aparihāniya-dhamma 7 (DN 16) mapped to workspace-level operator practices: regular meetings, coordinated start/end, process-bound convention change, template-version honoring, vulnerable-agent protection, shared-resource respect, senior-agent protection. Observable signals named; automation deferred to v2 once telemetry justifies promoting signals to gates. |
+
+### Goals (realized by external adoption)
+
+These are realized by maintainers outside the original authors using the framework — the framework cannot reach them alone.
+
 - Three or more reference agents in the wild, built by maintainers outside the original authors (per [`VISION.md`](../../VISION.md) one-year success).
-- Fleet dashboard — Aparihāniya-dhamma 7 governance applied to a real multi-agent installation.
+- Fleet dashboard — Aparihāniya-dhamma 7 governance applied to a real multi-agent installation. **Spec landed 2026-05-23** ([`FLEET-GOVERNANCE.en.md`](FLEET-GOVERNANCE.en.md)); real-fleet validation pending.
 - BWOC vocabulary (Yoniso manasikāra checks, Mattaññutā caps, Sīla baselines, Kalyāṇamitta trust scores) observed in codebases unaffiliated with this project (three-year success).
 - Cross-vendor production fleet pattern in use at more than one organization.
 

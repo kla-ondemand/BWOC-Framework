@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 Phase 3 work in progress beyond the v2026.5.23-1 release. Items shipped here will land in the next CalVer tag.
 
+### Added
+
+**Phase 4 — Fleet governance spec (Aparihāniya-dhamma 7)**
+
+- **`docs/en/FLEET-GOVERNANCE.en.md` + `.th.md`** — new framework-root operator-facing spec. Seven non-decline conditions from DN 16 (Mahāparinibbāna Sutta, §1.4 — the Vajjī teaching) mapped to workspace-level fleet operations: (1) regular meetings → `bwoc list` cadence; (2) coordinated start/end → `bwoc doctor` + `bwoc workspace prune`; (3) process-bound convention change → `schemaVersion` discipline; (4) honor template version → `bwoc check --all` version-lag flag; (5) protect vulnerable → respect recipient refusals, don't relax `requiredTrust`; (6) honor shared resources → `agents.toml` + `workspace.toml` + template are operator-owned; (7) protect senior agents → audit trust-dependency before `bwoc retire`. Each condition lists an observable signal (existing query) and a suggested operator practice. v1 is descriptive (signals, not gates); v2 may promote signals to gates as telemetry justifies. **Phase 4 is structurally an ecosystem-viability phase** (external-adoption goals); this spec closes the one Phase-4 line item the framework itself owns. PHILOSOPHY.en.md / `.th.md` cross-reference updated to point to the new location. ROADMAP §Phase 4 gains a "Shipped" subsection. See [`notes/2026-05-23_phase-4-fleet-governance.md`](notes/2026-05-23_phase-4-fleet-governance.md).
+
 ## [v2026.5.23-1] — 2026-05-23
 
 ### Fixed

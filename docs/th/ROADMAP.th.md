@@ -119,8 +119,18 @@
 
 **นิยามของเสร็จ:** ความเป็นไปได้ของ ecosystem พิสูจน์แล้ว; governance ของ fleet ระดับ production ข้าม vendor ทำได้
 
+### ส่งมอบใน Phase 4 (เสร็จแล้ว)
+
+| รายการ | หมายเหตุ |
+|---|---|
+| Spec ธรรมาภิบาล fleet | [`docs/th/FLEET-GOVERNANCE.th.md`](FLEET-GOVERNANCE.th.md) (+ `.en.md`) — อปริหานิยธรรม 7 (ทีฆนิกาย 16) map ไปยังการปฏิบัติของ operator ระดับ workspace: ประชุมเนืองนิตย์, เริ่ม-เลิกพร้อมกัน, การเปลี่ยน convention ที่มีกระบวนการ, เคารพ template version, คุ้มครอง agent ที่เปราะบาง, เคารพทรัพยากรร่วม, คุ้มครอง agent อาวุโส ตั้งชื่อ observable signal; เลื่อน automation ไป v2 เมื่อ telemetry สนับสนุนการยกระดับ signal เป็น gate |
+
+### เป้าหมาย (บรรลุโดย adoption ภายนอก)
+
+เป้าหมายเหล่านี้บรรลุโดย maintainer นอกผู้เขียนต้นฉบับใช้ framework — framework เองไปถึงไม่ได้คนเดียว
+
 - Agent อ้างอิงสามตัวหรือมากกว่าในธรรมชาติ สร้างโดยผู้ดูแลนอกทีมผู้เขียนต้นฉบับ (ตาม [`VISION.th.md`](../../VISION.th.md) success ที่ 1 ปี)
-- Fleet dashboard — Aparihāniya-dhamma 7 governance ใช้กับการติดตั้ง multi-agent จริง
+- Fleet dashboard — Aparihāniya-dhamma 7 governance ใช้กับการติดตั้ง multi-agent จริง **Spec ลง 2026-05-23** ([`FLEET-GOVERNANCE.th.md`](FLEET-GOVERNANCE.th.md)); การยืนยันกับ fleet จริงรอ
 - ศัพท์ BWOC (Yoniso manasikāra checks, Mattaññutā caps, Sīla baselines, Kalyāṇamitta trust scores) ปรากฏใน codebase ที่ไม่มีความสัมพันธ์กับ project นี้ (success ที่ 3 ปี)
 - รูปแบบ fleet ระดับ production ข้าม vendor ใช้ในองค์กรมากกว่าหนึ่งแห่ง
 

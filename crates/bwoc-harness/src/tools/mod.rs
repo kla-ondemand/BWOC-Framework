@@ -1,0 +1,140 @@
+//! Tool registry and core tool implementations.
+//!
+//! Each tool:
+//!   1. Declares its JSON schema (used to populate the `tools` array in the
+//!      chat completion request).
+//!   2. Implements [`ToolImpl`]: `name()` → `execute(args, ctx)`.
+//!
+//! Path confinement is enforced here (P1 minimal): any path that escapes
+//! the working directory is rejected with [`HarnessError::PathEscape`].
+//! Full sandbox (OS-level, allowlist, env scrub) is P2.
+
+pub mod impls;
+pub mod registry;
+
+pub use impls::{ListDir, ReadFile, RunCommand, WriteFile};
+pub use registry::ToolRegistry;
+
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use serde_json::Value;
+
+use crate::error::HarnessError;
+
+// ---------------------------------------------------------------------------
+// Tool execution context (carries the working directory for path confinement)
+// ---------------------------------------------------------------------------
+
+/// Runtime context passed to every tool invocation.
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    /// The absolute path of the worktree / working directory.
+    /// All file operations are confined to this root.
+    pub workdir: PathBuf,
+}
+
+impl ToolContext {
+    pub fn new(workdir: impl Into<PathBuf>) -> Self {
+        Self {
+            workdir: workdir.into(),
+        }
+    }
+
+    /// Resolve `raw` relative to the workdir and verify it does not escape.
+    ///
+    /// Returns the canonicalized absolute path.  Does NOT require the path to
+    /// exist yet (for write_file on new files) so we use `Path::starts_with`
+    /// on the lexically normalized path rather than `fs::canonicalize`.
+    pub fn resolve_path(&self, raw: &str) -> Result<PathBuf, HarnessError> {
+        let p = if Path::new(raw).is_absolute() {
+            PathBuf::from(raw)
+        } else {
+            self.workdir.join(raw)
+        };
+
+        // Lexical normalisation: collapse `..` and `.` components.
+        let normalized = normalize_path(&p);
+
+        if !normalized.starts_with(&self.workdir) {
+            return Err(HarnessError::PathEscape(raw.to_string()));
+        }
+
+        Ok(normalized)
+    }
+}
+
+/// Lexically normalize a path (collapse `..`/`.`) without hitting the
+/// filesystem (so it works for paths that don't exist yet).
+fn normalize_path(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Tool trait
+// ---------------------------------------------------------------------------
+
+/// A single callable tool.
+#[async_trait]
+pub trait ToolImpl: Send + Sync {
+    /// Machine name used in `function.name`.
+    fn name(&self) -> &'static str;
+
+    /// Human-readable description for the model.
+    fn description(&self) -> &'static str;
+
+    /// JSON Schema for the `parameters` field.
+    fn parameters_schema(&self) -> Value;
+
+    /// Execute the tool with the given parsed arguments.
+    async fn execute(&self, args: Value, ctx: &ToolContext) -> Result<String, HarnessError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn ctx(dir: &Path) -> ToolContext {
+        ToolContext::new(dir.to_path_buf())
+    }
+
+    #[test]
+    fn resolve_path_relative_ok() {
+        let ctx = ctx(Path::new("/workdir/myproject"));
+        let p = ctx.resolve_path("src/main.rs").unwrap();
+        assert_eq!(p, PathBuf::from("/workdir/myproject/src/main.rs"));
+    }
+
+    #[test]
+    fn resolve_path_dotdot_escape_rejected() {
+        let ctx = ctx(Path::new("/workdir/myproject"));
+        let err = ctx.resolve_path("../../etc/passwd").unwrap_err();
+        assert!(matches!(err, HarnessError::PathEscape(_)));
+    }
+
+    #[test]
+    fn resolve_path_absolute_inside_ok() {
+        let ctx = ctx(Path::new("/workdir/myproject"));
+        let p = ctx.resolve_path("/workdir/myproject/README.md").unwrap();
+        assert_eq!(p, PathBuf::from("/workdir/myproject/README.md"));
+    }
+
+    #[test]
+    fn resolve_path_absolute_outside_rejected() {
+        let ctx = ctx(Path::new("/workdir/myproject"));
+        let err = ctx.resolve_path("/etc/passwd").unwrap_err();
+        assert!(matches!(err, HarnessError::PathEscape(_)));
+    }
+}

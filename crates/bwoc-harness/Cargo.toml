@@ -1,0 +1,37 @@
+[package]
+name = "bwoc-harness"
+description = "BWOC self-hosted agentic harness — OpenAI-compatible provider, agentic loop, core tools. Dev-only P1 (no safety guardrails yet)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "bwoc-harness"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime — required for streaming + concurrent tool execution
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util"] }
+# HTTP client for OpenAI-compat endpoint
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Error handling
+thiserror = "2"
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+# Futures utilities (stream combinators)
+futures-util = "0.3"
+# Byte manipulation for SSE parsing
+bytes = "1"
+# Async trait support
+async-trait = "0.1"
+
+[dev-dependencies]
+# HTTP mock server for offline provider tests
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tempfile = "3"

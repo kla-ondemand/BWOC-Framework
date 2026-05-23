@@ -4,6 +4,7 @@ members = [
     "crates/bwoc-core",
     "crates/bwoc-cli",
     "crates/bwoc-agent",
+    "crates/bwoc-harness",
 ]
 
 [workspace.package]

@@ -15,6 +15,7 @@ mod check;
 mod completion;
 mod dashboard;
 mod doctor;
+mod git_worktree;
 mod help;
 mod i18n;
 mod inbox;

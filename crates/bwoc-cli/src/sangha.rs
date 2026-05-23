@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 
+use bwoc_core::manifest::Manifest;
 use bwoc_core::team::{self, Task, Team, TeamError};
+use bwoc_core::workspace::AgentsRegistry;
 
 // --- path helpers ----------------------------------------------------------
 
@@ -581,9 +583,43 @@ fn mutate_task(
         // errors → exit 2; the file is untouched.
         return 2;
     }
-    // task-completed hook (optional). The transition succeeded in-memory;
-    // a non-zero exit blocks completion by aborting before the file is
-    // written. Only fires for `complete` — claim has no hook in Phase B+.
+    // Lifecycle hooks (optional). The transition succeeded in-memory;
+    // a non-zero exit blocks the operation by aborting before the file is
+    // written. Two events:
+    //   task-claimed   — fires when verb == "claim" (Track B, Phase 3).
+    //   task-completed — fires when verb == "complete".
+    if verb == "claim" {
+        // Resolve the claimant's worktreeBase from their config.manifest.json
+        // so the hook can construct the exact worktree path without parsing
+        // any agent-written log.  Fall back to "/tmp" if the manifest is
+        // absent or the field is unset (non-fatal — the hook still runs).
+        let worktree_base = AgentsRegistry::load(&ws)
+            .ok()
+            .and_then(|reg| {
+                reg.agents
+                    .into_iter()
+                    .find(|e| e.id == agent || e.id == format!("agent-{agent}"))
+            })
+            .and_then(|entry| {
+                Manifest::load_from_path(&ws.join(&entry.path).join("config.manifest.json")).ok()
+            })
+            .and_then(|m| m.worktree_base)
+            .unwrap_or_else(|| "/tmp".to_owned());
+        if let Err(e) = run_task_hook(
+            &ws,
+            "task-claimed",
+            &[
+                ("BWOC_TASK_EVENT", "task-claimed"),
+                ("BWOC_TEAM", team_id),
+                ("BWOC_TASK_ID", task_id),
+                ("BWOC_AGENT", agent),
+                ("BWOC_WORKTREE_BASE", &worktree_base),
+            ],
+        ) {
+            eprintln!("bwoc task {verb}: {e}");
+            return 2;
+        }
+    }
     if verb == "complete"
         && let Err(e) = run_task_hook(
             &ws,
@@ -776,6 +812,69 @@ mod tests {
         let err = run_task_hook(&ws, "task-created", &[]).unwrap_err();
         assert!(err.contains("blocked by task-created hook"), "got: {err}");
         assert!(err.contains("nope"), "stderr surfaced: {err}");
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// task-claimed hook fires with the right env vars and blocks on non-zero exit.
+    /// Mirrors the task-created / task-completed test pattern.
+    #[cfg(unix)]
+    #[test]
+    fn task_claimed_hook_receives_env_and_blocks() {
+        use std::os::unix::fs::PermissionsExt;
+        let ws = std::env::temp_dir().join(format!("bwoc-claimed-hook-{}", std::process::id()));
+        let hooks = ws.join(".bwoc/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+
+        // Missing hook → no-op (same as other hook events).
+        assert!(run_task_hook(&ws, "task-claimed", &[]).is_ok());
+
+        // Executable hook that exits 0 and echoes the env vars to a temp file
+        // so we can verify they were received.
+        let log = ws.join("claimed.log");
+        let log_str = log.to_string_lossy().to_string();
+        let hook = hooks.join("task-claimed");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\necho \"$BWOC_TASK_EVENT $BWOC_TEAM $BWOC_TASK_ID $BWOC_AGENT $BWOC_WORKTREE_BASE\" > {log_str}\nexit 0\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = run_task_hook(
+            &ws,
+            "task-claimed",
+            &[
+                ("BWOC_TASK_EVENT", "task-claimed"),
+                ("BWOC_TEAM", "squad"),
+                ("BWOC_TASK_ID", "t1"),
+                ("BWOC_AGENT", "agent-pi"),
+                ("BWOC_WORKTREE_BASE", "/tmp"),
+            ],
+        );
+        assert!(result.is_ok(), "hook exit 0 must not block: {result:?}");
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            logged.contains("task-claimed"),
+            "BWOC_TASK_EVENT missing: {logged}"
+        );
+        assert!(logged.contains("squad"), "BWOC_TEAM missing: {logged}");
+        assert!(logged.contains("t1"), "BWOC_TASK_ID missing: {logged}");
+        assert!(logged.contains("agent-pi"), "BWOC_AGENT missing: {logged}");
+        assert!(
+            logged.contains("/tmp"),
+            "BWOC_WORKTREE_BASE missing: {logged}"
+        );
+
+        // Non-zero exit → blocks the claim.
+        std::fs::write(&hook, "#!/bin/sh\necho 'no new claims' >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let err =
+            run_task_hook(&ws, "task-claimed", &[("BWOC_TASK_EVENT", "task-claimed")]).unwrap_err();
+        assert!(err.contains("blocked by task-claimed hook"), "got: {err}");
+        assert!(err.contains("no new claims"), "stderr surfaced: {err}");
 
         let _ = std::fs::remove_dir_all(&ws);
     }

@@ -27,7 +27,7 @@ Phase 3's Definition of Done has two halves: *an agent's life ends cleanly* (vay
 | **Anattā** (no central self) | No global directory, no broker; each workspace is its own locus | [`PHILOSOPHY.en.md` #4 Tilakkhaṇa](../docs/en/PHILOSOPHY.en.md) |
 | **Samānattatā** (equal standing) | Every peer workspace is equal — routing privileges none | [`PHILOSOPHY.en.md` #12 Saṅgahavatthu 4](../docs/en/PHILOSOPHY.en.md) |
 
-> [!note] Mapping under review. The canonical anchor (SN 22.59 / Anattā) is the spec author's proposal. If the operator prefers to nest routing under Saṅgaha ([`sangha.md`](sangha.md)) or under Aparihāniya-dhamma ([`FLEET-GOVERNANCE.en.md`](../../../docs/en/FLEET-GOVERNANCE.en.md)), it is a one-line frontmatter change — flagged for verification per the "name the principle" convention.
+> [!note] Mapping confirmed by the operator (2026-05-23): the canonical anchor is **SN 22.59 / Anattā** (no central self → no central broker), with Samānattatā as the supporting design principle. Considered and not chosen: nesting under Saṅgaha ([`sangha.md`](sangha.md)) or Aparihāniya-dhamma ([`FLEET-GOVERNANCE.en.md`](../../../docs/en/FLEET-GOVERNANCE.en.md)).
 
 Three design constraints for v1:
 
@@ -89,7 +89,7 @@ Routing therefore does **not** block on [Trust v2](trust.md): the two features a
 
 ## Spec Revision History
 
-- **v1 / 2026-05-23 (initial draft, Oracle):** `routes.toml` schema (`agent` | `namespace` → peer `workspace`), additive 3-step resolution, local-FS v1 scope, trust-composition safe-default, Trust v2 seam. Mapping (Anattā / SN 22.59) flagged for operator verification.
+- **v1 / 2026-05-23 (initial draft, Oracle):** `routes.toml` schema (`agent` | `namespace` → peer `workspace`), additive 3-step resolution, local-FS v1 scope, trust-composition safe-default, Trust v2 seam. Mapping (Anattā / SN 22.59) confirmed by the operator 2026-05-23.
 
 ## Implementation Order (when code work begins)
 

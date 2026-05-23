@@ -3,7 +3,7 @@
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:02:30Z","kamma":"speech","action":"memory.load","actor":"agent-database-schema","subject":"reference-postgres-conventions.md","context":{"verified":true,"verifiedAgainst":"db/schema/users.sql@a3f7b21"}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:03:00Z","kamma":"speech","action":"memory.load","actor":"agent-database-schema","subject":"decision-2026-04-15-migration-strategy.md","context":{"applies":true}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:05:00Z","kamma":"mind","action":"plan.finalized","actor":"agent-database-schema","context":{"steps":["add deleted_at column","add partial index","update queries","write rollback"],"nirodha":"users.deleted_at NOT NULL = active filter works"}}
-{"taskId":"PROJ-42","timestamp":"2026-05-22T09:06:00Z","kamma":"body","action":"worktree.create","actor":"agent-database-schema","subject":"/tmp/wt-PROJ-42","context":{"branch":"feature/PROJ-42-soft-delete-users"}}
+{"taskId":"PROJ-42","timestamp":"2026-05-22T09:06:00Z","kamma":"body","action":"worktree.create","actor":"agent-database-schema","subject":"/tmp/wt-PROJ-42","context":{"branch":"feat/PROJ-42-soft-delete-users"}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:10:00Z","kamma":"body","action":"file.create","actor":"agent-database-schema","subject":"db/migrations/0079_users_soft_delete.sql","context":{"linesAdded":42}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:11:00Z","kamma":"body","action":"file.create","actor":"agent-database-schema","subject":"db/migrations/0079_users_soft_delete.rollback.sql","context":{"linesAdded":18}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:15:00Z","kamma":"body","action":"tool.invoke","actor":"agent-database-schema","subject":"sqlfluff lint","context":{"exitCode":0,"duration":3200}}
@@ -13,7 +13,7 @@
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:35:00Z","kamma":"speech","action":"agent.message","actor":"agent-test-author","subject":"review-response","context":{"to":"agent-database-schema","body":"approved, suggested adding test for deleted_at index","trust":0.92}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:40:00Z","kamma":"body","action":"file.modify","actor":"agent-database-schema","subject":"db/migrations/0079_users_soft_delete.sql","context":{"changeType":"add-test-hint-comment"}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:45:00Z","kamma":"body","action":"git.commit","actor":"agent-database-schema","subject":"feat(db): add soft-delete to users table","context":{"files":2,"insertions":62,"deletions":0,"sha":"d4e9c12"}}
-{"taskId":"PROJ-42","timestamp":"2026-05-22T09:46:00Z","kamma":"body","action":"git.push","actor":"agent-database-schema","subject":"feature/PROJ-42-soft-delete-users","context":{"remote":"origin"}}
+{"taskId":"PROJ-42","timestamp":"2026-05-22T09:46:00Z","kamma":"body","action":"git.push","actor":"agent-database-schema","subject":"feat/PROJ-42-soft-delete-users","context":{"remote":"origin"}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:47:00Z","kamma":"mind","action":"task.completed","actor":"agent-database-schema","context":{"outcome":"success","duration_seconds":2820,"gates_passed":3,"retries":0}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:48:00Z","kamma":"mind","action":"reflection.started","actor":"agent-database-schema","context":{"framework":"panna-3"}}
 {"taskId":"PROJ-42","timestamp":"2026-05-22T09:50:00Z","kamma":"body","action":"file.create","actor":"agent-database-schema","subject":"memories/feedback-PROJ-42-soft-delete.md","context":{"type":"feedback","outcome":"success"}}

@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+ items continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
 
+### Added
+
+**Dashboard single-agent lifecycle hotkeys**
+
+- **`s` (start)** — runs the selected agent from the TUI: flips registry status to active and spawns `bwoc-agent --serve`. Shells out to `bwoc start <id> --yes --json` with captured output (TUI-safe), parses `daemon_pid` / `already_running` into the footer, refreshes so status + ●/○ flip. See [`notes/2026-05-23_dashboard-start-hotkey.md`](notes/2026-05-23_dashboard-start-hotkey.md).
+- **`x` (stop)** — stops the selected agent (signal the daemon + flip status stopped). Parses `bwoc stop --json`'s `daemon_outcome` enum into a precise footer message. The dashboard now covers the full single-agent lifecycle: chat (`t`/`g`), log (`l`), inbox (`i`), start (`s`), stop (`x`), refresh (`r`). See [`notes/2026-05-23_dashboard-stop-and-start-race-fix.md`](notes/2026-05-23_dashboard-stop-and-start-race-fix.md).
+
+### Fixed
+
+- **`bwoc start` duplicate-daemon race** — `spawn_daemon` now writes `.bwoc/agent.pid` from the parent (with the child's pid) immediately after spawn instead of waiting for the daemon's own startup write. A second `bwoc start` arriving in that window previously read no pid file and spawned a duplicate daemon; it now correctly reports `already_running`.
+
+### Security
+
+- **Dependabot `time` DoS (GHSA-r6v5-fh4h-64xc)** dismissed as not-affected — `time` reaches BWOC only transitively via ratatui-widgets (TUI formatting); the DoS is in time's parsing of untrusted strings, which BWOC never does. Fix (0.3.47) requires Rust 1.88 vs the MSRV 1.85. See [`notes/2026-05-23_time-cve-triage.md`](notes/2026-05-23_time-cve-triage.md).
+
 ## [v2026.5.23-2] — 2026-05-23 — BWOC 2.0
 
 **First major version of the BWOC framework.** Significant capability stack on top of the v2026.5.23 baseline; one BREAKING backend rename (`gemini` → `antigravity`/`agy`). Cargo SemVer jumps `0.1.721` → `2.0.0` to mark the discontinuity. CalVer per [VERSION.md policy](VERSION.md#versioning-policy--dual-namespaces).

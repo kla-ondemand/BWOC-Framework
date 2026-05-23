@@ -20,8 +20,8 @@ use bwoc_core::team::{self, TaskState, Team};
 
 /// Watches the agent's team task lists for newly-claimable work.
 pub struct TaskWatch {
-    /// Workspace root (`.bwoc/teams/` lives here). `None` → inert.
-    teams_dir: Option<PathBuf>,
+    /// Workspace root (`.bwoc/teams/` lives under it). `None` → inert.
+    workspace_root: Option<PathBuf>,
     /// This agent's id (e.g. `agent-pi`) — only its teams are watched.
     agent_id: String,
     /// (team_id, task_id) of claimable tasks already announced, so a task
@@ -32,6 +32,11 @@ pub struct TaskWatch {
     /// it — the same best-effort wakeup the inbox uses. Default off:
     /// announce-only.
     wakeup: bool,
+    /// Opt-in (`BWOC_AUTO_CLAIM=1`): on a newly-claimable task, the daemon
+    /// claims it for this agent (via the locked `bwoc task claim` CLI path)
+    /// and then wakes the agent to work it. The riskiest mode — autonomous
+    /// mutation — so default off and gated separately from `wakeup`.
+    auto_claim: bool,
 }
 
 impl TaskWatch {
@@ -40,12 +45,12 @@ impl TaskWatch {
     /// starting at EOF (don't replay history on startup). Returns an inert
     /// watcher when there's no workspace root.
     pub fn build(agent_id: &str, workspace_root: Option<&Path>) -> Self {
-        let teams_dir = workspace_root.map(|r| r.join(".bwoc/teams"));
         let mut w = Self {
-            teams_dir,
+            workspace_root: workspace_root.map(|r| r.to_path_buf()),
             agent_id: agent_id.to_string(),
             seen: HashSet::new(),
             wakeup: std::env::var_os("BWOC_TASK_WAKEUP").is_some(),
+            auto_claim: std::env::var_os("BWOC_AUTO_CLAIM").is_some(),
         };
         // Pre-seed `seen` with what's already open so the first poll only
         // surfaces tasks that appear *after* the daemon started.
@@ -58,7 +63,7 @@ impl TaskWatch {
     /// True when there's nothing to watch (no workspace) — lets the caller
     /// skip the poll entirely.
     pub fn is_inert(&self) -> bool {
-        self.teams_dir.is_none()
+        self.workspace_root.is_none()
     }
 
     /// Whether the opt-in tmux wakeup is enabled (`BWOC_TASK_WAKEUP=1`).
@@ -67,11 +72,16 @@ impl TaskWatch {
         self.wakeup
     }
 
+    /// Whether autonomous auto-claim is enabled (`BWOC_AUTO_CLAIM=1`).
+    pub fn auto_claim_enabled(&self) -> bool {
+        self.auto_claim
+    }
+
     /// Announce any claimable task not seen before; record it. Also drops
     /// from `seen` any task that is no longer claimable (claimed/completed),
     /// so if it ever returns to pending it announces afresh.
     pub fn poll(&mut self) {
-        if self.teams_dir.is_none() {
+        if self.workspace_root.is_none() {
             return;
         }
         let current: Vec<(String, String, String)> = self.scan_claimable();
@@ -85,7 +95,12 @@ impl TaskWatch {
             if self.seen.insert(key) {
                 // newly inserted ⇒ not seen before ⇒ announce.
                 eprintln!("bwoc-agent: task available ← {team}/{task}: {title}");
-                if self.wakeup {
+                if self.auto_claim {
+                    // Claim it for this agent + wake it to work the task.
+                    // A lost race (someone claimed first) just logs — the
+                    // task leaves the claimable set and drops from `seen`.
+                    self.try_auto_claim(team, task, title);
+                } else if self.wakeup {
                     wake_session(&self.agent_id, team, task, title);
                 }
             }
@@ -95,14 +110,54 @@ impl TaskWatch {
         self.seen.retain(|k| current_keys.contains(k));
     }
 
+    /// Auto-claim a task via the locked `bwoc task claim` CLI path (no
+    /// duplicated lock logic — the CLI handles the race), then wake the
+    /// agent to work it. Best-effort: a lost race or any failure logs and
+    /// returns. Only called when `BWOC_AUTO_CLAIM=1`.
+    fn try_auto_claim(&self, team: &str, task: &str, title: &str) {
+        let Some(root) = &self.workspace_root else {
+            return;
+        };
+        let root_str = root.to_string_lossy().to_string();
+        let result = std::process::Command::new("bwoc")
+            .args([
+                "task",
+                "claim",
+                team,
+                task,
+                "--as",
+                &self.agent_id,
+                "--workspace",
+                root_str.as_str(),
+            ])
+            .output();
+        match result {
+            Ok(o) if o.status.success() => {
+                eprintln!("bwoc-agent: auto-claimed {team}/{task} — {title}");
+                // The agent now owns work — tell it regardless of the
+                // wakeup flag (auto-claim implies "go do this").
+                wake_session(&self.agent_id, team, task, title);
+            }
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let first = err.trim().lines().next().unwrap_or("unknown");
+                eprintln!("bwoc-agent: auto-claim {team}/{task} skipped: {first}");
+            }
+            Err(e) => {
+                eprintln!("bwoc-agent: auto-claim {team}/{task} exec failed: {e} (is bwoc on PATH?)");
+            }
+        }
+    }
+
     /// Walk `.bwoc/teams/*.toml`, keep teams this agent is a member of, and
     /// collect `(team_id, task_id, title)` for every claimable task. Pure
     /// read; silently skips missing/unreadable/malformed files.
     fn scan_claimable(&self) -> Vec<(String, String, String)> {
-        let Some(dir) = &self.teams_dir else {
+        let Some(root) = &self.workspace_root else {
             return Vec::new();
         };
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let dir = root.join(".bwoc/teams");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             return Vec::new();
         };
         let mut out = Vec::new();

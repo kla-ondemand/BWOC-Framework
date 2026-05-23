@@ -55,11 +55,19 @@ Added the wakeup half right after the announce-only landing, gated opt-in so the
 - **Startup log** names the posture: `watching Saṅgha tasks for member 'agent-pi' (BWOC_TASK_WAKEUP=1 — will ping tmux session on new tasks)`.
 - **Live-verified**: tmux session `pi` created, daemon started with `BWOC_TASK_WAKEUP=1`, `bwoc task add` → the pane received `[bwoc task squad/t1] wake me up` within the poll window. (Note: zsh aliases `tmux` to the oh-my-zsh plugin wrapper; the test used the real `/opt/homebrew/bin/tmux` binary directly.)
 
-## Status / deferred (Phase B+ / C)
+## Addendum 2 — opt-in auto-claim (autonomous loop closed)
 
-- **Task hooks** — `task-created` / `task-completed` workspace-level shell hooks (mirrors Claude Agent Teams' TaskCreated/TaskCompleted).
-- **Auto-claim** — daemon claims the next available task itself (behind its own opt-in). Higher risk than wakeup (autonomous mutation + stranding); deferred until the wakeup→agent-claims loop is proven.
-- **Plan approval (Pavāraṇā)** — Phase C; envelope-kind extension on messaging.
+`BWOC_AUTO_CLAIM=1` makes the daemon claim a new task for its agent, then wake it — closing the loop `add → daemon sees → claims → wakes`.
+
+- **`TaskWatch` gained `auto_claim` + `try_auto_claim`.** On a new claimable task (auto_claim on), the daemon shells out `bwoc task claim <team> <task> --as <self> --workspace <ws>` — reusing the Phase A lock + state machine, **no duplicated lock**. Success → log `auto-claimed <team>/<task>` + `wake_session` (regardless of `BWOC_TASK_WAKEUP`, since the agent now owns work). Lost race (another member claimed first) → the claim exits 2 (`not pending`), logged as `auto-claim … skipped`, no double-claim.
+- **Refactor**: `teams_dir` field → `workspace_root` (needed for the `--workspace` arg); `scan_claimable` derives `.bwoc/teams` from it.
+- **`auto_claim` precedence over `wakeup`** in `poll`: auto-claim implies wake, so the `else if wakeup` only fires when auto-claim is off.
+- **Risk acknowledged**: this is the only mode where the daemon mutates shared state autonomously. Gated separately + off by default. The lock makes the multi-daemon race safe (verified by the Phase A concurrent-claim test); a transient claim failure isn't retried (the announce already told the operator), accepted for v1.
+- **Live-verified**: daemon started with `BWOC_AUTO_CLAIM=1`; `bwoc task add` → log `auto-claimed squad/t1 — auto me`; `task list` showed `t1 in_progress agent-pi`.
+
+## Status / deferred (Phase C)
+
+- **Plan approval (Pavāraṇā)** — the last Saṅgha phase. A teammate submits a plan, the lead (human) approves/rejects before implementation. Envelope-kind extension on messaging. Next loop iteration.
 
 ## Related
 

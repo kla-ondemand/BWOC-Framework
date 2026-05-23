@@ -248,13 +248,15 @@ fn serve_loop(cwd: &std::path::Path, manifest: &Manifest) -> ExitCode {
     let mut task_watch =
         task_watch::TaskWatch::build(&manifest.agent_id, trust_ctx.workspace_root.as_deref());
     if !task_watch.is_inert() {
-        let wake = if task_watch.wakeup_enabled() {
+        let mode = if task_watch.auto_claim_enabled() {
+            " (BWOC_AUTO_CLAIM=1 — will claim new tasks + wake the agent)"
+        } else if task_watch.wakeup_enabled() {
             " (BWOC_TASK_WAKEUP=1 — will ping tmux session on new tasks)"
         } else {
             ""
         };
         eprintln!(
-            "bwoc-agent --serve: watching Saṅgha tasks for member '{}'{wake}",
+            "bwoc-agent --serve: watching Saṅgha tasks for member '{}'{mode}",
             manifest.agent_id
         );
     }

@@ -100,7 +100,7 @@ All commands take `--workspace` (standard resolution: flag → `BWOC_WORKSPACE` 
 | Complete by non-claimant | 2 | `task 't1' is claimed by 'agent-pi', not 'agent-oracle'` |
 | Lock contention timeout | 1 | `could not acquire task lock (… remove tasks.lock if stale)` |
 
-## Phase B — daemon task-watch (shipped, announce-only)
+## Phase B — daemon task-watch (shipped)
 
 A running `bwoc-agent --serve` watches the shared task lists of every team its agent belongs to and announces newly-claimable tasks to stderr — the same shape as the inbox watch:
 
@@ -110,7 +110,9 @@ bwoc-agent: task available ← squad/t3: implement the parser
 
 "Claimable" = `pending` with every dependency `completed`, in a member team. The daemon snapshots what's already open at startup (no replay — like the inbox cursor starting at EOF) and polls on a 2-second cadence (tasks change rarely). Inert when the agent is on no team or no workspace resolves. See [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs).
 
-**Opt-in wakeup** (`BWOC_TASK_WAKEUP=1`): on a newly-claimable task the daemon also pings the agent's tmux session (`agent-<x>` → session `<x>`) with a `[bwoc task <team>/<id>] <title>` marker — the same best-effort two-step send-keys the inbox uses. A live Claude session running the agent sees it and can `bwoc task claim`. The agent stays in control: the daemon does **not** auto-claim or mutate the list, so there's no risk of stranding a task no one works. Default off (announce-only).
+**Opt-in wakeup** (`BWOC_TASK_WAKEUP=1`): on a newly-claimable task the daemon also pings the agent's tmux session (`agent-<x>` → session `<x>`) with a `[bwoc task <team>/<id>] <title>` marker — the same best-effort two-step send-keys the inbox uses. A live Claude session running the agent sees it and can `bwoc task claim`. The agent stays in control: the daemon does not mutate the list. Default off (announce-only).
+
+**Opt-in auto-claim** (`BWOC_AUTO_CLAIM=1`): the autonomous-teamwork mode. On a newly-claimable task the daemon claims it for its agent — via the locked `bwoc task claim` CLI path, so the lock + state machine serialize against other members (a lost race just logs `auto-claim … skipped`) — then wakes the agent to work it. This is the riskiest mode (the daemon mutates shared state), so it's gated separately from `wakeup` and off by default. The full loop: `bwoc task add` → daemon sees it → claims for the agent → wakes the agent. See [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs).
 
 ## Task hooks (shipped)
 
@@ -123,7 +125,6 @@ Each hook receives the context as environment variables: `BWOC_TASK_EVENT`, `BWO
 
 ## Deferred (later phases)
 
-- **Auto-claim** — the daemon claims the next available task itself (behind its own opt-in), not just pings. Higher risk (autonomous mutation + stranding if the wakeup misses), so gated separately and deferred until the wakeup-then-agent-claims loop is proven. (Phase B+.)
 - **Plan approval (Pavāraṇā)** — a teammate submits a plan, the lead approves/rejects before implementation. Maps to an envelope-kind extension on [[messaging]]. (Phase C.)
 - **Team-aware dashboard** — a task pane in `bwoc dashboard`. (Phase B+.)
 - **Designated lead agent** — a `lead` field + lead-only operations. Only if the human-implicit-lead model proves limiting.

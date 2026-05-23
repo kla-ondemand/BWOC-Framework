@@ -100,7 +100,7 @@ bwoc task complete <team> <task> --as <agent>   # เฉพาะผู้ claim
 | complete โดยผู้ที่ไม่ได้ claim | 2 | `task 't1' is claimed by 'agent-pi', not 'agent-oracle'` |
 | lock contention timeout | 1 | `could not acquire task lock (… remove tasks.lock if stale)` |
 
-## Phase B — daemon task-watch (ส่งแล้ว, announce-only)
+## Phase B — daemon task-watch (ส่งแล้ว)
 
 `bwoc-agent --serve` ที่รันอยู่จะเฝ้ารายการงานร่วมของทุกทีมที่ agent เป็นสมาชิก และประกาศงานที่ claim ได้ใหม่ไปยัง stderr — รูปแบบเดียวกับ inbox watch:
 
@@ -110,7 +110,9 @@ bwoc-agent: task available ← squad/t3: implement the parser
 
 "claim ได้" = `pending` ที่ทุก dependency `completed` ในทีมที่เป็นสมาชิก daemon snapshot งานที่เปิดอยู่แล้วตอน startup (ไม่ replay — เหมือน inbox cursor เริ่มที่ EOF) และ poll ที่ cadence 2 วินาที (งานเปลี่ยนไม่บ่อย) inert เมื่อ agent ไม่อยู่ทีมใดหรือไม่มี workspace ดู [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs)
 
-**Wakeup แบบ opt-in** (`BWOC_TASK_WAKEUP=1`): เมื่อมี task ที่ claim ได้ใหม่ daemon จะ ping tmux session ของ agent (`agent-<x>` → session `<x>`) ด้วย marker `[bwoc task <team>/<id>] <title>` — กลไก two-step send-keys best-effort เดียวกับ inbox Claude session ที่รัน agent อยู่จะเห็นแล้ว `bwoc task claim` ได้ agent ยังคุมเอง: daemon **ไม่** auto-claim หรือ mutate รายการ จึงไม่เสี่ยง strand งานที่ไม่มีใครทำ default ปิด (announce-only)
+**Wakeup แบบ opt-in** (`BWOC_TASK_WAKEUP=1`): เมื่อมี task ที่ claim ได้ใหม่ daemon จะ ping tmux session ของ agent (`agent-<x>` → session `<x>`) ด้วย marker `[bwoc task <team>/<id>] <title>` — กลไก two-step send-keys best-effort เดียวกับ inbox Claude session ที่รัน agent อยู่จะเห็นแล้ว `bwoc task claim` ได้ agent ยังคุมเอง: daemon ไม่ mutate รายการ default ปิด (announce-only)
+
+**Auto-claim แบบ opt-in** (`BWOC_AUTO_CLAIM=1`): โหมดทำงานเป็นทีมอัตโนมัติ เมื่อมี task ที่ claim ได้ใหม่ daemon จะ claim ให้ agent ของตัวเอง — ผ่าน path `bwoc task claim` ที่มี lock จึง serialize กับสมาชิกอื่นได้ (แพ้ race ก็แค่ log `auto-claim … skipped`) — แล้วปลุก agent ให้ทำงาน นี่คือโหมดเสี่ยงที่สุด (daemon mutate shared state) จึง gate แยกจาก `wakeup` และปิด default loop เต็ม: `bwoc task add` → daemon เห็น → claim ให้ agent → ปลุก agent ดู [`crates/bwoc-agent/src/task_watch.rs`](../../../crates/bwoc-agent/src/task_watch.rs)
 
 ## Task hooks (ส่งแล้ว)
 
@@ -122,8 +124,6 @@ shell hook ระดับ workspace แบบ optional ทำงานตาม
 hook รับ context เป็น environment variable: `BWOC_TASK_EVENT`, `BWOC_TEAM`, `BWOC_TASK_ID`, `BWOC_TASK_TITLE` (created), `BWOC_AGENT` (completed) **exit ไม่เป็นศูนย์ block การทำงาน** — ไฟล์งานไม่ถูกแตะ และ stderr บรรทัดแรกของ hook โผล่ให้ operator (exit 2) hook ที่ไม่มีหรือไม่ executable เป็น no-op เงียบ (hook เป็น opt-in) ใช้สำหรับ quality gate: เช่น hook `task-completed` ที่รัน `cargo test` แล้ว exit ไม่เป็นศูนย์เพื่อปฏิเสธ completion จนกว่า test จะผ่าน
 
 ## เลื่อนไป phase ถัดไป
-
-- **Auto-claim** — daemon claim งานถัดไปเอง (หลัง opt-in ของตัวเอง) ไม่ใช่แค่ ping เสี่ยงกว่า (autonomous mutation + strand ถ้า wakeup พลาด) จึง gate แยกและเลื่อนจนกว่า loop wakeup-แล้ว-agent-claim จะพิสูจน์แล้ว (Phase B+)
 - **Plan approval (ปวารณา)** — teammate ส่ง plan, lead approve/reject ก่อน implement map กับส่วนขยาย envelope-kind บน [[messaging]] (Phase C)
 - **Dashboard รู้จักทีม** — task pane ใน `bwoc dashboard` (Phase B+)
 - **Lead agent ที่กำหนด** — field `lead` + การกระทำเฉพาะ lead เฉพาะเมื่อโมเดล human-implicit-lead พิสูจน์ว่าจำกัดเกินไป

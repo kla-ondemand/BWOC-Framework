@@ -10,6 +10,12 @@ _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+
 
 ### Added
 
+**Saṅgha v1 Phase A — teams + shared task list**
+
+- **`bwoc-core::team`** — `Team` (TOML membership) + `Task`/`TaskState` (JSONL) with pure transition rules: `add_task` (dup + unknown-dep rejection), `claim_task` (pending + all-deps-completed → in_progress + claimant), `complete_task` (in_progress + claimant-only → completed). 11 unit tests.
+- **`bwoc team create/list/retire`** + **`bwoc task add/list/claim/complete`** — a team groups a subset of workspace agents under one shared task list; teammates self-claim with `--as <agent>` (member-guarded). Dependency-free `O_EXCL` advisory lock (PID + signal-0 staleness steal) serializes claims so two agents never claim the same task; atomic tmp+rename writes; `--json` on every command. Human operator is the implicit lead (no `lead` field).
+- **`interconnect/sangha.md` + `.th.md`** — bilingual spec mapping **Saṅgaha-vatthu 4** (team-cohesion norms) + **Saṅghakamma** (the lock-settled claim) to the model. Daemon task-watch, plan approval (Pavāraṇā), and a dashboard task pane are deferred to Phase B/C. See [`notes/2026-05-23_sangha-v1-phase-a.md`](notes/2026-05-23_sangha-v1-phase-a.md).
+
 **Dashboard single-agent lifecycle hotkeys**
 
 - **`s` (start)** — runs the selected agent from the TUI: flips registry status to active and spawns `bwoc-agent --serve`. Shells out to `bwoc start <id> --yes --json` with captured output (TUI-safe), parses `daemon_pid` / `already_running` into the footer, refreshes so status + ●/○ flip. See [`notes/2026-05-23_dashboard-start-hotkey.md`](notes/2026-05-23_dashboard-start-hotkey.md).

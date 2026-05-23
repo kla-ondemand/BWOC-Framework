@@ -114,6 +114,18 @@ pub fn print() {
         println!("  {}{name:<10}{}  {desc}", c.yellow, c.reset);
     }
     println!();
+    println!(
+        "{}✨ What's New{}  —  {}{}{}",
+        c.bold_cyan,
+        c.reset,
+        c.bold,
+        crate::whats_new::HEADLINE,
+        c.reset
+    );
+    for h in crate::whats_new::HIGHLIGHTS {
+        println!("  {}•{} {h}", c.yellow, c.reset);
+    }
+    println!();
     println!("{}Backends:{}  {BACKENDS}", c.bold_cyan, c.reset);
     println!("{}Locales:{}   {LOCALES}", c.bold_cyan, c.reset);
     println!();

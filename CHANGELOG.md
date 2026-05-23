@@ -10,6 +10,11 @@ _Saṅgha v1 (agent teams), trust v2 (signed envelopes, warn-mode), and Phase 3+
 
 ### Added
 
+**"What's New" surface**
+
+- **Banner** (bare `bwoc`) gains a `✨ What's New` section listing the current release's highlights.
+- **Once-per-version upgrade notice** — any subcommand prints a one-line "you upgraded" notice to stderr the first time it runs on a new `MAJOR.MINOR` (keyed on `~/.bwoc/last-seen-version`, so patch churn doesn't spam). Silent on non-TTY / piped / `--json` output; suppress with `BWOC_NO_WHATSNEW=1`. Highlights live in `crates/bwoc-cli/src/whats_new.rs` (single source; the banner imports them).
+
 **Saṅgha v1 Phase A — teams + shared task list**
 
 - **`bwoc-core::team`** — `Team` (TOML membership) + `Task`/`TaskState` (JSONL) with pure transition rules: `add_task` (dup + unknown-dep rejection), `claim_task` (pending + all-deps-completed → in_progress + claimant), `complete_task` (in_progress + claimant-only → completed). 11 unit tests.

@@ -34,6 +34,7 @@ mod stop;
 mod supervise;
 mod trust;
 mod user_home;
+mod whats_new;
 mod util;
 mod workspace;
 
@@ -1102,6 +1103,13 @@ fn main() -> ExitCode {
     // block the command — most commands don't yet read user-level config.
     if let Err(e) = user_home::ensure_initialized() {
         eprintln!("bwoc: warning — could not initialize ~/.bwoc/: {e}");
+    }
+
+    // One-line "you upgraded" notice on subcommands (once per MAJOR.MINOR).
+    // The bare-`bwoc` banner already carries the full What's New block, so
+    // skip the notice there to avoid doubling up.
+    if cli.command.is_some() {
+        whats_new::notify_if_updated();
     }
 
     match cli.command {

@@ -4,6 +4,8 @@ aliases: [harness, ollama-harness, agentic-harness]
 tags: [harness, runtime, safety, tools, ollama, self-host]
 status: v1 (P1–P5 สมบูรณ์; ดูข้อจำกัด)
 canonical-source: crates/bwoc-harness/src/
+parent: ภาษาไทย
+nav_order: 8
 ---
 
 # bwoc-harness — รันไทม์ Agent แบบ Self-Hosted

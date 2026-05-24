@@ -11,7 +11,7 @@ tags:
 status: ฉบับร่าง (v2026.5.23 — spec แรก; observable signals วางไว้, automation เลื่อน)
 canonical-source: ทีฆนิกาย 16 (มหาปรินิพพานสูตร) §1.4 — โอวาทแก่ชาววัชชี
 parent: ภาษาไทย
-nav_order: 8
+nav_order: 10
 ---
 
 # ธรรมาภิบาล Fleet — อปริหานิยธรรม 7

@@ -7,7 +7,9 @@
 //! Git tag (e.g. `v2026.5.24-0`). Dev/source builds leave it unset.
 //!
 //! `--check` fetches the latest GitHub release tag and compares CalVer tuples.
-//! Without `--check`, prints a notice that the apply path is not yet available.
+//! Plain `bwoc update` detects the install method and delegates the upgrade to
+//! the package manager (brew / cargo) or points a raw binary at the release
+//! page — it never self-replaces the running binary (that path is deferred).
 //!
 //! ## Fetch strategy
 //!
@@ -15,8 +17,11 @@
 //! 2. Fallback: `curl -s https://api.github.com/repos/bemindlabs/BWOC-Framework/releases/latest`
 //!    parsed with `serde_json`.
 //!
-//! Both are shells-out — no HTTP client dep added. The `CommandRunner` trait
-//! mirrors the seam from `run.rs` for offline unit-testability.
+//! Both are shells-out — no HTTP client dep added. `ShellRunner` is a small
+//! stdout-capture seam for offline unit-testability. It is intentionally
+//! distinct from `run.rs`'s `CommandRunner` (which adds cwd / timeout / rich
+//! `RunError` handling for launching agent processes) — these are different
+//! needs, not one abstraction, so they are kept separate rather than merged.
 
 use serde_json::Value;
 
@@ -58,7 +63,7 @@ impl CalVer {
     }
 }
 
-// ── CommandRunner seam (mirrors run.rs) ──────────────────────────────────────
+// ── ShellRunner seam (stdout-capture; distinct from run.rs's CommandRunner) ──
 
 /// Result of one shelled-out command.
 pub struct ShellOutcome {
@@ -67,14 +72,14 @@ pub struct ShellOutcome {
 }
 
 /// Abstraction over shell-out so tests inject a mock.
-pub trait CommandRunner {
+pub trait ShellRunner {
     fn run(&self, program: &str, args: &[&str]) -> ShellOutcome;
 }
 
 /// Production runner: forks the real process, captures stdout.
-pub struct ProcessCommandRunner;
+pub struct ProcessShellRunner;
 
-impl CommandRunner for ProcessCommandRunner {
+impl ShellRunner for ProcessShellRunner {
     fn run(&self, program: &str, args: &[&str]) -> ShellOutcome {
         use std::process::{Command, Stdio};
         let result = Command::new(program)
@@ -103,7 +108,7 @@ const GITHUB_API_URL: &str =
 
 /// Fetch the latest release tag. Tries `gh` first; falls back to `curl` + JSON.
 /// Returns `None` if both fail or return empty.
-pub fn fetch_latest_tag(runner: &dyn CommandRunner) -> Option<String> {
+pub fn fetch_latest_tag(runner: &dyn ShellRunner) -> Option<String> {
     // Primary: gh CLI
     let gh = runner.run(
         "gh",
@@ -160,8 +165,9 @@ pub enum CheckResult {
 }
 
 /// Run the `--check` comparison. Returns a `CheckResult` and the integer exit
-/// code (0 = up-to-date or source build, 1 = update available, 2 = error).
-pub fn check(runner: &dyn CommandRunner) -> (CheckResult, i32) {
+/// code: `0` = up-to-date, ahead-of-latest, or source build; `1` = update
+/// available; `2` = error (fetch failed or a malformed tag).
+pub fn check(runner: &dyn ShellRunner) -> (CheckResult, i32) {
     let latest_raw = match fetch_latest_tag(runner) {
         Some(t) => t,
         None => return (CheckResult::FetchFailed, 2),
@@ -239,11 +245,11 @@ pub struct UpdateArgs {
 
 /// Entry point called from `main.rs` — returns process exit code.
 pub fn run(args: UpdateArgs) -> i32 {
-    run_with(args, &ProcessCommandRunner)
+    run_with(args, &ProcessShellRunner)
 }
 
-/// Testable entry accepting a `CommandRunner` impl.
-pub fn run_with(args: UpdateArgs, runner: &dyn CommandRunner) -> i32 {
+/// Testable entry accepting a `ShellRunner` impl.
+pub fn run_with(args: UpdateArgs, runner: &dyn ShellRunner) -> i32 {
     if args.check {
         let (result, code) = check(runner);
         print_check_result(&result);
@@ -372,7 +378,7 @@ pub fn apply_action(result: &CheckResult, method: &InstallMethod) -> ApplyAction
 /// Apply (delegate-only). Runs the drift check, decides the action, prints it,
 /// and — only with `run` and only for a package-manager delegate — executes it.
 /// A raw binary is never self-replaced here (that path is deferred for review).
-fn apply(run: bool, runner: &dyn CommandRunner, method: &InstallMethod) -> i32 {
+fn apply(run: bool, runner: &dyn ShellRunner, method: &InstallMethod) -> i32 {
     let (result, _) = check(runner);
     match apply_action(&result, method) {
         ApplyAction::AlreadyCurrent { tag } => {
@@ -493,6 +499,9 @@ mod tests {
     struct MockRunner {
         /// Maps (program, first_arg) → (exit_code, stdout).
         responses: Vec<(String, String, i32, String)>,
+        /// Records every invocation as (program, full_args) so tests can assert
+        /// the complete command contract, not just the dispatch key.
+        calls: std::cell::RefCell<Vec<(String, Vec<String>)>>,
     }
 
     impl MockRunner {
@@ -503,12 +512,26 @@ mod tests {
                     .into_iter()
                     .map(|(p, a, c, s)| (p.to_string(), a.to_string(), c, s.to_string()))
                     .collect(),
+                calls: std::cell::RefCell::new(Vec::new()),
             }
+        }
+
+        /// The full argument vector the runner received for `program`, if called.
+        fn args_for(&self, program: &str) -> Option<Vec<String>> {
+            self.calls
+                .borrow()
+                .iter()
+                .find(|(p, _)| p == program)
+                .map(|(_, a)| a.clone())
         }
     }
 
-    impl CommandRunner for MockRunner {
+    impl ShellRunner for MockRunner {
         fn run(&self, program: &str, args: &[&str]) -> ShellOutcome {
+            self.calls.borrow_mut().push((
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect(),
+            ));
             let first_arg = args.first().copied().unwrap_or("");
             for (p, a, code, out) in &self.responses {
                 if p == program && a == first_arg {
@@ -533,6 +556,36 @@ mod tests {
         let runner = MockRunner::new(vec![("gh", "release", 0, "v2026.5.24-0")]);
         let tag = fetch_latest_tag(&runner);
         assert_eq!(tag, Some("v2026.5.24-0".to_string()));
+    }
+
+    #[test]
+    fn fetch_invokes_full_command_contract() {
+        // gh fails so both branches run; assert the EXACT args of each — incl.
+        // the `--repo` value and the curl URL, not just the first arg.
+        let json = r#"{"tag_name":"v2026.5.24-0"}"#;
+        let runner = MockRunner::new(vec![("gh", "release", 1, ""), ("curl", "-s", 0, json)]);
+        let _ = fetch_latest_tag(&runner);
+
+        let expected_gh: Vec<String> = [
+            "release",
+            "view",
+            "--repo",
+            "bemindlabs/BWOC-Framework",
+            "--json",
+            "tagName",
+            "-q",
+            ".tagName",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(runner.args_for("gh").unwrap(), expected_gh);
+
+        let expected_curl: Vec<String> = ["-s", GITHUB_API_URL]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(runner.args_for("curl").unwrap(), expected_curl);
     }
 
     #[test]

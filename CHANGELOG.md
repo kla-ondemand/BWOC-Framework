@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_The plugin-system cycle (#6) is essentially complete — the OS-level sandbox, Windows support, and OpenAI-compatible provider all shipped below. Remaining: brew distribution (#3, external tap repo) and the **deferred** items — cross-workspace give-feedback + Trust v2 cryptographic signed envelopes (`trust.md` defines v2 as warn-mode, shipped; signing waits for a concrete need) + Windows-specific guardrail patterns (#31). See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+## [v2026.5.24-1] — 2026-05-24 — 2.3.0
+
+**Minor release.** The plugin-system cycle (#6) — a real OS-level sandbox (landlock / `sandbox-exec`, replacing the stub), `bwoc-harness` Windows support, an OpenAI-compatible provider + vetted-model mode, cross-workspace `bwoc peer` view/learn, the `bwoc sessions` monitor, Trust v2 warn-mode, the document-kind mechanism, per-model token-limit auto-switch, and `bwoc run` / `bwoc update`. Cargo SemVer `2.2.0` → `2.3.0`. CalVer per [VERSION.md policy](VERSION.md#versioning-policy--dual-namespaces).
 
 ### Added
 

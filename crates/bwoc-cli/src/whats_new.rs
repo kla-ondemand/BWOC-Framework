@@ -12,17 +12,17 @@ use std::io::IsTerminal;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// One-line headline for the current release.
-pub const HEADLINE: &str = "BWOC 2.0 — first major version";
+pub const HEADLINE: &str = "BWOC 2.3 — plugin-system cycle complete";
 
 /// Short highlight bullets for the current MAJOR.MINOR. Keep ≤6, each a
 /// single line — they render in the banner and inform the upgrade notice.
 pub const HIGHLIGHTS: &[&str] = &[
-    "Kalyāṇamitta-7 trust + agent → agent messaging (sammā-vācā)",
-    "Inbox tmux wakeup + Stop-hook auto-reply",
-    "Saṅgha teams + shared task list — `bwoc team` / `bwoc task`",
-    "Dashboard lifecycle hotkeys — s start · x stop · g ghostty",
-    "Homebrew install — `brew tap bemindlabs/bwoc`",
-    "BREAKING: backend `gemini` → `antigravity` (`agy`)",
+    "OS-level sandbox — landlock (Linux) + sandbox-exec (macOS)",
+    "Windows support for `bwoc-harness` (re-enabled in CI)",
+    "OpenAI-compatible provider (vLLM/LM Studio/llama.cpp) + vetted-model mode",
+    "Cross-workspace `bwoc peer` view/learn · `bwoc sessions` monitor",
+    "Trust v2 warn-mode · per-model token-limit auto-switch",
+    "`bwoc run` headless · `bwoc update` · doc-kinds (notes/retro/research)",
 ];
 
 /// `MAJOR.MINOR` of the current build (the patch component churns on every

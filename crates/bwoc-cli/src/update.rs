@@ -1,0 +1,518 @@
+//! `bwoc update [--check]` — release-drift detection (read-only).
+//!
+//! ## Design
+//!
+//! The binary's own release identity is embedded at compile time via
+//! `option_env!("BWOC_RELEASE_CALVER")`. Released binaries set this to the
+//! Git tag (e.g. `v2026.5.24-0`). Dev/source builds leave it unset.
+//!
+//! `--check` fetches the latest GitHub release tag and compares CalVer tuples.
+//! Without `--check`, prints a notice that the apply path is not yet available.
+//!
+//! ## Fetch strategy
+//!
+//! 1. Primary: `gh release view --json tagName -q .tagName`
+//! 2. Fallback: `curl -s https://api.github.com/repos/bemindlabs/BWOC-Framework/releases/latest`
+//!    parsed with `serde_json`.
+//!
+//! Both are shells-out — no HTTP client dep added. The `CommandRunner` trait
+//! mirrors the seam from `run.rs` for offline unit-testability.
+
+use serde_json::Value;
+
+// ── CalVer types ──────────────────────────────────────────────────────────────
+
+/// Parsed form of `vYYYY.M.D-<patch>`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CalVer {
+    pub year: u32,
+    pub month: u32,
+    pub day: u32,
+    pub patch: u32,
+}
+
+impl CalVer {
+    /// Parse `vYYYY.M.D-<patch>` (leading `v` optional).
+    /// Returns `None` on any parse failure.
+    pub fn parse(s: &str) -> Option<Self> {
+        // Strip optional leading 'v'.
+        let s = s.strip_prefix('v').unwrap_or(s);
+        // Format: YYYY.M.D-patch  (M and D are not zero-padded in the spec)
+        let (date_part, patch_str) = s.split_once('-')?;
+        let mut parts = date_part.splitn(3, '.');
+        let year: u32 = parts.next()?.parse().ok()?;
+        let month: u32 = parts.next()?.parse().ok()?;
+        let day: u32 = parts.next()?.parse().ok()?;
+        let patch: u32 = patch_str.parse().ok()?;
+        Some(Self {
+            year,
+            month,
+            day,
+            patch,
+        })
+    }
+
+    /// Canonical string form: `vYYYY.M.D-patch`.
+    pub fn to_tag(&self) -> String {
+        format!("v{}.{}.{}-{}", self.year, self.month, self.day, self.patch)
+    }
+}
+
+// ── CommandRunner seam (mirrors run.rs) ──────────────────────────────────────
+
+/// Result of one shelled-out command.
+pub struct ShellOutcome {
+    pub exit_code: i32,
+    pub stdout: String,
+}
+
+/// Abstraction over shell-out so tests inject a mock.
+pub trait CommandRunner {
+    fn run(&self, program: &str, args: &[&str]) -> ShellOutcome;
+}
+
+/// Production runner: forks the real process, captures stdout.
+pub struct ProcessCommandRunner;
+
+impl CommandRunner for ProcessCommandRunner {
+    fn run(&self, program: &str, args: &[&str]) -> ShellOutcome {
+        use std::process::{Command, Stdio};
+        let result = Command::new(program)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+        match result {
+            Ok(out) => ShellOutcome {
+                exit_code: out.status.code().unwrap_or(1),
+                stdout: String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            },
+            Err(_) => ShellOutcome {
+                exit_code: 127,
+                stdout: String::new(),
+            },
+        }
+    }
+}
+
+// ── Fetch latest tag ──────────────────────────────────────────────────────────
+
+const GITHUB_REPO: &str = "bemindlabs/BWOC-Framework";
+const GITHUB_API_URL: &str =
+    "https://api.github.com/repos/bemindlabs/BWOC-Framework/releases/latest";
+
+/// Fetch the latest release tag. Tries `gh` first; falls back to `curl` + JSON.
+/// Returns `None` if both fail or return empty.
+pub fn fetch_latest_tag(runner: &dyn CommandRunner) -> Option<String> {
+    // Primary: gh CLI
+    let gh = runner.run(
+        "gh",
+        &[
+            "release",
+            "view",
+            "--repo",
+            GITHUB_REPO,
+            "--json",
+            "tagName",
+            "-q",
+            ".tagName",
+        ],
+    );
+    if gh.exit_code == 0 && !gh.stdout.is_empty() {
+        return Some(gh.stdout.trim().to_string());
+    }
+
+    // Fallback: curl + serde_json parse
+    let curl = runner.run("curl", &["-s", GITHUB_API_URL]);
+    if curl.exit_code == 0 && !curl.stdout.is_empty() {
+        if let Ok(v) = serde_json::from_str::<Value>(&curl.stdout) {
+            if let Some(tag) = v.get("tag_name").and_then(|t| t.as_str()) {
+                let tag = tag.trim().to_string();
+                if !tag.is_empty() {
+                    return Some(tag);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+// ── Check result ──────────────────────────────────────────────────────────────
+
+/// Outcome of the `--check` comparison.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CheckResult {
+    /// Binary CalVer == latest.
+    UpToDate { tag: String },
+    /// Binary CalVer < latest.
+    UpdateAvailable { current: String, latest: String },
+    /// Binary CalVer > latest (unusual; dev build tagged ahead).
+    AheadOfLatest { current: String, latest: String },
+    /// `BWOC_RELEASE_CALVER` not set — source/dev build.
+    SourceBuild { latest: String },
+    /// Latest tag could not be fetched.
+    FetchFailed,
+    /// Latest tag was fetched but is malformed.
+    MalformedLatestTag { raw: String },
+    /// The embedded CalVer is malformed (unusual; build misconfigured).
+    MalformedCurrentTag { raw: String, latest: String },
+}
+
+/// Run the `--check` comparison. Returns a `CheckResult` and the integer exit
+/// code (0 = up-to-date or source build, 1 = update available, 2 = error).
+pub fn check(runner: &dyn CommandRunner) -> (CheckResult, i32) {
+    let latest_raw = match fetch_latest_tag(runner) {
+        Some(t) => t,
+        None => return (CheckResult::FetchFailed, 2),
+    };
+
+    let latest_ver = match CalVer::parse(&latest_raw) {
+        Some(v) => v,
+        None => {
+            return (
+                CheckResult::MalformedLatestTag {
+                    raw: latest_raw.clone(),
+                },
+                2,
+            );
+        }
+    };
+
+    // The binary's embedded release tag (set at compile time by release.yml).
+    match option_env!("BWOC_RELEASE_CALVER") {
+        None => (
+            CheckResult::SourceBuild {
+                latest: latest_ver.to_tag(),
+            },
+            0,
+        ),
+        Some(current_raw) => match CalVer::parse(current_raw) {
+            None => (
+                CheckResult::MalformedCurrentTag {
+                    raw: current_raw.to_string(),
+                    latest: latest_ver.to_tag(),
+                },
+                2,
+            ),
+            Some(current_ver) => {
+                use std::cmp::Ordering;
+                match current_ver.cmp(&latest_ver) {
+                    Ordering::Equal => (
+                        CheckResult::UpToDate {
+                            tag: latest_ver.to_tag(),
+                        },
+                        0,
+                    ),
+                    Ordering::Less => (
+                        CheckResult::UpdateAvailable {
+                            current: current_ver.to_tag(),
+                            latest: latest_ver.to_tag(),
+                        },
+                        1,
+                    ),
+                    Ordering::Greater => (
+                        CheckResult::AheadOfLatest {
+                            current: current_ver.to_tag(),
+                            latest: latest_ver.to_tag(),
+                        },
+                        0,
+                    ),
+                }
+            }
+        },
+    }
+}
+
+// ── Public args struct ────────────────────────────────────────────────────────
+
+pub struct UpdateArgs {
+    /// When true, perform the read-only release-drift check and exit.
+    /// When false, print a notice that the apply path is not yet available.
+    pub check: bool,
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+/// Entry point called from `main.rs` — returns process exit code.
+pub fn run(args: UpdateArgs) -> i32 {
+    run_with(args, &ProcessCommandRunner)
+}
+
+/// Testable entry accepting a `CommandRunner` impl.
+pub fn run_with(args: UpdateArgs, runner: &dyn CommandRunner) -> i32 {
+    if !args.check {
+        println!("apply path not yet available — use 'bwoc update --check'");
+        return 0;
+    }
+
+    let (result, code) = check(runner);
+    print_check_result(&result);
+    code
+}
+
+fn print_check_result(result: &CheckResult) {
+    match result {
+        CheckResult::UpToDate { tag } => {
+            println!("bwoc update: up to date ({tag})");
+        }
+        CheckResult::UpdateAvailable { current, latest } => {
+            println!("bwoc update: update available: {current} → {latest}");
+            println!("  Download: https://github.com/{GITHUB_REPO}/releases/tag/{latest}");
+        }
+        CheckResult::AheadOfLatest { current, latest } => {
+            println!(
+                "bwoc update: ahead of latest release (dev build: {current}, latest: {latest})"
+            );
+        }
+        CheckResult::SourceBuild { latest } => {
+            println!("bwoc update: running a source build; latest release is {latest}");
+        }
+        CheckResult::FetchFailed => {
+            eprintln!(
+                "bwoc update: could not fetch latest release tag \
+                 (requires 'gh' CLI or 'curl' on PATH with network access)"
+            );
+        }
+        CheckResult::MalformedLatestTag { raw } => {
+            eprintln!("bwoc update: latest release tag '{raw}' is not valid CalVer (vYYYY.M.D-N)");
+        }
+        CheckResult::MalformedCurrentTag { raw, latest } => {
+            eprintln!(
+                "bwoc update: embedded release tag '{raw}' is not valid CalVer; \
+                 latest is {latest}"
+            );
+        }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CalVer parse + compare ─────────────────────────────────────────────
+
+    #[test]
+    fn calver_parse_full() {
+        let v = CalVer::parse("v2026.5.24-0").unwrap();
+        assert_eq!(
+            v,
+            CalVer {
+                year: 2026,
+                month: 5,
+                day: 24,
+                patch: 0
+            }
+        );
+    }
+
+    #[test]
+    fn calver_parse_without_v_prefix() {
+        let v = CalVer::parse("2026.12.31-9").unwrap();
+        assert_eq!(
+            v,
+            CalVer {
+                year: 2026,
+                month: 12,
+                day: 31,
+                patch: 9
+            }
+        );
+    }
+
+    #[test]
+    fn calver_parse_malformed_returns_none() {
+        assert!(CalVer::parse("v2026.5").is_none());
+        assert!(CalVer::parse("not-a-version").is_none());
+        assert!(CalVer::parse("").is_none());
+        assert!(CalVer::parse("v2026.5.24").is_none()); // missing patch
+    }
+
+    #[test]
+    fn calver_ordering_patch_wins_same_date() {
+        let v0 = CalVer::parse("v2026.5.24-0").unwrap();
+        let v1 = CalVer::parse("v2026.5.24-1").unwrap();
+        assert!(v1 > v0);
+    }
+
+    #[test]
+    fn calver_ordering_date_wins_over_patch() {
+        let old = CalVer::parse("v2026.5.24-9").unwrap();
+        let new = CalVer::parse("v2026.5.25-0").unwrap();
+        assert!(new > old);
+    }
+
+    #[test]
+    fn calver_to_tag_round_trips() {
+        let tag = "v2026.5.24-0";
+        assert_eq!(CalVer::parse(tag).unwrap().to_tag(), tag);
+    }
+
+    // ── Mock runner ────────────────────────────────────────────────────────
+
+    struct MockRunner {
+        /// Maps (program, first_arg) → (exit_code, stdout).
+        responses: Vec<(String, String, i32, String)>,
+    }
+
+    impl MockRunner {
+        /// Each entry: (program, first_arg, exit_code, stdout).
+        fn new(responses: Vec<(&str, &str, i32, &str)>) -> Self {
+            Self {
+                responses: responses
+                    .into_iter()
+                    .map(|(p, a, c, s)| (p.to_string(), a.to_string(), c, s.to_string()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl CommandRunner for MockRunner {
+        fn run(&self, program: &str, args: &[&str]) -> ShellOutcome {
+            let first_arg = args.first().copied().unwrap_or("");
+            for (p, a, code, out) in &self.responses {
+                if p == program && a == first_arg {
+                    return ShellOutcome {
+                        exit_code: *code,
+                        stdout: out.clone(),
+                    };
+                }
+            }
+            // No match → simulate not-found.
+            ShellOutcome {
+                exit_code: 127,
+                stdout: String::new(),
+            }
+        }
+    }
+
+    // ── fetch_latest_tag ───────────────────────────────────────────────────
+
+    #[test]
+    fn fetch_uses_gh_primary() {
+        let runner = MockRunner::new(vec![("gh", "release", 0, "v2026.5.24-0")]);
+        let tag = fetch_latest_tag(&runner);
+        assert_eq!(tag, Some("v2026.5.24-0".to_string()));
+    }
+
+    #[test]
+    fn fetch_falls_back_to_curl_when_gh_fails() {
+        let json = r#"{"tag_name":"v2026.5.24-0","name":"v2026.5.24-0"}"#;
+        let runner = MockRunner::new(vec![
+            ("gh", "release", 1, ""), // gh fails
+            ("curl", "-s", 0, json),  // curl succeeds
+        ]);
+        let tag = fetch_latest_tag(&runner);
+        assert_eq!(tag, Some("v2026.5.24-0".to_string()));
+    }
+
+    #[test]
+    fn fetch_returns_none_when_both_fail() {
+        let runner = MockRunner::new(vec![("gh", "release", 1, ""), ("curl", "-s", 1, "")]);
+        assert!(fetch_latest_tag(&runner).is_none());
+    }
+
+    // ── check() scenario matrix ────────────────────────────────────────────
+    //
+    // Note: option_env!("BWOC_RELEASE_CALVER") is resolved at compile time.
+    // In a dev/test build this env is NOT set, so all check() tests land on
+    // the SourceBuild branch. The scenarios below test the pure comparison
+    // logic directly (compare_versions) rather than going through check().
+    // The FetchFailed + MalformedLatestTag paths do NOT depend on the env.
+
+    /// Directly test the comparison function logic used inside check().
+    fn compare(current: &str, latest: &str) -> CheckResult {
+        let latest_ver = CalVer::parse(latest).expect("test: bad latest");
+        match CalVer::parse(current) {
+            None => CheckResult::MalformedCurrentTag {
+                raw: current.to_string(),
+                latest: latest_ver.to_tag(),
+            },
+            Some(cv) => {
+                use std::cmp::Ordering;
+                match cv.cmp(&latest_ver) {
+                    Ordering::Equal => CheckResult::UpToDate {
+                        tag: latest_ver.to_tag(),
+                    },
+                    Ordering::Less => CheckResult::UpdateAvailable {
+                        current: cv.to_tag(),
+                        latest: latest_ver.to_tag(),
+                    },
+                    Ordering::Greater => CheckResult::AheadOfLatest {
+                        current: cv.to_tag(),
+                        latest: latest_ver.to_tag(),
+                    },
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scenario_update_available() {
+        let r = compare("v2026.5.20-0", "v2026.5.24-0");
+        assert!(matches!(r, CheckResult::UpdateAvailable { .. }));
+        if let CheckResult::UpdateAvailable { current, latest } = r {
+            assert_eq!(current, "v2026.5.20-0");
+            assert_eq!(latest, "v2026.5.24-0");
+        }
+    }
+
+    #[test]
+    fn scenario_up_to_date() {
+        let r = compare("v2026.5.24-0", "v2026.5.24-0");
+        assert!(matches!(r, CheckResult::UpToDate { .. }));
+    }
+
+    #[test]
+    fn scenario_ahead_of_latest() {
+        let r = compare("v2026.5.25-0", "v2026.5.24-0");
+        assert!(matches!(r, CheckResult::AheadOfLatest { .. }));
+    }
+
+    #[test]
+    fn scenario_malformed_latest_tag() {
+        // check() itself handles this; replicate via fetch_latest_tag returning bad tag.
+        let runner = MockRunner::new(vec![("gh", "release", 0, "not-a-calver")]);
+        let tag = fetch_latest_tag(&runner);
+        assert_eq!(tag, Some("not-a-calver".to_string()));
+        // CalVer parse fails.
+        assert!(CalVer::parse("not-a-calver").is_none());
+    }
+
+    #[test]
+    fn scenario_source_build_flag() {
+        // option_env!(BWOC_RELEASE_CALVER) == None in test builds.
+        // Verify the arm is reachable: check() returns SourceBuild when env unset.
+        let runner = MockRunner::new(vec![("gh", "release", 0, "v2026.5.24-0")]);
+        let (result, code) = check(&runner);
+        // In a source build (no env set), we always get SourceBuild and code 0.
+        assert_eq!(code, 0);
+        assert!(
+            matches!(result, CheckResult::SourceBuild { .. }),
+            "expected SourceBuild for dev build, got {result:?}"
+        );
+        if let CheckResult::SourceBuild { latest } = result {
+            assert_eq!(latest, "v2026.5.24-0");
+        }
+    }
+
+    #[test]
+    fn scenario_fetch_failed() {
+        let runner = MockRunner::new(vec![("gh", "release", 1, ""), ("curl", "-s", 1, "")]);
+        let (result, code) = check(&runner);
+        assert_eq!(code, 2);
+        assert_eq!(result, CheckResult::FetchFailed);
+    }
+
+    // ── apply-path notice ─────────────────────────────────────────────────
+
+    #[test]
+    fn no_check_flag_returns_zero() {
+        // No runner calls needed — apply-path notice exits immediately.
+        let runner = MockRunner::new(vec![]);
+        let code = run_with(UpdateArgs { check: false }, &runner);
+        assert_eq!(code, 0);
+    }
+}

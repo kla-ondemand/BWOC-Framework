@@ -91,6 +91,8 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: cargo build (release)
+        env:
+          BWOC_RELEASE_CALVER: ${{ github.ref_name }}
         run: cargo build --release --workspace --target ${{ matrix.target }}
 
       - name: Package (tar.gz)

@@ -36,6 +36,7 @@ mod status;
 mod stop;
 mod supervise;
 mod trust;
+mod update;
 mod user_home;
 mod util;
 mod whats_new;
@@ -135,6 +136,13 @@ enum Commands {
     /// Manage a team's shared task list (add / list / claim / complete).
     #[command(subcommand)]
     Task(TaskCommand),
+    /// Check for a newer release of bwoc (read-only release-drift detection).
+    Update {
+        /// Compare the binary's embedded CalVer to the latest GitHub release tag.
+        /// Without this flag, prints a notice that the apply path is not yet available.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1489,6 +1497,10 @@ fn main() -> ExitCode {
                     json,
                 } => sangha::run_task_review(workspace, team, task, false, json),
             };
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Update { check }) => {
+            let code = update::run(update::UpdateArgs { check });
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

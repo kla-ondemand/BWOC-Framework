@@ -14,6 +14,7 @@ mod chat;
 mod check;
 mod completion;
 mod dashboard;
+mod deep_memory_cmd;
 mod doctor;
 mod git_worktree;
 mod help;
@@ -355,6 +356,42 @@ enum MemoryAction {
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
     },
+    // ------------------------------------------------------------------
+    // Tier 2 — deep-memory backend (optional; non-fatal when not configured)
+    // ------------------------------------------------------------------
+    /// Tier 2: emit prior context at session start (`deepMemoryCmd wake-up`).
+    WakeUp {
+        /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+        agent: String,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+    /// Tier 2: search past decisions/notes (`deepMemoryCmd search "<query>"`).
+    /// Named `t2-search` to avoid collision with the existing Tier 1 `search` subcommand.
+    #[command(name = "t2-search")]
+    T2Search {
+        /// Search query string.
+        query: String,
+        /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+        agent: String,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+    /// Tier 2: persist session learnings at session end (`deepMemoryCmd mine <path> --mode <mode>`).
+    Mine {
+        /// Path to the agent's sessions directory (passed verbatim to the backend).
+        path: PathBuf,
+        /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+        agent: String,
+        /// Mining mode — tool-defined string (e.g. `convos`). Default: `convos`.
+        #[arg(long, default_value = "convos")]
+        mode: String,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
 }
 
 impl MemoryAction {
@@ -451,6 +488,14 @@ impl MemoryAction {
                 names_only: false,
                 sort: None,
             },
+            // Tier 2 variants are routed directly to deep_memory_cmd in the
+            // main() dispatch and will never reach into_runtime. The
+            // unreachable! here keeps the exhaustiveness check satisfied.
+            MemoryAction::WakeUp { .. }
+            | MemoryAction::T2Search { .. }
+            | MemoryAction::Mine { .. } => {
+                unreachable!("Tier 2 variants are dispatched before into_runtime is called")
+            }
         }
     }
 }
@@ -1327,7 +1372,37 @@ fn main() -> ExitCode {
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Memory(action)) => {
-            let code = memory::run(action.into_runtime());
+            // Tier 2 variants are dispatched to deep_memory_cmd; all others
+            // go to the existing Tier 1 memory module unchanged.
+            let code = match action {
+                MemoryAction::WakeUp { agent, workspace } => {
+                    deep_memory_cmd::run(deep_memory_cmd::Tier2Args {
+                        action: deep_memory_cmd::Tier2Action::WakeUp,
+                        agent,
+                        workspace,
+                    })
+                }
+                MemoryAction::T2Search {
+                    query,
+                    agent,
+                    workspace,
+                } => deep_memory_cmd::run(deep_memory_cmd::Tier2Args {
+                    action: deep_memory_cmd::Tier2Action::Search { query },
+                    agent,
+                    workspace,
+                }),
+                MemoryAction::Mine {
+                    path,
+                    agent,
+                    mode,
+                    workspace,
+                } => deep_memory_cmd::run(deep_memory_cmd::Tier2Args {
+                    action: deep_memory_cmd::Tier2Action::Mine { path, mode },
+                    agent,
+                    workspace,
+                }),
+                tier1_action => memory::run(tier1_action.into_runtime()),
+            };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Team(command)) => {

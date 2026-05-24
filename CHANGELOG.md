@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_Trust v2 (signed envelopes, warn-mode), Tier 2 memory, and `bwoc-harness` Windows support continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+_Trust v2 (signed envelopes, warn-mode), a real OS-level sandbox (landlock / `sandbox-exec`, replacing the v1 stub), and `bwoc-harness` Windows support continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+
+### Added
+
+- **`bwoc run <agent> --task` — headless single-task invocation (issue #5)** — runs an agent on one task with no interactive session: the `claude` backend shells `claude -p`, `ollama` routes through `bwoc-harness`, and `codex` / `agy` / `kimi` return `HeadlessUnsupported` rather than failing silently. A `CommandRunner` trait keeps the path unit-testable offline (mock runner). Closes the "agents aren't headlessly runnable" gap that blocked autonomous orchestration.
+- **Tier 2 pluggable deep-memory backend** — a `DeepMemory` trait (`wake_up` / `search` / `mine`) in `bwoc-core` with a `ShellDeepMemory` reference impl (shells the `deepMemoryCmd` from `config.manifest.json`) and a `DisabledDeepMemory` no-op when Tier 2 is unconfigured; surfaced as `bwoc memory wake-up | t2-search <query> | mine <path>`. Realises AGENTS.md §7.2 — the optional deep-memory tier whose absence never breaks the agent.
+
+### Fixed
+
+- **`bwoc new` left `AGENTS.md` placeholders unsubstituted (issue #4)** — the scaffolder now substitutes every `config.manifest.json` placeholder into the generated `AGENTS.md` (and adds `--primary-capability`), so a freshly-created agent is backend-neutral-clean with no leftover `{{…}}` tokens.
 
 ## [v2026.5.24-0] — 2026-05-24 — 2.2.0
 

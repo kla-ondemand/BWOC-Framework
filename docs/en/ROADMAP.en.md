@@ -90,7 +90,7 @@ All items below are now implemented. The phase's Definition of Done (end-to-end 
 
 ### Remaining for ship
 
-- **Cross-backend validation** — full uppāda + ṭhiti against all 4 backend CLIs in CI (proves Samānattatā).
+- **Cross-backend validation** — full uppāda + ṭhiti against all 5 backend CLIs in CI (proves Samānattatā); `bwoc-harness` (ollama) is the fifth.
 - **Code signing** — Apple notarization + Windows Authenticode for release artifacts (user-cert authorization required).
 - **Linux musl build** — `x86_64-unknown-linux-gnu` + `aarch64-unknown-linux-gnu` ship; musl (Alpine / distroless) can be added when demanded.
 - **Memory mining tooling and pluggable Tier 2 backend interface.**
@@ -126,6 +126,16 @@ Both halves of the DoD are met: *coordinate without a central authority* (interc
 
 ---
 
+## Shipped beyond Phase 3 — v2026.5.24-0 (2.2.0)
+
+The following shipped after the Phase 3 DoD was declared met.
+
+| Item | Notes |
+|---|---|
+| `bwoc-harness` — self-hosted agentic runtime | OpenAI-compatible model-API client + agentic loop; safety pipeline (guardrails → permission → sandbox); Unix-first v1 (compiles on Windows, untested there). Adds **ollama** as the fifth declared backend: `bwoc spawn --backend ollama` launches `bwoc-harness` against any Ollama / OpenAI-compatible endpoint. 8 production components. Spec: [`docs/en/HARNESS.en.md`](HARNESS.en.md). |
+
+---
+
 ## Phase 4 — Reference Agents + Fleet
 
 **Definition of done:** ecosystem viability proven; cross-vendor production fleet governance is achievable.
@@ -150,7 +160,7 @@ These are realized by maintainers outside the original authors using the framewo
 ## Cross-cutting (every phase)
 
 - **Bilingual parity** — every spec doc has EN canonical + TH (and future languages); the bilingual-reminder hook gates this.
-- **Backend neutrality** — every CLI feature works against any of the four declared backends; `/check-neutrality` gates this for `AGENTS.md`.
+- **Backend neutrality** — every CLI feature works against any of the five declared backends; `/check-neutrality` gates this for `AGENTS.md`.
 - **Doc-version + software-version stay consistent** — both auto-stamped on every Claude Code edit.
 - **Open-source readiness** — every artifact a public contributor needs (CONTRIBUTING, SECURITY, CoC, LICENSE, VERSION, CHANGELOG, VISION, ROADMAP) is current and accurate.
 

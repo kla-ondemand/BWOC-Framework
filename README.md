@@ -7,7 +7,7 @@ A framework for building AI coding agents grounded in Buddhist philosophy as an 
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey.svg)](#tech-stack)
 [![Docs](https://img.shields.io/badge/docs-EN%20%7C%20TH-blue.svg)](modules/agent-template/docs/)
-[![Status](https://img.shields.io/badge/status-Phase%202%20ṭhiti-yellow.svg)](#status)
+[![Status](https://img.shields.io/badge/status-Phase%203%20%E2%9C%93%20%7C%20harness%20v1-green.svg)](#status)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 Buddhist principles are used here as **engineering thinking aids** — not religious interpretation. Pali terms are section names; the content is technical.
@@ -61,7 +61,7 @@ Buddhist principles are used here as **engineering thinking aids** — not relig
 BWOC provides a **template and doctrine** for creating AI coding agents with a consistent, principled foundation:
 
 - **One repo, one agent** — each agent lives in its own repository cloned from the template
-- **Backend-neutral** — runs on Claude, Antigravity, Codex, Kimi, or any LLM
+- **Backend-neutral** — runs on Claude, Antigravity, Codex, Kimi, or self-hosted models via `bwoc-harness` (`bwoc spawn --backend ollama`; Ollama / any OpenAI-compatible endpoint)
 - **Persistent memory** — accumulates knowledge across sessions with impermanence-aware pruning
 - **Multi-agent safe** — multiple agents co-operate in the same repo without collision
 
@@ -193,7 +193,7 @@ bwoc-framwork/
 │   └── bwoc-core/                 • shared types — manifest, workspace, identity
 ├── modules/
 │   └── agent-template/          ← Core template (cloned per agent — see B)
-│       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/AGY/CODEX/KIMI.md)
+│       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/AGY/CODEX/KIMI/OLLAMA.md)
 │       ├── docs/{en,th}/          • PHILOSOPHY · PRD · SRS · SELF-IMPROVEMENT · THREAT-MODEL · OVERVIEW
 │       ├── persona/ · mindsets/ · skills/ · interconnect/ · memories/
 │       └── scripts/               • incarnate.sh · check-agent-neutrality.sh
@@ -344,7 +344,7 @@ BWOC is specification-first. The reference implementation is a native, cross-pla
 | `bwoc` CLI                                              | Rust, single static binary                                                                                             | **macOS · Linux · Windows**                               |
 | `bwoc-agent` runtime (ships with each incarnated agent) | Rust, single static binary                                                                                             | **macOS · Linux · Windows**                               |
 | CLI i18n (output strings)                               | Project Fluent (`.ftl` per locale)                                                                                     | **Ships with TH · EN**; pluggable for any future language |
-| Backend integration                                     | Subprocess of the LLM's own CLI — Claude Code, Antigravity CLI, Codex CLI, Kimi CLI                                    | Whatever the backend supports                             |
+| Backend integration                                     | Subprocess of the LLM's own CLI — Claude Code, Antigravity CLI, Codex CLI, Kimi CLI — or `bwoc-harness` for self-hosted Ollama / OpenAI-compatible models (`bwoc spawn --backend ollama`) | Whatever the backend supports                             |
 | Distribution                                            | GitHub Release binaries with SHA-256 checksums; `cargo install --git` from source (crates.io publish targeted for 1.0) | —                                                         |
 | License                                                 | MIT (see [`LICENSE`](LICENSE))                                                                                         | —                                                         |
 
@@ -354,9 +354,9 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 ## Status
 
-**Current phase:** Phase 3 — _sammā-vācā inter-agent messaging_ — actively shipping. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — _ṭhiti operations_ — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
+**Current phase:** Phase 3 DoD met; `bwoc-harness` (self-hosted agentic runtime, the fifth backend) shipped in v2026.5.24-0 (2.2.0). Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — _ṭhiti operations_ — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
 
-**First public release:** [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) shipped 2026-05-23 with cross-platform binaries for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`. CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`; SHA-256 checksums shipped alongside each binary.
+**Latest release:** [`v2026.5.24-0`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.24-0) (2.2.0) shipped 2026-05-24 — adds `bwoc-harness` (self-hosted Ollama / OpenAI-compatible backend). First public release was [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) (2026-05-23) with cross-platform binaries for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `x86_64-pc-windows-msvc`. CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`; SHA-256 checksums shipped alongside each binary.
 
 **Latest unreleased work (post v2026.5.23-1):**
 

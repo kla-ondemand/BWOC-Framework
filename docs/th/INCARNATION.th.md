@@ -25,7 +25,7 @@ agent ใหม่เกิดขึ้นโดยการ copy [`modules/agen
 - Shell (bash, zsh, หรือ PowerShell + Git Bash บน Windows)
 - `git` บน PATH
 - `rsync`, `ln`, `python3` บน PATH (ใช้โดย `incarnate.sh` และ `check-agent-neutrality.sh`)
-- (เสริม) Backend CLI ที่เลือก — `claude`, `agy`, `codex`, หรือ `kimi` — ติดตั้งที่จุดที่จะใช้งาน agent
+- (เสริม) Backend CLI ที่เลือก — `claude`, `agy`, `codex`, `kimi`, หรือ `ollama` (ผ่าน `bwoc-harness`) — ติดตั้งที่จุดที่จะใช้งาน agent
 
 `bwoc` Rust CLI กำลังอยู่ใน Phase 1 v2.0 เส้นทาง canonical วันนี้ใช้ shell scripts ที่แนบมากับ template เมื่อ `bwoc new` port logic ของ script เสร็จ คำสั่งจะเหลือเพียง invocation เดียว
 
@@ -45,7 +45,7 @@ cd modules/agent-template
 - **`<agent-name>`** — ตัวพิมพ์เล็ก คั่นด้วย hyphen (เช่น `agent-database-schema`)
 - **`[target-path]`** — ทางเลือก ค่าเริ่มต้น: `../agent-<agent-name>/` ที่สัมพัทธ์กับ template
 
-Script จะ copy template, สร้าง backend symlinks (`CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` → `AGENTS.md`), init git, commit แรก, แล้วรัน neutrality check Output จะระบุทุกขั้นและจบด้วย block "Next steps"
+Script จะ copy template, สร้าง backend symlinks (`CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md`, `OLLAMA.md` → `AGENTS.md`), init git, commit แรก, แล้วรัน neutrality check Output จะระบุทุกขั้นและจบด้วย block "Next steps"
 
 ---
 
@@ -91,6 +91,7 @@ Phase 2 อาจเพิ่ม `bwoc manifest set <key> <value>` และ `bw
 + AGY.md    -> AGENTS.md
 + CODEX.md  -> AGENTS.md
 + KIMI.md   -> AGENTS.md
++ OLLAMA.md -> AGENTS.md
 + git initialized
 ...
 Done in 3s
@@ -164,7 +165,7 @@ git commit -m "feat(agent): incarnate agent-foo from BWOC template v2"
 
 ## เพิ่ม Backend
 
-4 backends เริ่มต้น (Claude, Antigravity, Codex, Kimi) แนบมาเป็น symlinks การเพิ่มตัวที่ห้าใช้คำสั่งเดียว:
+5 backends เริ่มต้น (Claude, Antigravity, Codex, Kimi, Ollama) แนบมาเป็น symlinks การเพิ่มตัวที่หกใช้คำสั่งเดียว:
 
 ```bash
 ln -s AGENTS.md <BACKEND>.md

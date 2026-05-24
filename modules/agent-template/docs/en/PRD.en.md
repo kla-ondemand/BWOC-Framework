@@ -69,7 +69,7 @@ Every AI coding agent in an organization shares the same skeleton, so knowledge 
 | Outcome | Measurement |
 |---|---|
 | Agent recalls prior decisions across sessions | ≥ 95% on prior-decision tests |
-| Backend switch with zero file edits | Same task → equivalent output on 4 backends |
+| Backend switch with zero file edits | Same task → equivalent output on 5 backends |
 | Three concurrent agents, zero collisions | CI smoke test over 100 task-pairs |
 | New agent ready to commit within 30 minutes | Onboarding stopwatch |
 | Agents reach consensus via protocol | Two agents complete a consensus exchange |
@@ -183,7 +183,7 @@ The user is a developer or AI engineer familiar with git, markdown, shell, and J
 |---|---|
 | Time-to-first-commit (new agent) | ≤ 30 min |
 | Branch collision rate | 0 over 100 task-pairs |
-| Backend portability | 4 backends, identical behavior |
+| Backend portability | 5 backends, identical behavior |
 | Memory recall accuracy | ≥ 95% |
 | Neutrality check pass rate | 100% on official templates |
 | Task-log completeness | 100% |

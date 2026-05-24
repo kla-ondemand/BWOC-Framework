@@ -49,6 +49,7 @@ For the **conceptual** stack (the 22 Buddhist-framework groupings), see [`PHILOS
 ┌──────────────────────────────────────────────────────┐
 │  Backend execution                                   │  ← LLM runtime
 │  - Subprocess: claude · agy · codex · kimi CLI       │
+│    or bwoc-harness (ollama / OpenAI-compatible)      │
 │  - Backend reads AGENTS.md via its own symlink       │
 │  - bwoc-agent runtime (Phase 2+) for control socket  │
 └──────────────────────────────────────────────────────┘
@@ -73,7 +74,7 @@ No agents *live* here. The framework provides the recipe.
 The canonical blueprint copied into every new agent. Contains:
 
 - **`AGENTS.md`** — backend-neutral single source of truth.
-- **Backend symlinks** — `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md` all point at `AGENTS.md`.
+- **Backend symlinks** — `CLAUDE.md`, `AGY.md`, `CODEX.md`, `KIMI.md`, `OLLAMA.md` all point at `AGENTS.md`.
 - **`config.manifest.json`** — the placeholder schema (`{{agentId}}`, `{{primaryModel}}`, etc.).
 - **Slots** — `persona/`, `memories/`, `interconnect/`, `mindsets/`, `skills/`.
 - **`scripts/`** — `incarnate.sh`, `check-agent-neutrality.sh`.
@@ -99,7 +100,7 @@ See [`crates/bwoc-cli/README.md`](../../crates/bwoc-cli/README.md) for install a
 
 ### 5. Backend Execution
 
-Phase 1 model: **`bwoc spawn` exec's the configured backend CLI** (Claude Code, Antigravity CLI, Codex CLI, Kimi CLI) in the agent's directory. The backend reads `AGENTS.md` via its own backend file (which symlinks there), and operates per the spec.
+Phase 1 model: **`bwoc spawn` exec's the configured backend CLI** (Claude Code, Antigravity CLI, Codex CLI, Kimi CLI) or **`bwoc-harness`** (`bwoc spawn --backend ollama` — self-hosted Ollama / any OpenAI-compatible endpoint) in the agent's directory. The backend reads `AGENTS.md` via its own backend file (which symlinks there), and operates per the spec. See [`docs/en/HARNESS.en.md`](HARNESS.en.md) for the harness spec.
 
 Phase 2+ adds the `bwoc-agent` runtime alongside, exposing a control socket so `bwoc status` and `bwoc send` can talk to a live agent.
 

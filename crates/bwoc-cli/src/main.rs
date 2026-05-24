@@ -136,12 +136,16 @@ enum Commands {
     /// Manage a team's shared task list (add / list / claim / complete).
     #[command(subcommand)]
     Task(TaskCommand),
-    /// Check for a newer release of bwoc (read-only release-drift detection).
+    /// Check for, or delegate, an upgrade of bwoc to the latest release.
     Update {
-        /// Compare the binary's embedded CalVer to the latest GitHub release tag.
-        /// Without this flag, prints a notice that the apply path is not yet available.
+        /// Read-only: compare the binary's embedded CalVer to the latest GitHub
+        /// release tag and report drift (no changes made).
         #[arg(long)]
         check: bool,
+        /// When upgrading, execute the delegated command (e.g. `brew upgrade
+        /// bwoc`) instead of only printing it. Raw binaries are never self-swapped.
+        #[arg(long)]
+        run: bool,
     },
 }
 
@@ -1499,8 +1503,8 @@ fn main() -> ExitCode {
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
-        Some(Commands::Update { check }) => {
-            let code = update::run(update::UpdateArgs { check });
+        Some(Commands::Update { check, run }) => {
+            let code = update::run(update::UpdateArgs { check, run });
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

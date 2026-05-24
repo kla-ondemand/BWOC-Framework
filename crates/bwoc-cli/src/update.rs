@@ -228,8 +228,11 @@ pub fn check(runner: &dyn CommandRunner) -> (CheckResult, i32) {
 
 pub struct UpdateArgs {
     /// When true, perform the read-only release-drift check and exit.
-    /// When false, print a notice that the apply path is not yet available.
     pub check: bool,
+    /// When applying (no `--check`), actually execute the delegated upgrade
+    /// command (e.g. `brew upgrade bwoc`) instead of only printing it.
+    /// Self-replacing a raw binary is never done — that path is deferred.
+    pub run: bool,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -241,14 +244,12 @@ pub fn run(args: UpdateArgs) -> i32 {
 
 /// Testable entry accepting a `CommandRunner` impl.
 pub fn run_with(args: UpdateArgs, runner: &dyn CommandRunner) -> i32 {
-    if !args.check {
-        println!("apply path not yet available — use 'bwoc update --check'");
-        return 0;
+    if args.check {
+        let (result, code) = check(runner);
+        print_check_result(&result);
+        return code;
     }
-
-    let (result, code) = check(runner);
-    print_check_result(&result);
-    code
+    apply(args.run, runner, &detect_install_method())
 }
 
 fn print_check_result(result: &CheckResult) {
@@ -282,6 +283,143 @@ fn print_check_result(result: &CheckResult) {
                 "bwoc update: embedded release tag '{raw}' is not valid CalVer; \
                  latest is {latest}"
             );
+        }
+    }
+}
+
+// ── Install method + delegate-only apply ───────────────────────────────────────
+
+/// How the running `bwoc` binary was installed — picks the upgrade route.
+#[derive(Debug, PartialEq, Eq)]
+pub enum InstallMethod {
+    /// Homebrew (Cellar prefix). Upgrade by delegating to `brew`.
+    Homebrew,
+    /// `cargo install` (under `~/.cargo/bin`). Upgrade by delegating to `cargo`.
+    Cargo,
+    /// A raw binary on `PATH`, managed by no package manager.
+    Raw,
+}
+
+/// Classify an executable path into an [`InstallMethod`]. Pure (takes the path)
+/// so it is unit-testable without touching the filesystem. `current_exe()`
+/// resolves symlinks, so a Homebrew install surfaces its `…/Cellar/…` path.
+pub fn classify_install_path(exe: &str) -> InstallMethod {
+    if exe.contains("/Cellar/")
+        || exe.starts_with("/opt/homebrew/")
+        || exe.starts_with("/home/linuxbrew/")
+    {
+        InstallMethod::Homebrew
+    } else if exe.contains("/.cargo/bin/") {
+        InstallMethod::Cargo
+    } else {
+        InstallMethod::Raw
+    }
+}
+
+/// Detect how the current process's binary was installed.
+fn detect_install_method() -> InstallMethod {
+    std::env::current_exe()
+        .map(|p| classify_install_path(&p.to_string_lossy()))
+        .unwrap_or(InstallMethod::Raw)
+}
+
+/// The decided apply action — pure, derived from the check result + install
+/// method, so the routing is fully unit-testable.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ApplyAction {
+    /// Nothing to do — already at (or ahead of) the latest release.
+    AlreadyCurrent { tag: String },
+    /// Source/dev build — "upgrade" means pull + rebuild.
+    SourceRebuild,
+    /// Delegate to a package manager (program + args).
+    Delegate { program: String, args: Vec<String> },
+    /// Raw binary, update available — point at the release page (no self-swap).
+    Manual,
+    /// The drift check itself failed — don't upgrade blindly.
+    CheckError,
+}
+
+/// Decide the apply action. Pure: no I/O, no process exec.
+pub fn apply_action(result: &CheckResult, method: &InstallMethod) -> ApplyAction {
+    match result {
+        CheckResult::UpToDate { tag } => ApplyAction::AlreadyCurrent { tag: tag.clone() },
+        CheckResult::AheadOfLatest { current, .. } => ApplyAction::AlreadyCurrent {
+            tag: current.clone(),
+        },
+        CheckResult::SourceBuild { .. } => ApplyAction::SourceRebuild,
+        CheckResult::FetchFailed
+        | CheckResult::MalformedLatestTag { .. }
+        | CheckResult::MalformedCurrentTag { .. } => ApplyAction::CheckError,
+        CheckResult::UpdateAvailable { .. } => match method {
+            InstallMethod::Homebrew => ApplyAction::Delegate {
+                program: "brew".to_string(),
+                args: vec!["upgrade".to_string(), "bwoc".to_string()],
+            },
+            InstallMethod::Cargo => ApplyAction::Delegate {
+                program: "cargo".to_string(),
+                args: vec![
+                    "install".to_string(),
+                    "--git".to_string(),
+                    format!("https://github.com/{GITHUB_REPO}"),
+                    "bwoc-cli".to_string(),
+                ],
+            },
+            InstallMethod::Raw => ApplyAction::Manual,
+        },
+    }
+}
+
+/// Apply (delegate-only). Runs the drift check, decides the action, prints it,
+/// and — only with `run` and only for a package-manager delegate — executes it.
+/// A raw binary is never self-replaced here (that path is deferred for review).
+fn apply(run: bool, runner: &dyn CommandRunner, method: &InstallMethod) -> i32 {
+    let (result, _) = check(runner);
+    match apply_action(&result, method) {
+        ApplyAction::AlreadyCurrent { tag } => {
+            println!("bwoc update: already up to date ({tag})");
+            0
+        }
+        ApplyAction::SourceRebuild => {
+            println!("bwoc update: running a source build — upgrade by rebuilding from latest:");
+            println!("  git pull && cargo install --path crates/bwoc-cli");
+            0
+        }
+        ApplyAction::CheckError => {
+            // Surface the underlying check failure; never upgrade on uncertainty.
+            print_check_result(&result);
+            2
+        }
+        ApplyAction::Manual => {
+            println!("bwoc update: a newer release is available.");
+            println!("  This binary is managed by neither brew nor cargo — download the latest:");
+            println!("  https://github.com/{GITHUB_REPO}/releases/latest");
+            println!("  Verify the SHA-256 against the published checksum, then replace it.");
+            0
+        }
+        ApplyAction::Delegate { program, args } => {
+            let display = format!("{program} {}", args.join(" "));
+            if run {
+                println!("bwoc update: a newer release is available — running `{display}`");
+                exec_delegated(&program, &args)
+            } else {
+                println!("bwoc update: a newer release is available. Upgrade with:");
+                println!("  {display}");
+                println!("  (or re-run `bwoc update --run` to execute it)");
+                0
+            }
+        }
+    }
+}
+
+/// Execute a delegated upgrade command with inherited stdio so the package
+/// manager's progress streams straight to the terminal. Returns its exit code.
+fn exec_delegated(program: &str, args: &[String]) -> i32 {
+    use std::process::Command;
+    match Command::new(program).args(args).status() {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(_) => {
+            eprintln!("bwoc update: could not run '{program}' — is it installed and on PATH?");
+            127
         }
     }
 }
@@ -506,13 +644,142 @@ mod tests {
         assert_eq!(result, CheckResult::FetchFailed);
     }
 
-    // ── apply-path notice ─────────────────────────────────────────────────
+    // ── install-method classification ─────────────────────────────────────
 
     #[test]
-    fn no_check_flag_returns_zero() {
-        // No runner calls needed — apply-path notice exits immediately.
-        let runner = MockRunner::new(vec![]);
-        let code = run_with(UpdateArgs { check: false }, &runner);
+    fn classify_homebrew_cellar() {
+        // current_exe() resolves the brew symlink to a Cellar path.
+        assert_eq!(
+            classify_install_path("/opt/homebrew/Cellar/bwoc/2.2.0/bin/bwoc"),
+            InstallMethod::Homebrew
+        );
+        assert_eq!(
+            classify_install_path("/usr/local/Cellar/bwoc/2.2.0/bin/bwoc"),
+            InstallMethod::Homebrew
+        );
+        assert_eq!(
+            classify_install_path("/home/linuxbrew/.linuxbrew/bin/bwoc"),
+            InstallMethod::Homebrew
+        );
+    }
+
+    #[test]
+    fn classify_cargo_bin() {
+        assert_eq!(
+            classify_install_path("/Users/dev/.cargo/bin/bwoc"),
+            InstallMethod::Cargo
+        );
+    }
+
+    #[test]
+    fn classify_raw_binary() {
+        assert_eq!(
+            classify_install_path("/usr/local/bin/bwoc"),
+            InstallMethod::Raw
+        );
+        assert_eq!(classify_install_path("/tmp/bwoc"), InstallMethod::Raw);
+    }
+
+    // ── apply-action routing (pure) ────────────────────────────────────────
+
+    fn update_available() -> CheckResult {
+        CheckResult::UpdateAvailable {
+            current: "v2026.5.23-3".to_string(),
+            latest: "v2026.5.24-0".to_string(),
+        }
+    }
+
+    #[test]
+    fn apply_homebrew_delegates_to_brew() {
+        let action = apply_action(&update_available(), &InstallMethod::Homebrew);
+        assert_eq!(
+            action,
+            ApplyAction::Delegate {
+                program: "brew".to_string(),
+                args: vec!["upgrade".to_string(), "bwoc".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn apply_cargo_delegates_to_cargo() {
+        let action = apply_action(&update_available(), &InstallMethod::Cargo);
+        match action {
+            ApplyAction::Delegate { program, args } => {
+                assert_eq!(program, "cargo");
+                assert_eq!(args[0], "install");
+                assert!(args.contains(&"bwoc-cli".to_string()));
+            }
+            other => panic!("expected cargo delegate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_raw_is_manual_no_self_swap() {
+        let action = apply_action(&update_available(), &InstallMethod::Raw);
+        assert_eq!(action, ApplyAction::Manual);
+    }
+
+    #[test]
+    fn apply_up_to_date_is_noop() {
+        let r = CheckResult::UpToDate {
+            tag: "v2026.5.24-0".to_string(),
+        };
+        assert_eq!(
+            apply_action(&r, &InstallMethod::Homebrew),
+            ApplyAction::AlreadyCurrent {
+                tag: "v2026.5.24-0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn apply_source_build_is_rebuild() {
+        let r = CheckResult::SourceBuild {
+            latest: "v2026.5.24-0".to_string(),
+        };
+        assert_eq!(
+            apply_action(&r, &InstallMethod::Raw),
+            ApplyAction::SourceRebuild
+        );
+    }
+
+    #[test]
+    fn apply_fetch_failure_is_check_error_not_blind_upgrade() {
+        assert_eq!(
+            apply_action(&CheckResult::FetchFailed, &InstallMethod::Homebrew),
+            ApplyAction::CheckError
+        );
+    }
+
+    // ── apply integration via run_with (no --check) ────────────────────────
+
+    #[test]
+    fn run_with_apply_source_build_returns_zero() {
+        // In a test build `BWOC_RELEASE_CALVER` is unset → check() = SourceBuild
+        // (given a successful fetch) → apply = source-rebuild guidance, code 0.
+        let runner = MockRunner::new(vec![("gh", "release", 0, "v2026.5.24-0")]);
+        let code = run_with(
+            UpdateArgs {
+                check: false,
+                run: false,
+            },
+            &runner,
+        );
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn run_with_apply_check_failure_returns_two() {
+        // Fetch fails → never upgrade on uncertainty.
+        let runner = MockRunner::new(vec![]);
+        let code = run_with(
+            UpdateArgs {
+                check: false,
+                run: false,
+            },
+            &runner,
+        );
+        assert_eq!(code, 2);
     }
 }

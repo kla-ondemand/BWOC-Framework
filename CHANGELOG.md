@@ -6,7 +6,11 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
-_Trust v2 (signed envelopes, warn-mode) and Tier 2 memory continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+_Trust v2 (signed envelopes, warn-mode), Tier 2 memory, and `bwoc-harness` Windows support continue here. See [`docs/en/ROADMAP.en.md`](docs/en/ROADMAP.en.md) §Phase 3._
+
+## [v2026.5.24-0] — 2026-05-24 — 2.2.0
+
+**Minor release.** Phase 3 (*vaya + interconnect*) — inter-workspace routing, worktree lifecycle, and `bwoc retire` full vaya — plus the new **`bwoc-harness`** self-hosted agentic runtime (run Ollama / any OpenAI-compatible model as a full BWOC agent; Unix-first in v1), and the Windows-CI TOML fix + `actions/checkout` v6 bump. Cargo SemVer `2.1.0` → `2.2.0`. CalVer per [VERSION.md policy](VERSION.md#versioning-policy--dual-namespaces).
 
 ### Added
 

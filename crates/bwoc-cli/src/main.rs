@@ -1130,6 +1130,10 @@ struct NewArgs {
     /// Persona anti-scope: one-line "this agent does NOT do Y".
     #[arg(long = "out-of-scope")]
     out_of_scope: Option<String>,
+    /// Primary capability: longer description of what this agent is skilled at.
+    /// Fills `{{primaryCapability}}`. Defaults to the role value when not provided.
+    #[arg(long = "primary-capability")]
+    primary_capability: Option<String>,
     /// Initial mindsets to seed — comma-separated kebab-case names (e.g.
     /// "verify-before-act,right-amount"). One stub `.md` per name.
     #[arg(long)]
@@ -1166,6 +1170,7 @@ impl NewArgs {
             worktree_base: self.worktree_base,
             scope: self.scope,
             out_of_scope: self.out_of_scope,
+            primary_capability: self.primary_capability,
             mindsets: self.mindsets,
             skills: self.skills,
             json: self.json,

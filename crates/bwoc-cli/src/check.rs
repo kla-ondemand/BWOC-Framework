@@ -92,8 +92,8 @@ fn detect_mode(manifest: Option<&serde_json::Value>) -> AuditMode {
 /// Extract every `{{identifier}}` placeholder found in `content`. Identifier
 /// = ASCII alphanumeric + underscore (matches the AGENTS.md spec, which
 /// uses camelCase keys). Duplicates collapse — each placeholder reported
-/// at most once. Used by the incarnation-mode check.
-fn extract_placeholders(content: &str) -> Vec<String> {
+/// at most once. Used by the incarnation-mode check and by `new.rs` tests.
+pub(crate) fn extract_placeholders(content: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut rest = content;
     while let Some(open) = rest.find("{{") {

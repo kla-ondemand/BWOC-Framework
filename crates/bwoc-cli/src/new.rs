@@ -51,6 +51,9 @@ pub struct NewArgs {
     pub scope: Option<String>,
     /// Persona anti-scope: 1-line "this agent does NOT do Y". Fills `{{outOfScope}}`.
     pub out_of_scope: Option<String>,
+    /// Primary capability: longer description of what this agent is skilled at.
+    /// Fills `{{primaryCapability}}`. Defaults to the role value when not provided.
+    pub primary_capability: Option<String>,
     /// Comma-separated names of initial mindsets — one stub `.md` per name.
     pub mindsets: Option<String>,
     /// Comma-separated names of initial skills — one stub `.md` per name.
@@ -80,6 +83,8 @@ struct Resolved {
     worktree_base: Option<String>,
     scope_description: Option<String>,
     out_of_scope: Option<String>,
+    /// Fills `{{primaryCapability}}`. Defaults to `role` when not supplied.
+    primary_capability: Option<String>,
     mindsets: Vec<String>,
     skills: Vec<String>,
 }
@@ -198,11 +203,12 @@ pub fn incarnate(
     let manifest_path = resolved.target.join("config.manifest.json");
     manifest.save_to_path(&manifest_path)?;
 
-    // 4. Substitute persona scope/anti-scope placeholders in AGENTS.md +
-    //    persona/README.md (only when user supplied values; otherwise the
-    //    `{{placeholder}}` stays raw for manual edit).
+    // 4. Substitute all manifest-backed placeholders in AGENTS.md +
+    //    persona/README.md so the freshly-incarnated agent passes `bwoc check`
+    //    without any manual editing. The only placeholder left raw is
+    //    `{{taskId}}`, which is resolved at task-assignment time (runtime).
     let persona_filled = resolved.scope_description.is_some() || resolved.out_of_scope.is_some();
-    substitute_persona_placeholders(&resolved.target, &resolved)?;
+    substitute_all_placeholders(&resolved.target, &resolved)?;
 
     // 5. Seed user-requested mindset and skill stubs (each is a stub `.md`
     //    file under mindsets/<name>.md or skills/<name>.md; user fills the
@@ -587,6 +593,12 @@ fn resolve(
         "Persona anti-scope — what does it NOT do? (one line; Enter to skip)",
         tty,
     )?;
+    let primary_capability = resolve_optional_text(
+        args.primary_capability,
+        "primaryCapability",
+        "Primary capability — longer description of what this agent is skilled at (Enter to use role)",
+        tty,
+    )?;
     let mindsets = parse_comma_list(args.mindsets.as_deref())
         .or_else(|| {
             prompt_optional_csv(
@@ -622,6 +634,7 @@ fn resolve(
         worktree_base: args.worktree_base,
         scope_description,
         out_of_scope,
+        primary_capability,
         mindsets,
         skills,
     })
@@ -1003,16 +1016,59 @@ fn build_manifest(r: &Resolved) -> Manifest {
     }
 }
 
-/// Substitute the persona placeholders in the freshly-cloned agent's
-/// AGENTS.md and persona/README.md. Empty / None values leave the
-/// `{{placeholder}}` raw so the user knows to edit later. Errors are
-/// surfaced (file IO problems should fail loud).
-fn substitute_persona_placeholders(target: &Path, r: &Resolved) -> Result<(), NewError> {
+/// Substitute every manifest-backed placeholder in the freshly-cloned
+/// agent's AGENTS.md and persona/README.md. After this runs, the only
+/// `{{...}}` patterns remaining must be `{{taskId}}` (runtime) so that
+/// `bwoc check` reports zero violations on a brand-new incarnation.
+///
+/// Rules for optional fields:
+/// - `{{fallbackModel}}`  → empty string when not provided (config block becomes `""`)
+/// - `{{deepMemoryCmd}}`  → `# (Tier 2 not configured)` when not provided
+/// - `{{worktreeBase}}`   → `/tmp` when not provided
+/// - `{{primaryCapability}}` → `role` value when not provided
+/// - `{{moduleName}}`     → `<module>` (shows it is a per-task fill-in, not an
+///   incarnation constant; angle brackets signal an example)
+/// - `{{maxConcurrentTasks}}` → `3` (the spec default from config.manifest.json)
+fn substitute_all_placeholders(target: &Path, r: &Resolved) -> Result<(), NewError> {
+    let agent_id = format!("agent-{}", r.name);
     let scope = r.scope_description.as_deref().unwrap_or("");
     let out_of_scope = r.out_of_scope.as_deref().unwrap_or("");
-    if scope.is_empty() && out_of_scope.is_empty() {
-        return Ok(());
-    }
+    let primary_capability = r
+        .primary_capability
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&r.role);
+    let fallback_model = r.fallback_model.as_deref().unwrap_or("");
+    let deep_memory_cmd = r
+        .deep_memory_cmd
+        .as_deref()
+        .unwrap_or("# (Tier 2 not configured)");
+    let worktree_base = r.worktree_base.as_deref().unwrap_or("/tmp");
+
+    // Ordered pairs: (placeholder, replacement). Applied to every target file.
+    let substitutions: &[(&str, &str)] = &[
+        ("{{agentId}}", &agent_id),
+        ("{{name}}", &r.name),
+        ("{{agentRole}}", &r.role),
+        ("{{primaryCapability}}", primary_capability),
+        ("{{primaryModel}}", &r.primary_model),
+        ("{{fallbackModel}}", fallback_model),
+        ("{{memoryPath}}", &r.memory_path),
+        ("{{deepMemoryCmd}}", deep_memory_cmd),
+        ("{{lintCmd}}", &r.lint_cmd),
+        ("{{formatCmd}}", &r.format_cmd),
+        ("{{testCmd}}", &r.test_cmd),
+        ("{{buildCmd}}", &r.build_cmd),
+        ("{{worktreeBase}}", worktree_base),
+        ("{{scopeDescription}}", scope),
+        ("{{outOfScope}}", out_of_scope),
+        // Documentation-example placeholders:
+        // moduleName is per-task (filled at task time), shown in section 2.2 example.
+        // maxConcurrentTasks is the spec default (3); not stored in the Manifest struct.
+        ("{{moduleName}}", "<module>"),
+        ("{{maxConcurrentTasks}}", "3"),
+    ];
+
     for rel in ["AGENTS.md", "persona/README.md"] {
         let path = target.join(rel);
         if !path.is_file() {
@@ -1020,14 +1076,11 @@ fn substitute_persona_placeholders(target: &Path, r: &Resolved) -> Result<(), Ne
         }
         let content = std::fs::read_to_string(&path)?;
         let mut updated = content.clone();
-        if !scope.is_empty() {
-            updated = updated.replace("{{scopeDescription}}", scope);
-        }
-        if !out_of_scope.is_empty() {
-            updated = updated.replace("{{outOfScope}}", out_of_scope);
+        for (placeholder, replacement) in substitutions {
+            updated = updated.replace(placeholder, replacement);
         }
         if updated != content {
-            std::fs::write(&path, updated)?;
+            std::fs::write(&path, &updated)?;
         }
     }
     Ok(())
@@ -1196,6 +1249,7 @@ mod tests {
             worktree_base: None,
             scope: None,
             out_of_scope: None,
+            primary_capability: None,
             mindsets: None,
             skills: None,
             json: false,
@@ -1275,6 +1329,7 @@ mod tests {
             worktree_base: None,
             scope_description: None,
             out_of_scope: None,
+            primary_capability: None,
             mindsets: Vec::new(),
             skills: Vec::new(),
         };
@@ -1353,5 +1408,96 @@ mod tests {
         assert!(descs.contains_key("agentRole"));
         assert!(descs.contains_key("primaryModel"));
         assert!(descs.contains_key("lintCmd"));
+    }
+
+    // ---- End-to-end: incarnate + check no unsubstituted placeholders ----------
+    // Verifies the fix for GitHub issue #4: `bwoc new` must substitute all
+    // manifest-backed placeholders so `bwoc check` passes with zero violations
+    // on a freshly-incarnated agent (except the runtime `{{taskId}}`).
+    //
+    // Unix-only: `incarnate` calls `create_symlinks` which requires Unix symlinks.
+
+    #[cfg(unix)]
+    #[test]
+    fn incarnate_leaves_no_unsubstituted_placeholders() {
+        use crate::check::{audit, extract_placeholders};
+
+        let template =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../modules/agent-template");
+        // Skip if template doesn't exist (e.g. partial checkout).
+        if !template.join("AGENTS.md").is_file() {
+            return;
+        }
+
+        let target =
+            std::env::temp_dir().join(format!("bwoc-incarnate-check-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&target);
+
+        let args = NewArgs {
+            name: "scribe".to_string(),
+            target: Some(target.clone()),
+            template: Some(template),
+            backend: Backend::Claude,
+            lang: "en".to_string(),
+            role: Some("documentation writer".to_string()),
+            primary_model: Some("claude-opus-4-7".to_string()),
+            fallback_model: Some("claude-sonnet-4-6".to_string()),
+            lint_cmd: Some("cargo clippy --all-targets -- -D warnings".to_string()),
+            format_cmd: Some("cargo fmt --all -- --check".to_string()),
+            test_cmd: Some("cargo test --workspace".to_string()),
+            build_cmd: Some("cargo build --workspace".to_string()),
+            memory_path: "memories/".to_string(),
+            sessions_path: None,
+            deep_memory_cmd: None,
+            worktree_base: Some("/tmp".to_string()),
+            scope: Some("writes and maintains documentation".to_string()),
+            out_of_scope: Some("does not write production code".to_string()),
+            primary_capability: Some(
+                "technical writing; doc review; changelog maintenance".to_string(),
+            ),
+            mindsets: None,
+            skills: None,
+            json: false,
+        };
+
+        let bundle = i18n::bundle_for("en");
+        incarnate(args, &bundle).expect("incarnate should succeed");
+
+        // Read the incarnated AGENTS.md and assert no unsubstituted {{...}}
+        // placeholders remain (except the runtime {{taskId}}).
+        let agents_md = target.join("AGENTS.md");
+        assert!(
+            agents_md.is_file(),
+            "AGENTS.md must exist after incarnation"
+        );
+        let content = fs::read_to_string(&agents_md).expect("AGENTS.md readable");
+
+        let found = extract_placeholders(&content);
+        let runtime_only: &[&str] = &["{{taskId}}"];
+        let unsubstituted: Vec<&String> = found
+            .iter()
+            .filter(|ph| !runtime_only.contains(&ph.as_str()))
+            .collect();
+
+        assert!(
+            unsubstituted.is_empty(),
+            "AGENTS.md has unsubstituted placeholders after incarnation: {:?}",
+            unsubstituted
+        );
+
+        // Also run the full audit in incarnation mode and assert zero violations.
+        let report = audit(&target);
+        let placeholder_violations: Vec<&String> = report
+            .violations
+            .iter()
+            .filter(|v| v.contains("unsubstituted placeholder"))
+            .collect();
+        assert!(
+            placeholder_violations.is_empty(),
+            "bwoc check found placeholder violations: {:?}",
+            placeholder_violations
+        );
+
+        let _ = fs::remove_dir_all(&target);
     }
 }

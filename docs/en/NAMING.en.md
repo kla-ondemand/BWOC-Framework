@@ -24,6 +24,8 @@ A single, consistent convention for every `*.md` file in the BWOC framework, age
 | 8 | Memory index | `<memory-scope>/` | `MEMORY.md` | `~/.bwoc/memory/MEMORY.md` · `<agent>/memories/MEMORY.md` |
 | 9 | Memory entry | `<memory-scope>/` | `<type>_<slug>.md` | `feedback_policy_docs.md` · `user_role.md` |
 | 10 | Note | `notes/` (any scope) | `YYYY-MM-DD_<title>.md` | `notes/2026-05-22_workspace-design.md` |
+| 10a | Retrospective | `retrospectives/` (any scope) | `YYYY-MM-DD_<title>.md` | `retrospectives/2026-05-24_sprint-1.md` |
+| 10b | Research document | `research/` (any scope) | `YYYY-MM-DD_<title>.md` | `research/2026-05-24_llm-caching.md` |
 | 11 | Claude Code instructions | repo root | `CLAUDE.md`, `CLAUDE.local.md` | `CLAUDE.md` · `CLAUDE.local.md` |
 | 12 | Agent instructions (backend-neutral) | repo root of an agent | `AGENTS.md` + symlinks | `AGENTS.md` · `CLAUDE.md → AGENTS.md` |
 
@@ -96,6 +98,20 @@ Notes can live at any of:
 | Project-level | `<repo>/notes/` | Decisions about the framework or this repo |
 | Workspace | `<workspace>/.bwoc/notes/` | Decisions scoped to a workspace (Phase 2+) |
 | Per-user | `~/.bwoc/notes/` | Personal session notes that cross workspaces |
+
+### `YYYY-MM-DD_<title>.md` — Retrospectives
+
+For structured Paññā-3 reviews of a sprint, session, or milestone. Uses the same date-slug pattern as notes.
+
+Sections: **Sutamayā** (what the data / docs say), **Cintāmayā** (synthesis / pattern), **Bhāvanāmayā** (action taken), **Metrics**.
+
+`bwoc retro new "<title>"` creates one in `retrospectives/` using the built-in template.
+
+### `YYYY-MM-DD_<title>.md` — Research
+
+For exploratory investigations: a question, scope, sources, findings, and recommendation.  Committed to the repo like notes and retrospectives.
+
+`bwoc research new "<title>"` creates one in `research/` using the built-in template.
 
 ---
 

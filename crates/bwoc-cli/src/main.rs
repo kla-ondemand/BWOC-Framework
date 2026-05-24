@@ -15,6 +15,7 @@ mod check;
 mod completion;
 mod dashboard;
 mod deep_memory_cmd;
+mod doc_cmd;
 mod doctor;
 mod git_worktree;
 mod help;
@@ -147,6 +148,15 @@ enum Commands {
         #[arg(long)]
         run: bool,
     },
+    /// Manage workspace notes (YYYY-MM-DD_<slug>.md in notes/).
+    #[command(subcommand)]
+    Notes(DocSubcommand),
+    /// Manage workspace retrospectives (YYYY-MM-DD_<slug>.md in retrospectives/).
+    #[command(name = "retro", subcommand)]
+    Retro(DocSubcommand),
+    /// Manage workspace research documents (YYYY-MM-DD_<slug>.md in research/).
+    #[command(subcommand)]
+    Research(DocSubcommand),
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -400,6 +410,33 @@ enum MemoryAction {
         /// Mining mode — tool-defined string (e.g. `convos`). Default: `convos`.
         #[arg(long, default_value = "convos")]
         mode: String,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+}
+
+/// Sub-actions shared by all document-kind commands (`notes`, `retro`, `research`).
+#[derive(clap::Subcommand, Debug)]
+enum DocSubcommand {
+    /// Create a new document with the given title.
+    New {
+        /// Document title (used as the filename slug).
+        title: String,
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+    /// List documents of this kind (newest first).
+    List {
+        /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+        #[arg(long = "workspace")]
+        workspace: Option<PathBuf>,
+    },
+    /// Print a document matching a date prefix or exact filename.
+    View {
+        /// Date prefix (e.g. `2026-05-24`) or full filename stem.
+        name: String,
         /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
         #[arg(long = "workspace")]
         workspace: Option<PathBuf>,
@@ -1507,6 +1544,18 @@ fn main() -> ExitCode {
             let code = update::run(update::UpdateArgs { check, run });
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
+        Some(Commands::Notes(sub)) => {
+            let code = dispatch_doc_cmd("notes", sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Retro(sub)) => {
+            let code = dispatch_doc_cmd("retrospectives", sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Research(sub)) => {
+            let code = dispatch_doc_cmd("research", sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
         None => {
             // No subcommand — print the startup banner. Banner already
             // includes a `bwoc --help` hint at the bottom.
@@ -1532,4 +1581,49 @@ fn parse_locale(raw: String) -> Option<String> {
     } else {
         Some(lang.to_ascii_lowercase())
     }
+}
+
+/// Dispatch a `DocSubcommand` for the named built-in kind.
+/// Resolves the workspace root, looks up the `DocKind`, and runs the generic engine.
+fn dispatch_doc_cmd(kind_name: &str, sub: DocSubcommand) -> i32 {
+    use bwoc_core::doc_kind::kind as lookup;
+
+    let Some(k) = lookup(kind_name) else {
+        eprintln!("bwoc: unknown document kind '{kind_name}' (internal error)");
+        return 2;
+    };
+
+    let (action, workspace_opt) = match sub {
+        DocSubcommand::New { title, workspace } => (doc_cmd::DocAction::New { title }, workspace),
+        DocSubcommand::List { workspace } => (doc_cmd::DocAction::List, workspace),
+        DocSubcommand::View { name, workspace } => (doc_cmd::DocAction::View { name }, workspace),
+    };
+
+    let root = resolve_doc_workspace(workspace_opt);
+    doc_cmd::run(k, action, &root)
+}
+
+/// Workspace resolution for document-kind commands.
+/// Resolution: explicit arg → BWOC_WORKSPACE env → ancestor walk → cwd fallback.
+fn resolve_doc_workspace(explicit: Option<PathBuf>) -> PathBuf {
+    if let Some(p) = explicit {
+        return p;
+    }
+    if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+        if !env_path.is_empty() {
+            return PathBuf::from(env_path);
+        }
+    }
+    if let Ok(mut cur) = std::env::current_dir() {
+        loop {
+            if cur.join(".bwoc/workspace.toml").is_file() {
+                return cur.clone();
+            }
+            if !cur.pop() {
+                break;
+            }
+        }
+    }
+    // Final fallback: current directory (notes will live relative to cwd).
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

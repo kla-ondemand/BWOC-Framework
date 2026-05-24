@@ -4,6 +4,7 @@
 //! in follow-up turns as the CLI and agent runtime are built out.
 
 pub mod deep_memory;
+pub mod doc_kind;
 pub mod error;
 pub mod identity;
 pub mod lifecycle;

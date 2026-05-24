@@ -24,6 +24,8 @@ convention เดียวที่สอดคล้องสำหรับท
 | 8 | ดัชนี memory | `<memory-scope>/` | `MEMORY.md` | `~/.bwoc/memory/MEMORY.md` · `<agent>/memories/MEMORY.md` |
 | 9 | รายการ memory | `<memory-scope>/` | `<type>_<slug>.md` | `feedback_policy_docs.md` · `user_role.md` |
 | 10 | บันทึก (note) | `notes/` (scope ใดก็ได้) | `YYYY-MM-DD_<title>.md` | `notes/2026-05-22_workspace-design.md` |
+| 10a | Retrospective | `retrospectives/` (scope ใดก็ได้) | `YYYY-MM-DD_<title>.md` | `retrospectives/2026-05-24_sprint-1.md` |
+| 10b | เอกสารวิจัย (research) | `research/` (scope ใดก็ได้) | `YYYY-MM-DD_<title>.md` | `research/2026-05-24_llm-caching.md` |
 | 11 | คำสั่ง Claude Code | repo root | `CLAUDE.md`, `CLAUDE.local.md` | `CLAUDE.md` · `CLAUDE.local.md` |
 | 12 | คำสั่ง agent (backend-neutral) | repo root ของ agent | `AGENTS.md` + symlinks | `AGENTS.md` · `CLAUDE.md → AGENTS.md` |
 
@@ -96,6 +98,20 @@ Note อยู่ได้ที่:
 | ระดับ project | `<repo>/notes/` | การตัดสินใจเกี่ยวกับ framework หรือ repo นี้ |
 | Workspace | `<workspace>/.bwoc/notes/` | การตัดสินใจที่อยู่ใน scope ของ workspace (Phase 2+) |
 | Per-user | `~/.bwoc/notes/` | note session ส่วนบุคคลที่ข้าม workspace |
+
+### `YYYY-MM-DD_<title>.md` — Retrospective
+
+สำหรับรีวิวแบบ Paññā-3 ของ sprint, session หรือ milestone รูปแบบ date-slug เดียวกับ note
+
+หัวข้อ: **Sutamayā** (สิ่งที่ข้อมูล/เอกสารบอก), **Cintāmayā** (การสังเคราะห์/รูปแบบที่เกิด), **Bhāvanāmayā** (การกระทำที่ทำ), **Metrics**
+
+`bwoc retro new "<title>"` สร้างไฟล์ใน `retrospectives/` ด้วย template ที่ built-in
+
+### `YYYY-MM-DD_<title>.md` — Research
+
+สำหรับการสำรวจเชิงวิจัย: คำถาม, ขอบเขต, แหล่งข้อมูล, ผลการค้นพบ และคำแนะนำ commit ลง repo เหมือน note และ retrospective
+
+`bwoc research new "<title>"` สร้างไฟล์ใน `research/` ด้วย template ที่ built-in
 
 ---
 

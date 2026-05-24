@@ -26,6 +26,7 @@ mod memory;
 mod new;
 mod ping;
 mod retire;
+mod run;
 mod sangha;
 mod send;
 mod spawn;
@@ -118,6 +119,8 @@ enum Commands {
     Send(SendArgs),
     /// Chat with an agent — exec backend CLI with manifest-driven model.
     Chat(ChatArgs),
+    /// Run a single task non-interactively and capture the result (headless mode).
+    Run(RunCliArgs),
     /// Read messages from an agent's inbox (`.bwoc/inbox.jsonl`).
     Inbox(InboxArgs),
     /// Tail an agent's daemon log (`.bwoc/agent.log`) — daemon stderr.
@@ -556,6 +559,36 @@ impl ChatArgs {
             lang,
             tmux: self.tmux,
             ghostty: self.ghostty,
+        }
+    }
+}
+
+#[derive(Args, Debug)]
+struct RunCliArgs {
+    /// Agent name. Matches by id ("agent-foo") or bare name ("foo").
+    agent: String,
+    /// Task prompt to deliver to the agent (required).
+    #[arg(long)]
+    task: String,
+    /// Emit structured JSON `{ agent, backend, task, exit_code, duration_ms, output }` to stdout.
+    #[arg(long)]
+    json: bool,
+    /// Kill the agent process and report timeout if it runs longer than this many seconds.
+    #[arg(long)]
+    timeout: Option<u64>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<RunCliArgs> for run::RunArgs {
+    fn from(a: RunCliArgs) -> Self {
+        Self {
+            agent: a.agent,
+            task: a.task,
+            json: a.json,
+            timeout_secs: a.timeout,
+            workspace: a.workspace,
         }
     }
 }
@@ -1274,6 +1307,10 @@ fn main() -> ExitCode {
         }
         Some(Commands::Chat(args)) => {
             let code = chat::run(args.into_runtime(lang.clone()));
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Run(args)) => {
+            let code = run::run(args.into());
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::Inbox(args)) => {

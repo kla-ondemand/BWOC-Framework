@@ -292,6 +292,7 @@ The harness was validated end-to-end against a real Ollama instance before the d
 | **Tool authentication broker** | Implemented (P3) but not wired into every tool by default. Tools that need OS keyring credentials must declare `CredentialRequest` explicitly. |
 | **Concurrent tool execution** | Sequential in P1/P2. Parallel tool dispatch is a P3 item. |
 | **Identity spoofing detection** | Conservative: only fires when the `from`/`sender` field literally contains the words `spoof`, `impersonate`, or `fake`. A proper agent-identity proof system is a v2 item (trust step 5 in the roadmap). |
+| **Platform support** | **Unix-first in v1** (macOS + Linux). The crate *builds* on Windows, but its tool layer shells out to a POSIX shell and the sandbox / `run_command` tests assume Unix commands (`pwd`, `rm -rf`, …), so the harness is **not tested on Windows** — CI excludes `bwoc-harness` on the Windows job. Windows support is a tracked follow-up; the rest of the toolkit remains fully cross-platform. |
 
 ---
 

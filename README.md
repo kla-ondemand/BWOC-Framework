@@ -190,7 +190,8 @@ bwoc-framwork/
 ├── crates/                      ← Rust workspace (the reference implementation)
 │   ├── bwoc-cli/                  • `bwoc` binary — install + workspace + lifecycle
 │   ├── bwoc-agent/                • `bwoc-agent` daemon — control socket + inbox
-│   └── bwoc-core/                 • shared types — manifest, workspace, identity
+│   ├── bwoc-core/                 • shared types — manifest, workspace, identity
+│   └── bwoc-harness/              • sandbox harness (runs agents with landlock/sandbox-exec)
 ├── modules/
 │   └── agent-template/          ← Core template (cloned per agent — see B)
 │       ├── AGENTS.md              • single source of truth (symlinked from CLAUDE/AGY/CODEX/KIMI/OLLAMA.md)
@@ -200,7 +201,7 @@ bwoc-framwork/
 ├── docs/{en,th}/                ← Framework-level docs (bilingual pair)
 │                                    ARCHITECTURE · INCARNATION · WORKSPACE · NAMING · GLOSSARY · ROADMAP · FAQ
 ├── examples/                    ← howto · showcases · usecases (illustrative)
-├── applications/                ← Phase 4 placeholder — reference agents land here
+├── Formula/                     ← Homebrew formula (tap)
 ├── scripts/                     ← install.sh · bump-version.sh
 ├── notes/                       ← Development logs — YYYY-MM-DD_<title>.md
 ├── .github/                     ← CI (ci.yml, docs.yml) · issue + PR templates
@@ -231,6 +232,39 @@ The CLI operates against a **workspace** the user designates — independent of 
 ```
 
 **Workspace resolution** (first match wins): `--workspace <path>` flag → `BWOC_WORKSPACE` env → nearest ancestor with `.bwoc/` → cwd if it has `.bwoc/` → fail with exit code 2 + `bwoc init` hint.
+
+---
+
+## Environment Variables
+
+The `bwoc` CLI and `bwoc-agent` daemon read and respect the following environment variables:
+
+| Variable | Purpose | Supported Values |
+| :--- | :--- | :--- |
+| `BWOC_WORKSPACE` | Overrides the workspace path. Part of the resolution chain: explicit `--workspace` → `BWOC_WORKSPACE` → ancestor walk. | Absolute or relative directory path |
+| `BWOC_LANG` | Sets the CLI and daemon UI language. Precedence: `--lang` flag → `BWOC_LANG` → `$LANG` → default `en`. | `en` (English), `th` (Thai) |
+| `BWOC_TEMPLATE` | Sets the custom path to an agent template for incarnation via `bwoc new`. | Directory path containing `agent-template` |
+| `BWOC_TRUST_GATING` | Enables the Kalyāṇamitta-7 trust system (checks manifest, peer trust, and refuses unauthorized inbox envelopes at the daemon). | `1` to enable, otherwise disabled |
+| `BWOC_TASK_WAKEUP` | Opt-in flag for `bwoc-agent --serve` to ping the agent's tmux session when a new claimable task is available. | `1` to enable, otherwise disabled |
+| `BWOC_AUTO_CLAIM` | Opt-in flag for `bwoc-agent --serve` to automatically claim and wake up the agent when a new task becomes claimable. | `1` to enable, otherwise disabled |
+| `BWOC_DISABLE_TMUX_WAKEUP` | Opt-out flag to suppress tmux wakeup pings during `bwoc send` (useful in CI or testing). | `1` to suppress |
+| `BWOC_NO_WHATSNEW` | Suppresses the one-line "you upgraded" notice printed to stderr on the first run of a new `MAJOR.MINOR` version. | `1` to suppress |
+| `BWOC_NO_UPDATE_CHECK` | Opts out of the startup update-check (the network drift guard that compares the running version against the latest release). | Set to any value to opt out |
+
+---
+
+## Infrastructure & Datastores
+
+BWOC is designed to be extremely lightweight, localized, and resilient. To clarify system architecture:
+- **No Node.js / JVM Requirement:** The entire toolchain is built in native Rust, compiling down to single static binaries (`bwoc` and `bwoc-agent`).
+- **No Docker / Containerization Needed:** No Docker containers, virtual machines, or external runtime packages are required to run or incarnate agents. The optional `bwoc-harness` runs backends inside localized sandbox engines natively (`landlock` on Linux, `sandbox-exec` on macOS).
+- **No Network Ports or API Endpoints:** The framework does not bind to TCP/UDP ports or connect to remote servers. All agent-to-daemon communication is conducted locally over a **Unix domain socket** located at `<workspace>/.bwoc/agent.sock` on Unix-like systems.
+- **No External Datastore / Database:** There is no SQLite, PostgreSQL, Redis, or other database server. All state is maintained natively within the **local filesystem** using standard structured files:
+  - Workspace configuration: `.bwoc/workspace.toml`
+  - Registered agents index: `.bwoc/agents.toml`
+  - Agent inbox queue: `.bwoc/inbox.jsonl`
+  - Trust refusals log: `.bwoc/inbox.refusals.jsonl`
+  - Shared Saṅgha team tasks: `.bwoc/teams/<team-id>.toml`
 
 ---
 

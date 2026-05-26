@@ -991,6 +991,40 @@ const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "au
 /// `bwoc check` honors the spec, not the surface vocabulary.
 const AUDIT_SEVERITY_LEVELS: &[&str] = &["info", "low", "medium", "high", "critical"];
 
+/// Closed evidence-kind enum for declared criteria. Source of truth:
+/// PLUGINS.en.md §"Evidence kinds" (extended by BWOC-27 with
+/// `attestation` and `sample`). A criterion's optional
+/// `expected_evidence_kind` field declares which kind the runtime intends
+/// to emit; BWOC-29 enforces the kind name is valid and (for kinds that
+/// carry spec-mandated sub-fields) the per-kind contract is declared.
+const EVIDENCE_KINDS: &[&str] = &[
+    "file",
+    "content",
+    "command",
+    "attestation",
+    "sample",
+    "none",
+];
+
+/// Sub-field names valid under `[criterion.<id>.attestation].required`.
+/// `signer` and `signed_at` are the spec floor (always required by
+/// PLUGINS.en.md when kind = "attestation"); `valid_through` and `as_of`
+/// are time-bounded fields any criterion may elevate to required.
+const ATTESTATION_FIELDS: &[&str] = &["signer", "signed_at", "valid_through", "as_of"];
+const ATTESTATION_FLOOR: &[&str] = &["signer", "signed_at"];
+
+/// Sub-field names valid under `[criterion.<id>.sample].required`.
+/// `sampled_count` and `sampled_of` are the spec floor; `window`,
+/// `valid_through`, and `as_of` may be elevated per criterion.
+const SAMPLE_FIELDS: &[&str] = &[
+    "sampled_count",
+    "sampled_of",
+    "window",
+    "valid_through",
+    "as_of",
+];
+const SAMPLE_FLOOR: &[&str] = &["sampled_count", "sampled_of"];
+
 /// Maturity values accepted in a skill manifest (Ariya-dhana 7 scale).
 const MATURITY_LEVELS: &[&str] = &["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
 
@@ -1340,6 +1374,149 @@ fn audit_audit_criteria(plugin_dir: &Path, report: &mut AuditReport) {
                 "criterion '{id}' missing required 'severity' field"
             )),
         }
+
+        // expected_evidence_kind (BWOC-29) — optional. When declared,
+        // verify the enum value and (for attestation / sample) check the
+        // per-kind required-sub-fields contract.
+        check_expected_evidence_kind(id, table, report);
+    }
+}
+
+/// Validate a criterion's optional `expected_evidence_kind` field plus its
+/// per-kind `required` sub-fields contract. Absent field = silent pass; the
+/// runtime is free to choose at invoke time. Source of truth:
+/// PLUGINS.en.md §"Evidence kinds" + notes/2026-05-27_check-evidence-kinds-extension.md.
+fn check_expected_evidence_kind(
+    id: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    report: &mut AuditReport,
+) {
+    let kind = match table.get("expected_evidence_kind") {
+        Some(toml::Value::String(s)) => s.as_str(),
+        Some(_) => {
+            report.violations.push(format!(
+                "criterion '{id}' expected_evidence_kind has wrong type — expected string"
+            ));
+            return;
+        }
+        None => return, // optional field — absence is fine.
+    };
+    if !EVIDENCE_KINDS.contains(&kind) {
+        report.violations.push(format!(
+            "criterion '{id}' expected_evidence_kind '{kind}' not in \
+             {{file, content, command, attestation, sample, none}}"
+        ));
+        return;
+    }
+    report.passes.push(format!(
+        "criterion '{id}' expected_evidence_kind '{kind}' in supported set"
+    ));
+
+    match kind {
+        "attestation" => {
+            check_required_sub_fields(
+                id,
+                table,
+                "attestation",
+                ATTESTATION_FIELDS,
+                ATTESTATION_FLOOR,
+                report,
+            );
+        }
+        "sample" => {
+            check_required_sub_fields(id, table, "sample", SAMPLE_FIELDS, SAMPLE_FLOOR, report);
+        }
+        // file / content / command / none have no spec-mandated sub-fields.
+        _ => {}
+    }
+}
+
+/// Validate the `[criterion.<id>.<kind>] required = [...]` subtable. Three
+/// gates: the subtable exists; `required` is an array of strings; the array
+/// satisfies the per-kind spec floor and contains only valid sub-field names.
+fn check_required_sub_fields(
+    id: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    kind: &str,
+    valid_fields: &[&str],
+    floor: &[&str],
+    report: &mut AuditReport,
+) {
+    let subtable = match table.get(kind).and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => {
+            report.violations.push(format!(
+                "criterion '{id}' expected_evidence_kind='{kind}' but no \
+                 [criterion.{id}.{kind}] subtable declaring required sub-fields"
+            ));
+            return;
+        }
+    };
+    let required = match subtable.get("required") {
+        Some(toml::Value::Array(arr)) => arr,
+        Some(_) => {
+            report.violations.push(format!(
+                "criterion '{id}' {kind}.required has wrong type — expected array of strings"
+            ));
+            return;
+        }
+        None => {
+            report.violations.push(format!(
+                "criterion '{id}' [criterion.{id}.{kind}] missing 'required' field — \
+                 declare which sub-fields the runtime must emit"
+            ));
+            return;
+        }
+    };
+
+    let mut names: Vec<&str> = Vec::with_capacity(required.len());
+    let mut all_strings = true;
+    for v in required {
+        match v.as_str() {
+            Some(s) => names.push(s),
+            None => {
+                all_strings = false;
+                break;
+            }
+        }
+    }
+    if !all_strings {
+        report.violations.push(format!(
+            "criterion '{id}' {kind}.required contains non-string entries — \
+             expected array of sub-field names"
+        ));
+        return;
+    }
+
+    // Spec floor — every minimum field per kind must be in `required`.
+    let mut floor_ok = true;
+    for &must in floor {
+        if !names.contains(&must) {
+            report.violations.push(format!(
+                "criterion '{id}' {kind}.required must include '{must}' (spec floor)"
+            ));
+            floor_ok = false;
+        }
+    }
+
+    // Unknown sub-field names — anything outside the valid set is a violation.
+    let mut unknown_ok = true;
+    for name in &names {
+        if !valid_fields.contains(name) {
+            report.violations.push(format!(
+                "criterion '{id}' {kind}.required contains unknown sub-field '{name}' — \
+                 valid: {}",
+                valid_fields.join(", ")
+            ));
+            unknown_ok = false;
+        }
+    }
+
+    if floor_ok && unknown_ok {
+        report.passes.push(format!(
+            "criterion '{id}' {kind}.required satisfies spec floor ({} field(s))",
+            names.len()
+        ));
     }
 }
 
@@ -2238,6 +2415,588 @@ description = "criterion_id is not kebab-case."
                 .iter()
                 .any(|v| v.contains("'Ref_NonKebab' id is not kebab-case")),
             "expected non-kebab violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- expected_evidence_kind validation (BWOC-29) -----------------------
+
+    #[test]
+    fn audit_criteria_evidence_kind_file_passes() {
+        // kind=file has no spec-mandated sub-fields — no subtable required.
+        let dir = write_audit_plugin(
+            "kind-file",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-file-kind]
+severity                = "medium"
+expected_evidence_kind  = "file"
+description             = "Criterion that points at a workspace file."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected file-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("expected_evidence_kind 'file' in supported set")),
+            "expected pass line for file kind, got: {:?}",
+            report.passes
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_content_passes() {
+        let dir = write_audit_plugin(
+            "kind-content",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-content-kind]
+severity                = "medium"
+expected_evidence_kind  = "content"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected content-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_command_passes() {
+        let dir = write_audit_plugin(
+            "kind-command",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-command-kind]
+severity                = "info"
+expected_evidence_kind  = "command"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected command-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_none_passes() {
+        let dir = write_audit_plugin(
+            "kind-none",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-none-kind]
+severity                = "info"
+expected_evidence_kind  = "none"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected none-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_attestation_passes() {
+        let dir = write_audit_plugin(
+            "kind-attestation",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-attestation-kind]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-attestation-kind.attestation]
+required = ["signer", "signed_at"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected attestation-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("attestation.required satisfies spec floor")),
+            "expected floor-satisfied pass line, got: {:?}",
+            report.passes
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_sample_passes() {
+        let dir = write_audit_plugin(
+            "kind-sample",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-sample-kind]
+severity                = "high"
+expected_evidence_kind  = "sample"
+
+[criterion.ref-sample-kind.sample]
+required = ["sampled_count", "sampled_of"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected sample-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_attestation_can_tighten_required() {
+        // Operators MAY elevate optional spec fields (valid_through, as_of)
+        // to required for a specific criterion — useful when a clause
+        // demands explicit expiry tracking.
+        let dir = write_audit_plugin(
+            "tighten",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-tightened]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-tightened.attestation]
+required = ["signer", "signed_at", "valid_through"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected tightened-required to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_omitted_passes() {
+        // Backward compat — criteria.toml without expected_evidence_kind
+        // declared must keep working (audit-iso-29110, stubs).
+        let dir = write_audit_plugin(
+            "kind-omitted",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-no-kind]
+severity    = "medium"
+description = "No expected_evidence_kind declared — runtime free to choose."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected no-kind criterion to pass, got: {:?}",
+            report.violations
+        );
+        // And no expected_evidence_kind pass / fail lines either.
+        assert!(
+            !report
+                .passes
+                .iter()
+                .any(|p| p.contains("expected_evidence_kind")),
+            "should not emit any expected_evidence_kind line for omitted field, got: {:?}",
+            report.passes
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_unknown_enum_fails() {
+        let dir = write_audit_plugin(
+            "kind-typo",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-bad-kind]
+severity                = "high"
+expected_evidence_kind  = "attestion"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("expected_evidence_kind 'attestion' not in")),
+            "expected unknown-enum violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_wrong_type_fails() {
+        let dir = write_audit_plugin(
+            "kind-type",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-bad-type]
+severity                = "high"
+expected_evidence_kind  = 42
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("expected_evidence_kind has wrong type")),
+            "expected wrong-type violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_attestation_missing_subtable_fails() {
+        let dir = write_audit_plugin(
+            "att-no-subtable",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-att-bare]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.iter().any(|v| v.contains(
+                "expected_evidence_kind='attestation' but no \
+                 [criterion.ref-att-bare.attestation] subtable"
+            )),
+            "expected missing-subtable violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_attestation_missing_signer_fails() {
+        let dir = write_audit_plugin(
+            "att-no-signer",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-att-floor]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-att-floor.attestation]
+required = ["signed_at"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("attestation.required must include 'signer' (spec floor)")),
+            "expected missing-signer violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_attestation_missing_signed_at_fails() {
+        let dir = write_audit_plugin(
+            "att-no-signed-at",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-att-no-date]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-att-no-date.attestation]
+required = ["signer"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("attestation.required must include 'signed_at' (spec floor)")),
+            "expected missing-signed_at violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_attestation_unknown_subfield_fails() {
+        let dir = write_audit_plugin(
+            "att-unknown",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-att-unknown]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-att-unknown.attestation]
+required = ["signer", "signed_at", "frobnicator"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.iter().any(
+                |v| v.contains("attestation.required contains unknown sub-field 'frobnicator'")
+            ),
+            "expected unknown-subfield violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_sample_missing_subtable_fails() {
+        let dir = write_audit_plugin(
+            "sample-no-subtable",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-sample-bare]
+severity                = "high"
+expected_evidence_kind  = "sample"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.iter().any(|v| v.contains(
+                "expected_evidence_kind='sample' but no \
+                 [criterion.ref-sample-bare.sample] subtable"
+            )),
+            "expected missing-subtable violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_sample_missing_sampled_count_fails() {
+        let dir = write_audit_plugin(
+            "sample-no-count",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-sample-no-n]
+severity                = "high"
+expected_evidence_kind  = "sample"
+
+[criterion.ref-sample-no-n.sample]
+required = ["sampled_of"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("sample.required must include 'sampled_count' (spec floor)")),
+            "expected missing-sampled_count violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_sample_missing_sampled_of_fails() {
+        let dir = write_audit_plugin(
+            "sample-no-of",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-sample-no-m]
+severity                = "high"
+expected_evidence_kind  = "sample"
+
+[criterion.ref-sample-no-m.sample]
+required = ["sampled_count"]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("sample.required must include 'sampled_of' (spec floor)")),
+            "expected missing-sampled_of violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_required_wrong_type_fails() {
+        let dir = write_audit_plugin(
+            "required-not-array",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-required-string]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-required-string.attestation]
+required = "signer,signed_at"
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v
+                    .contains("attestation.required has wrong type — expected array of strings")),
+            "expected wrong-type violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_required_missing_field_fails() {
+        let dir = write_audit_plugin(
+            "required-missing",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-no-required]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-no-required.attestation]
+# subtable exists but `required` field is absent.
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v
+                    .contains("[criterion.ref-no-required.attestation] missing 'required' field")),
+            "expected missing-required violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_required_non_string_entry_fails() {
+        let dir = write_audit_plugin(
+            "required-int",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-required-int]
+severity                = "high"
+expected_evidence_kind  = "attestation"
+
+[criterion.ref-required-int.attestation]
+required = ["signer", 42]
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("attestation.required contains non-string entries")),
+            "expected non-string-entry violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_evidence_kind_skipped_for_non_audit_kind() {
+        // Plugin with kind != "audit" should not trigger any
+        // expected_evidence_kind checks even if criteria.toml were present.
+        let dir = write_plugin_manifest(
+            "non-audit-evidence",
+            "memory-tier2-noop",
+            r#"[plugin]
+name        = "memory-tier2-noop"
+kind        = "memory-backend"
+version     = "0.1.0"
+description = "Non-audit kind — evidence-kind checks must not fire."
+compat      = ">=2.5.0"
+entry       = "bin"
+"#,
+        );
+        // Drop a criteria.toml alongside that WOULD violate the BWOC-29 check
+        // if it ran — proves the check is gated on plugin kind.
+        fs::write(
+            dir.join("criteria.toml"),
+            r#"[criterion.would-fail]
+severity                = "high"
+expected_evidence_kind  = "frobnicator"
+"#,
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.contains("expected_evidence_kind")),
+            "non-audit kind must not emit expected_evidence_kind violations, got: {:?}",
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());

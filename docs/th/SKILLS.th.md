@@ -294,7 +294,7 @@ modules/skill-template/
 └── SPEC.md                # Obsidian-formatted; placeholder สำหรับชื่อ skill + description
 ```
 
-Placeholder ใช้ convention `{{camelCase}}` เดียวกับ `modules/agent-template/` Substitution ที่บังคับระบุไว้ใน readme ของ template
+Placeholder ใช้ convention `{{camelCase}}` เดียวกับ `modules/agent-template/` Substitution ที่บังคับระบุไว้ใน [`SPEC.md`](../../modules/skill-template/SPEC.md) ของ template เอง
 
 `bwoc skill init` เป็นวิธีที่แนะนำสำหรับเริ่ม skill ใหม่ — สร้างเองด้วยมือทำได้แต่ข้าม consistency ของ placeholder
 

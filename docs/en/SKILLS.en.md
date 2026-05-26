@@ -296,7 +296,7 @@ modules/skill-template/
 └── SPEC.md                # Obsidian-formatted; placeholders for skill name + description
 ```
 
-Placeholders use the same `{{camelCase}}` convention as `modules/agent-template/`. Required substitutions are listed in the template's own readme.
+Placeholders use the same `{{camelCase}}` convention as `modules/agent-template/`. Required substitutions are listed in the template's own [`SPEC.md`](../../modules/skill-template/SPEC.md).
 
 `bwoc skill init` is the recommended way to start a new skill — manual creation is supported but bypasses placeholder consistency.
 

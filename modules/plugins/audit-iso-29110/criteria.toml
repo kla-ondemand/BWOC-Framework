@@ -1,0 +1,61 @@
+# ISO/IEC 29110 Basic profile — declared criteria.
+#
+# Source: ISO/IEC TR 29110-5-1-2 (Management and Engineering Guide for the
+# Basic profile of the Generic profile group). See SPEC.md for the full
+# citation set.
+#
+# Each `[criterion.<id>]` table declares one Basic-profile work product.
+# `id` is kebab-case and plugin-scoped (BWOC-11). Declaration order in this
+# file is the report order — do not reorder casually; renames are a major
+# version bump (PLUGINS.en.md §Stability).
+#
+# Fields:
+#   severity     — closed enum {info, low, medium, high, critical}.
+#   process      — "PM" (Project Management) | "SI" (Software Implementation).
+#   work_product — short ISO name; mirrors the standard's Task Output table.
+#   description  — one-line operator-facing summary.
+#   candidates   — ordered list of acceptable workspace-relative paths.
+#                  audit.sh reports a `pass` on the first that exists,
+#                  `fail` (with remedy citing the primary path) on none.
+
+[criterion.29110-bp-project-plan]
+severity     = "high"
+process      = "PM"
+work_product = "Project Plan"
+description  = "Project plan capturing scope, schedule, resources, risks, and acceptance criteria."
+candidates   = ["docs/en/PROJECT-PLAN.en.md", "docs/PROJECT-PLAN.md", "PROJECT-PLAN.md"]
+
+[criterion.29110-bp-software-requirements-specification]
+severity     = "high"
+process      = "SI"
+work_product = "Software Requirements Specification"
+description  = "Documented software requirements (functional and non-functional)."
+candidates   = ["docs/en/SRS.en.md", "docs/SRS.md", "docs/REQUIREMENTS.md", "REQUIREMENTS.md"]
+
+[criterion.29110-bp-software-design]
+severity     = "medium"
+process      = "SI"
+work_product = "Software Design"
+description  = "Software design describing components, interfaces, and key decisions."
+candidates   = ["docs/en/DESIGN.en.md", "docs/en/ARCHITECTURE.en.md", "docs/DESIGN.md", "docs/ARCHITECTURE.md"]
+
+[criterion.29110-bp-software-test-plan]
+severity     = "medium"
+process      = "SI"
+work_product = "Software Test Plan"
+description  = "Software test plan covering test cases, procedures, and coverage targets."
+candidates   = ["docs/en/TEST-PLAN.en.md", "docs/TEST-PLAN.md", "TEST-PLAN.md"]
+
+[criterion.29110-bp-verification-results]
+severity     = "medium"
+process      = "SI"
+work_product = "Verification Results"
+description  = "Recorded verification results for requirements, design, and code reviews."
+candidates   = ["docs/en/VERIFICATION.en.md", "docs/VERIFICATION.md", "docs/en/VERIFY.en.md"]
+
+[criterion.29110-bp-software-construction-records]
+severity     = "low"
+process      = "SI"
+work_product = "Software Construction Records"
+description  = "Record of software construction activity — change log, build manifest, or release notes."
+candidates   = ["CHANGELOG.md", "docs/en/CHANGELOG.en.md", "docs/CHANGELOG.md", "RELEASE-NOTES.md"]

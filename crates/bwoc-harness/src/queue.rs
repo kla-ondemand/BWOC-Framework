@@ -41,6 +41,7 @@ use tokio_util::sync::CancellationToken;
 use bwoc_core::team::{Task, TaskState};
 
 use crate::error::HarnessError;
+use crate::worker::{NoopRunner, SpawnRunner, WorkerConfig, WorkerSpec};
 
 // ---------------------------------------------------------------------------
 // TaskSource trait — injectable abstraction for Saṅgha integration
@@ -183,6 +184,19 @@ pub struct TaskQueue {
     cancel: CancellationToken,
 }
 
+// ---------------------------------------------------------------------------
+// Worker runner wiring (HV2-1)
+// ---------------------------------------------------------------------------
+
+/// Bundles the [`SpawnRunner`] and [`WorkerConfig`] the worker loop uses to
+/// turn a `WorkItem` into a running worker.  Held behind `Arc`s so the worker
+/// task owns clones cheaply.
+#[derive(Clone)]
+struct RunnerCtx {
+    runner: Arc<dyn SpawnRunner>,
+    config: Arc<WorkerConfig>,
+}
+
 impl TaskQueue {
     /// Create a new queue and spawn the worker loop.
     ///
@@ -193,13 +207,34 @@ impl TaskQueue {
     /// The worker loop runs until `cancel` is cancelled or the sender is
     /// dropped.
     pub fn new(capacity: usize, cancel: CancellationToken) -> Self {
+        // Default runner is a no-op (scheduling only) — preserves the queue's
+        // historical behaviour for callers/tests that don't spawn real workers.
+        Self::with_runner(
+            capacity,
+            cancel,
+            Arc::new(NoopRunner),
+            Arc::new(WorkerConfig::default()),
+        )
+    }
+
+    /// Create a queue whose worker loop spawns real workers via `runner`.
+    ///
+    /// Each admitted `WorkItem` becomes a [`WorkerSpec`] (built from the item's
+    /// task plus `config`) and is handed to `runner.run()`.
+    pub fn with_runner(
+        capacity: usize,
+        cancel: CancellationToken,
+        runner: Arc<dyn SpawnRunner>,
+        config: Arc<WorkerConfig>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel::<WorkItem>(capacity + 1);
         let in_flight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let in_flight_worker = Arc::clone(&in_flight);
         let cancel_worker = cancel.clone();
+        let ctx = RunnerCtx { runner, config };
 
         tokio::spawn(async move {
-            run_worker(rx, in_flight_worker, cancel_worker).await;
+            run_worker(rx, in_flight_worker, cancel_worker, ctx).await;
         });
 
         Self {
@@ -221,28 +256,28 @@ impl TaskQueue {
             return Err(QueueError::Shutdown);
         }
 
-        // One-in-flight per worktree check.
+        // Capacity + one-in-flight-per-worktree CHECK and the reservation
+        // INSERT happen under a single lock acquisition — no TOCTOU window, so
+        // two concurrent submits can't both pass the capacity gate.
         {
-            let guard = self.in_flight.lock().unwrap();
+            let mut guard = self.in_flight.lock().unwrap();
             if guard.contains(&item.worktree_path) {
                 return Err(QueueError::Busy(item.worktree_path.clone()));
             }
             if guard.len() >= self.capacity {
                 return Err(QueueError::AtCapacity(self.capacity));
             }
+            guard.insert(item.worktree_path.clone());
         }
 
-        // Register the worktree as in-flight before sending so there's no
-        // window between the check and the send.
-        self.in_flight
-            .lock()
-            .unwrap()
-            .insert(item.worktree_path.clone());
-
-        self.sender
-            .send(item)
-            .await
-            .map_err(|e| QueueError::Send(e.to_string()))
+        // If the send fails the worker loop will never see this item, so
+        // release the slot we just reserved rather than leaking it.
+        let worktree = item.worktree_path.clone();
+        if let Err(e) = self.sender.send(item).await {
+            self.in_flight.lock().unwrap().remove(&worktree);
+            return Err(QueueError::Send(e.to_string()));
+        }
+        Ok(())
     }
 
     /// Cancel the queue — signals the worker loop to stop processing new items.
@@ -268,6 +303,7 @@ async fn run_worker(
     mut rx: mpsc::Receiver<WorkItem>,
     in_flight: Arc<Mutex<HashSet<PathBuf>>>,
     cancel: CancellationToken,
+    ctx: RunnerCtx,
 ) {
     loop {
         tokio::select! {
@@ -290,9 +326,17 @@ async fn run_worker(
                     None => break, // all senders dropped
                     Some(item) => {
                         let worktree = item.worktree_path.clone();
-                        // Execute the task (currently a no-op placeholder;
-                        // the real loop invocation is wired in agent_loop.rs).
-                        let result = execute_item(&item).await;
+                        // Race the worker against cancellation so an in-flight
+                        // worker is interrupted, not merely stopped between
+                        // items.  `kill_on_drop` on the subprocess runner reaps
+                        // the child when its future is dropped here.
+                        let result = tokio::select! {
+                            biased;
+                            _ = cancel.cancelled() => {
+                                Err(HarnessError::Other("queue cancelled".to_string()))
+                            }
+                            r = execute_item(&item, &ctx) => r,
+                        };
                         // Release the worktree slot.
                         in_flight.lock().unwrap().remove(&worktree);
                         // Send outcome (ignore if the receiver has already dropped).
@@ -304,94 +348,30 @@ async fn run_worker(
     }
 }
 
-/// Execute a [`WorkItem`].
+/// Execute a [`WorkItem`] by spawning its worker (HV2-1).
 ///
-/// In P3 this is a minimal placeholder — the real harness loop integration is
-/// done in `agent_loop.rs` where telemetry and tool dispatch are available.
-/// The queue's job is scheduling and cancellation; it delegates actual work.
-async fn execute_item(item: &WorkItem) -> Result<(), HarnessError> {
-    // Verify the worktree exists.
+/// The queue owns scheduling and cancellation; the actual work is delegated to
+/// the injected [`SpawnRunner`].  A worker runs in its own worktree as a
+/// separate `bwoc-harness` process, so the guardrails→permission→sandbox
+/// invariant is re-applied by the child — this loop never executes task code
+/// in-process.
+async fn execute_item(item: &WorkItem, ctx: &RunnerCtx) -> Result<(), HarnessError> {
+    // Verify the worktree exists before spawning into it.
     if !item.worktree_path.exists() {
         return Err(HarnessError::Other(format!(
             "worktree does not exist: {}",
             item.worktree_path.display()
         )));
     }
-    // Successfully "processed" — the caller integrates agent_loop::run_loop.
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Saṅgha poll helper — drain claimable tasks into the queue
-// ---------------------------------------------------------------------------
-
-/// Scan `source` for pending, unblocked tasks and submit each claimable task
-/// to `queue` as `agent_id`.
-///
-/// Returns the number of tasks successfully submitted.  Tasks that are already
-/// in-flight, blocked, or non-pending are silently skipped.
-pub async fn poll_sangha(
-    source: &dyn TaskSource,
-    queue: &TaskQueue,
-    agent_id: &str,
-    worktree_base: &std::path::Path,
-) -> usize {
-    let tasks = source.list_tasks();
-    let mut submitted = 0usize;
-
-    for task in tasks {
-        if task.state != TaskState::Pending {
-            continue;
-        }
-        // Skip tasks that have unmet dependencies (blocked).
-        // Dependency resolution is performed by bwoc_core::team::claim_task;
-        // if claim fails with BlockedByDependency we just skip.
-
-        // Claim the task.
-        if source.claim(&task.id, agent_id).is_err() {
-            continue; // not claimable (blocked, already in-progress, etc.)
-        }
-
-        let worktree_path = worktree_base.join(&task.id);
-        let (result_tx, _result_rx) = oneshot::channel();
-
-        let item = WorkItem {
-            task: task.clone(),
-            worktree_path,
-            result_tx,
-        };
-
-        match queue.submit(item).await {
-            Ok(()) => {
-                submitted += 1;
-            }
-            Err(QueueError::Busy(_) | QueueError::AtCapacity(_)) => {
-                // P4 rollback: the queue rejected a task we already claimed.
-                // Revert the task to `pending` so it isn't stranded as
-                // `in_progress` with no worker.  We use complete_task to
-                // move it — but complete_task sets it to Completed, not
-                // Pending.  Instead, we call a dedicated unclaim path via
-                // TaskSource::unclaim if available, or fall back to re-
-                // inserting a fresh pending task in the in-memory source.
-                //
-                // For the TaskSource trait (which hides the backing store)
-                // we add an `unclaim` method that reverts InProgress → Pending.
-                // If the source doesn't support it (returns Err), we log a
-                // warning — the operator will need to re-triage manually.
-                if let Err(e) = source.unclaim(&task.id, agent_id) {
-                    eprintln!(
-                        "[bwoc-harness] WARNING: failed to unclaim task `{}` after \
-                         queue rejection — task may be stranded as in_progress: {e}",
-                        task.id
-                    );
-                }
-                break;
-            }
-            Err(_) => break,
-        }
-    }
-
-    submitted
+    let spec = WorkerSpec {
+        task_id: item.task.id.clone(),
+        prompt: item.task.title.clone(),
+        worktree: item.worktree_path.clone(),
+        model: ctx.config.model.clone(),
+        endpoint: ctx.config.endpoint.clone(),
+        skip_model_check: ctx.config.skip_model_check,
+    };
+    ctx.runner.run(&spec).await
 }
 
 // ---------------------------------------------------------------------------
@@ -572,72 +552,6 @@ mod tests {
         );
     }
 
-    // ── Saṅgha poll helper ───────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn poll_sangha_claims_pending_tasks() {
-        let tmp = TempDir::new().unwrap();
-        // Three pending tasks.
-        let source = InMemoryTaskSource::new(vec![
-            pending_task("p1"),
-            pending_task("p2"),
-            pending_task("p3"),
-        ]);
-        let (queue, _cancel) = make_queue(4);
-
-        let submitted = poll_sangha(&source, &queue, "agent-oracle", tmp.path()).await;
-        assert_eq!(submitted, 3, "all three pending tasks should be submitted");
-
-        // All three must now be InProgress in the source.
-        for t in source.list_tasks() {
-            assert_eq!(
-                t.state,
-                TaskState::InProgress,
-                "task {} should be InProgress",
-                t.id
-            );
-        }
-    }
-
-    // ── poll_sangha rollback ──────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn poll_sangha_rollback_on_queue_full() {
-        let tmp = TempDir::new().unwrap();
-
-        // Queue capacity = 1 so the second task is rejected.
-        // After rejection, the second task must be rolled back to Pending.
-        let source = InMemoryTaskSource::new(vec![pending_task("first"), pending_task("second")]);
-
-        // Create distinct worktrees so both tasks pass the busy check.
-        let wt1 = tmp.path().join("first");
-        std::fs::create_dir_all(&wt1).unwrap();
-        let wt2 = tmp.path().join("second");
-        std::fs::create_dir_all(&wt2).unwrap();
-
-        let (queue, _cancel) = make_queue(1);
-
-        let submitted = poll_sangha(&source, &queue, "agent-oracle", tmp.path()).await;
-        // Only 1 can be submitted (capacity = 1).
-        assert_eq!(submitted, 1, "only 1 task should be admitted");
-
-        // The first task is InProgress; the second must be back to Pending.
-        let tasks = source.list_tasks();
-        let first = tasks.iter().find(|t| t.id == "first").unwrap();
-        let second = tasks.iter().find(|t| t.id == "second").unwrap();
-
-        assert_eq!(
-            first.state,
-            TaskState::InProgress,
-            "first task should be in_progress"
-        );
-        assert_eq!(
-            second.state,
-            TaskState::Pending,
-            "second task should be rolled back to pending"
-        );
-    }
-
     #[test]
     fn unclaim_reverts_task_to_pending() {
         let source = InMemoryTaskSource::new(vec![pending_task("t1")]);
@@ -661,18 +575,85 @@ mod tests {
         assert!(matches!(err, HarnessError::Other(_)));
     }
 
+    // ── Runner integration (HV2-1) ────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A SpawnRunner that records how many times it ran and returns a fixed
+    /// outcome — proves the queue routes WorkItems to the injected runner.
+    struct CountingRunner {
+        calls: Arc<AtomicUsize>,
+        ok: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl SpawnRunner for CountingRunner {
+        async fn run(&self, spec: &WorkerSpec) -> Result<(), HarnessError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.ok {
+                Ok(())
+            } else {
+                Err(HarnessError::Other(format!(
+                    "worker {} failed",
+                    spec.task_id
+                )))
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn poll_sangha_skips_non_pending_tasks() {
+    async fn with_runner_routes_item_to_runner_and_returns_ok() {
         let tmp = TempDir::new().unwrap();
-        let mut task_in_progress = pending_task("ip1");
-        task_in_progress.state = TaskState::InProgress;
-        task_in_progress.claimed_by = Some("agent-pi".to_string());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let queue = TaskQueue::with_runner(
+            4,
+            cancel,
+            Arc::new(CountingRunner {
+                calls: Arc::clone(&calls),
+                ok: true,
+            }),
+            Arc::new(WorkerConfig::default()),
+        );
 
-        let source = InMemoryTaskSource::new(vec![task_in_progress, pending_task("p1")]);
-        let (queue, _cancel) = make_queue(4);
+        let (tx, rx) = oneshot::channel();
+        queue
+            .submit(WorkItem {
+                task: pending_task("t1"),
+                worktree_path: tmp.path().to_path_buf(),
+                result_tx: tx,
+            })
+            .await
+            .unwrap();
 
-        let submitted = poll_sangha(&source, &queue, "agent-oracle", tmp.path()).await;
-        // Only the pending task should be submitted.
-        assert_eq!(submitted, 1);
+        assert!(rx.await.unwrap().is_ok());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "runner ran exactly once");
+    }
+
+    #[tokio::test]
+    async fn with_runner_propagates_worker_failure() {
+        let tmp = TempDir::new().unwrap();
+        let cancel = CancellationToken::new();
+        let queue = TaskQueue::with_runner(
+            4,
+            cancel,
+            Arc::new(CountingRunner {
+                calls: Arc::new(AtomicUsize::new(0)),
+                ok: false,
+            }),
+            Arc::new(WorkerConfig::default()),
+        );
+
+        let (tx, rx) = oneshot::channel();
+        queue
+            .submit(WorkItem {
+                task: pending_task("t1"),
+                worktree_path: tmp.path().to_path_buf(),
+                result_tx: tx,
+            })
+            .await
+            .unwrap();
+
+        assert!(rx.await.unwrap().is_err(), "worker failure propagates");
     }
 }

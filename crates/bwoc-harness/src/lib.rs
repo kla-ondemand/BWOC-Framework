@@ -28,11 +28,17 @@
 //! design rationale and phasing decisions.
 
 pub mod agent_loop;
+pub mod budget;
+pub mod checkpoint;
 pub mod error;
 pub mod eval;
+pub mod lead;
+pub mod mcp;
 pub mod policy;
 pub mod provider;
 pub mod queue;
+pub mod retrospective;
 pub mod sandbox;
 pub mod telemetry;
 pub mod tools;
+pub mod worker;

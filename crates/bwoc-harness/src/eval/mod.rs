@@ -465,6 +465,8 @@ mod tests {
             context_limit: 0,
             model_context_limits: std::collections::HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         }
     }
 

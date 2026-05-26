@@ -79,9 +79,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::checkpoint::{CheckpointConfig, RunState};
 use crate::error::{HarnessError, HarnessResult};
 use crate::policy::{Policy, PolicyOutcome, run_pipeline};
-use crate::provider::{ChatMessage, ProviderClient, ToolCall};
+use crate::provider::{ChatMessage, ProviderClient, Role, ToolCall};
 use crate::sandbox::{self, make_os_sandbox};
 use crate::telemetry::{Telemetry, TurnBuilder};
 use crate::tools::registry::dispatch;
@@ -216,7 +217,10 @@ pub struct LoopConfig {
     /// }
     /// ```
     ///
-    /// // TODO(#13): optional provider-queried limits (dynamic, not static)
+    /// Static entries here are the operator override; when a model is absent,
+    /// the loop falls back to a provider-queried dynamic limit
+    /// (`ProviderClient::model_context_limit`, cached per model) and then to
+    /// `context_limit`.  See `model_effective_limit` (#13, implemented).
     pub model_context_limits: HashMap<String, u32>,
     /// Ordered list of candidate models to switch to when token pressure is
     /// detected on the active model.
@@ -234,6 +238,14 @@ pub struct LoopConfig {
     ///
     /// Empty = token-pressure auto-switch is disabled (compaction only).
     pub token_pressure_models: Vec<String>,
+    /// Durable-run wiring (HV2-2).  `None` disables checkpointing (default);
+    /// `Some` persists [`RunState`] after each turn and, when its `resume`
+    /// field is set, seeds the loop from a prior run.
+    pub checkpoint: Option<CheckpointConfig>,
+    /// Per-run budget hard gate (HV2-6).  Default (all-`None`) = no limit; a
+    /// configured limit aborts the run with `BudgetExceeded` once cumulative
+    /// token/cost usage crosses it.
+    pub budget: crate::budget::BudgetConfig,
 }
 
 impl Default for LoopConfig {
@@ -250,6 +262,8 @@ impl Default for LoopConfig {
             context_limit: 0,
             model_context_limits: HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         }
     }
 }
@@ -326,6 +340,14 @@ pub async fn run_loop(
 
     let tools = registry.tool_schemas();
 
+    // Capture the originating task (first user message) for the checkpoint
+    // record before `initial_messages` is consumed into history.
+    let mut task = initial_messages
+        .iter()
+        .find(|m| matches!(m.role, Role::User))
+        .and_then(|m| m.content.clone())
+        .unwrap_or_default();
+
     // Build the initial message history.
     let mut history: Vec<ChatMessage> = Vec::new();
     history.push(ChatMessage::system(&system_prompt));
@@ -334,6 +356,12 @@ pub async fn run_loop(
     let mut turns = 0u32;
     let mut compactions = 0u32;
     let mut token_pressure_switches = 0u32;
+    // Cumulative tokens (prompt + completion) across the run, for the budget
+    // hard gate (HV2-6).
+    let mut total_tokens = 0u64;
+    // Warn at most once if a budget is configured but the provider never
+    // returns usage — the gate would otherwise silently never trip.
+    let mut budget_usage_warned = false;
 
     // Per-session cache of provider-queried context limits.
     // Key = model id; Value = result of one `model_context_limit` call.
@@ -354,6 +382,36 @@ pub async fn run_loop(
 
     // Consecutive malformed-tool-call counter for the current model.
     let mut consecutive_malformed = 0u32;
+
+    // ── Durable-run resume (HV2-2) ────────────────────────────────────────────
+    // If a checkpoint with prior state is present, replace the freshly-built
+    // locals with the checkpointed values.  The worktree already persists on
+    // disk, so this is reload + re-attach — there is NO replay of past turns
+    // (the resumed `history` carries everything the model needs).
+    if let Some(state) = config.checkpoint.as_ref().and_then(|c| c.resume.as_ref()) {
+        // Guard: the replayed `history` describes work done in `state.workdir`.
+        // Re-attaching to a different `--workdir` would silently disagree with
+        // what's on disk, so refuse the mismatch.  (Empty workdir = a legacy
+        // checkpoint from before this field; skip the check.)
+        if !state.workdir.as_os_str().is_empty() {
+            let current =
+                std::fs::canonicalize(&ctx.workdir).unwrap_or_else(|_| ctx.workdir.clone());
+            if current != state.workdir {
+                return Err(HarnessError::Other(format!(
+                    "resume workdir mismatch: checkpoint ran in `{}` but --workdir resolves \
+                     to `{}` — resume from the original worktree",
+                    state.workdir.display(),
+                    current.display()
+                )));
+            }
+        }
+        history = state.history.clone();
+        turns = state.turns;
+        compactions = state.compactions;
+        token_pressure_switches = state.token_pressure_switches;
+        active_model = state.active_model.clone();
+        task = state.task.clone();
+    }
 
     loop {
         turns += 1;
@@ -457,6 +515,35 @@ pub async fn run_loop(
         if let Some(usage) = &usage_opt {
             tb.tokens_in = usage.prompt_tokens;
             tb.tokens_out = usage.completion_tokens;
+            total_tokens += u64::from(usage.prompt_tokens) + u64::from(usage.completion_tokens);
+        } else if !config.budget.is_unlimited() && !budget_usage_warned {
+            eprintln!(
+                "[bwoc-harness] WARNING: a budget is configured but the provider returned no \
+                 usage data — the budget gate cannot account for spend and will not trip."
+            );
+            budget_usage_warned = true;
+        }
+
+        // ── Budget hard gate (HV2-6) ─────────────────────────────────────────
+        // The model call is already paid for; if cumulative usage crosses a
+        // configured token/cost budget, record this turn and abort the run
+        // rather than spending on further turns or tool dispatch.
+        if !config.budget.is_unlimited() {
+            if let Err(e) = config.budget.check(total_tokens) {
+                let m = tb.finish();
+                telemetry.record_turn(m);
+                persist_checkpoint(
+                    config.checkpoint.as_ref(),
+                    &task,
+                    &history,
+                    turns,
+                    compactions,
+                    token_pressure_switches,
+                    &active_model,
+                    &ctx.workdir,
+                );
+                return Err(e);
+            }
         }
 
         // ── Check for malformed tool calls ───────────────────────────────────
@@ -515,6 +602,16 @@ pub async fn run_loop(
                 let m = tb.finish();
                 telemetry.record_turn(m);
                 turns -= 1; // Don't count the bad turn toward max_iterations.
+                persist_checkpoint(
+                    config.checkpoint.as_ref(),
+                    &task,
+                    &history,
+                    turns,
+                    compactions,
+                    token_pressure_switches,
+                    &active_model,
+                    &ctx.workdir,
+                );
                 continue;
             }
             // Under the threshold: fall through to normal processing.
@@ -535,6 +632,15 @@ pub async fn run_loop(
 
             let m = tb.finish();
             telemetry.record_turn(m);
+
+            // Run completed successfully — drop its checkpoint (Anattā: nothing
+            // left to resume).  Best-effort; a failed cleanup must not fail the
+            // run that just succeeded.
+            if let Some(cfg) = config.checkpoint.as_ref() {
+                if let Err(e) = cfg.delete() {
+                    eprintln!("[bwoc-harness] warning: checkpoint cleanup failed: {e}");
+                }
+            }
 
             return Ok(LoopResult {
                 final_response,
@@ -568,7 +674,55 @@ pub async fn run_loop(
 
         let m = tb.finish();
         telemetry.record_turn(m);
+
+        // Turn boundary: reply + tool results are applied to history — the only
+        // consistent seam to snapshot (HV2-2).
+        persist_checkpoint(
+            config.checkpoint.as_ref(),
+            &task,
+            &history,
+            turns,
+            compactions,
+            token_pressure_switches,
+            &active_model,
+            &ctx.workdir,
+        );
         // Continue to next turn.
+    }
+}
+
+/// Persist a [`RunState`] snapshot if durability is enabled (HV2-2).
+///
+/// Called at each turn boundary — after the turn's reply and tool results are
+/// applied to `history`.  Best-effort: a failed write warns but never aborts a
+/// run that is otherwise progressing.
+// The parameters are exactly the durable loop locals; bundling them into a
+// struct would only move the same fields behind one more name.
+#[allow(clippy::too_many_arguments)]
+fn persist_checkpoint(
+    checkpoint: Option<&CheckpointConfig>,
+    task: &str,
+    history: &[ChatMessage],
+    turns: u32,
+    compactions: u32,
+    token_pressure_switches: u32,
+    active_model: &str,
+    workdir: &std::path::Path,
+) {
+    let Some(cfg) = checkpoint else { return };
+    let state = RunState {
+        run_id: cfg.run_id.clone(),
+        task: task.to_string(),
+        history: history.to_vec(),
+        turns,
+        compactions,
+        token_pressure_switches,
+        active_model: active_model.to_string(),
+        // Canonical so the resume guard compares stable absolute paths.
+        workdir: std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf()),
+    };
+    if let Err(e) = cfg.save(&state) {
+        eprintln!("[bwoc-harness] warning: checkpoint save failed: {e}");
     }
 }
 
@@ -582,8 +736,8 @@ async fn call_provider_once(
     stream: bool,
 ) -> HarnessResult<(ChatMessage, Option<crate::provider::Usage>)> {
     if stream {
-        let msg = stream_and_accumulate(provider, messages, tools, model).await?;
-        Ok((msg, None)) // streaming path doesn't expose usage counts
+        // Streaming now exposes usage via stream_options.include_usage (HV2-7).
+        stream_and_accumulate(provider, messages, tools, model).await
     } else {
         let completion = provider.complete(messages, tools, model).await?;
         let usage = completion.usage.clone();
@@ -778,8 +932,14 @@ fn find_larger_vetted_model(
     None
 }
 
-/// Dispatch all tool calls in a turn sequentially, passing each through the
-/// full safety pipeline: GUARDRAILS → PERMISSION → SANDBOX → execute.
+/// Dispatch all tool calls in a turn, passing each through the full safety
+/// pipeline: GUARDRAILS → PERMISSION → SANDBOX → execute.
+///
+/// Two phases: the guardrails→permission *decision* runs SEQUENTIALLY (the
+/// permission layer may prompt the operator on a TTY in `ask` mode, and
+/// concurrent prompts on one terminal would interleave and could misattribute
+/// an approval to the wrong call); the approved calls then SANDBOX→execute
+/// CONCURRENTLY (the HV2-7 win — the expensive step parallelises).
 ///
 /// A blocked call returns the blocking reason as the tool result content so
 /// the model can adapt.  It is NOT a hard error that stops the loop.
@@ -789,69 +949,82 @@ async fn execute_tool_calls(
     ctx: &ToolContext,
     config: &LoopConfig,
 ) -> Vec<ToolCallResult> {
-    // P2: sequential execution (concurrent tool execution is P3).
-    let mut results = Vec::with_capacity(calls.len());
     let os_sandbox = make_os_sandbox(&ctx.workdir);
 
-    for call in calls {
-        let tool_name = &call.function.name;
-        let args_json = &call.function.arguments;
+    // ── Phase 1: Guardrails → Permission, SEQUENTIALLY ──────────────────────
+    // Decide every call in order before any execution so an interactive `ask`
+    // prompt can't race another call's prompt for the same stdin/terminal.
+    let decisions: Vec<PolicyOutcome> = calls
+        .iter()
+        .map(|call| {
+            run_pipeline(
+                &call.function.name,
+                &call.function.arguments,
+                &ctx.workdir,
+                &config.policy,
+                config.is_tty,
+            )
+        })
+        .collect();
 
-        // ── Layer 1 + 2: Guardrails → Permission ────────────────────────────
-        let outcome = run_pipeline(
-            tool_name,
-            args_json,
-            &ctx.workdir,
-            &config.policy,
-            config.is_tty,
-        );
+    // ── Phase 2: Sandbox → execute, CONCURRENTLY ────────────────────────────
+    // `join_all` preserves input order so results line up with `calls`; each
+    // call carries the decision already made for it in phase 1.
+    let futures = calls.iter().zip(decisions).map(|(call, outcome)| {
+        let os_sandbox = &*os_sandbox;
+        async move {
+            let tool_name = &call.function.name;
+            let args_json = &call.function.arguments;
 
-        let (content, denied) = match outcome {
-            PolicyOutcome::Proceed => {
-                // ── Layer 3: Sandbox ─────────────────────────────────────────
-                // For run_command: use the sandboxed runner (env scrub + arg scan + cwd lock).
-                // For all other tools: the sandbox path-confinement is already enforced
-                // by ToolContext::resolve_path; run through dispatch as before.
-                let result = if tool_name == "run_command" {
-                    // Extract the command string from the JSON args.
-                    match serde_json::from_str::<serde_json::Value>(args_json)
-                        .ok()
-                        .and_then(|v| v["command"].as_str().map(|s| s.to_string()))
-                    {
-                        Some(cmd) => {
-                            match sandbox::run_sandboxed(&cmd, &ctx.workdir, &*os_sandbox).await {
-                                Ok(output) => output.into_tool_result(),
-                                Err(e) => format!("error: {e}"),
+            let (content, denied) = match outcome {
+                PolicyOutcome::Proceed => {
+                    // ── Layer 3: Sandbox ─────────────────────────────────────────
+                    // For run_command: use the sandboxed runner (env scrub + arg scan + cwd lock).
+                    // For all other tools: the sandbox path-confinement is already enforced
+                    // by ToolContext::resolve_path; run through dispatch as before.
+                    let result = if tool_name == "run_command" {
+                        // Extract the command string from the JSON args.
+                        match serde_json::from_str::<serde_json::Value>(args_json)
+                            .ok()
+                            .and_then(|v| v["command"].as_str().map(|s| s.to_string()))
+                        {
+                            Some(cmd) => {
+                                match sandbox::run_sandboxed(&cmd, &ctx.workdir, &*os_sandbox).await
+                                {
+                                    Ok(output) => output.into_tool_result(),
+                                    Err(e) => format!("error: {e}"),
+                                }
+                            }
+                            None => {
+                                // Malformed args: fall through to dispatch which will
+                                // return a proper "missing command argument" error.
+                                dispatch(registry, tool_name, args_json, ctx).await
                             }
                         }
-                        None => {
-                            // Malformed args: fall through to dispatch which will
-                            // return a proper "missing command argument" error.
-                            dispatch(registry, tool_name, args_json, ctx).await
-                        }
-                    }
-                } else {
-                    dispatch(registry, tool_name, args_json, ctx).await
-                };
-                (result, false)
-            }
-            blocked => {
-                // Feed the denial back to the model as the tool result.
-                let msg = blocked
-                    .into_tool_result()
-                    .unwrap_or_else(|| "blocked".to_string());
-                (msg, true)
-            }
-        };
+                    } else {
+                        dispatch(registry, tool_name, args_json, ctx).await
+                    };
+                    (result, false)
+                }
+                blocked => {
+                    // Feed the denial back to the model as the tool result.
+                    let msg = blocked
+                        .into_tool_result()
+                        .unwrap_or_else(|| "blocked".to_string());
+                    (msg, true)
+                }
+            };
 
-        results.push(ToolCallResult {
-            call_id: call.id.clone(),
-            tool_name: call.function.name.clone(),
-            content,
-            denied,
-        });
-    }
-    results
+            ToolCallResult {
+                call_id: call.id.clone(),
+                tool_name: call.function.name.clone(),
+                content,
+                denied,
+            }
+        }
+    });
+
+    futures_util::future::join_all(futures).await
 }
 
 struct ToolCallResult {
@@ -869,7 +1042,7 @@ async fn stream_and_accumulate(
     messages: Vec<ChatMessage>,
     tools: Vec<crate::provider::Tool>,
     model: &str,
-) -> HarnessResult<ChatMessage> {
+) -> HarnessResult<(ChatMessage, Option<crate::provider::Usage>)> {
     use futures_util::StreamExt;
 
     let mut stream = provider.stream(messages, tools, model).await?;
@@ -878,9 +1051,15 @@ async fn stream_and_accumulate(
     // tool_calls accumulation: index → (id, type, name, args_buf)
     let mut tool_calls_acc: std::collections::HashMap<u32, ToolCallAccumulator> =
         std::collections::HashMap::new();
+    // Usage arrives on the final chunk (stream_options.include_usage); keep the
+    // last non-empty one (HV2-7 — closes the streaming-usage gap).
+    let mut usage: Option<crate::provider::Usage> = None;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
+        if chunk.usage.is_some() {
+            usage = chunk.usage;
+        }
         for delta_choice in chunk.choices {
             let delta = delta_choice.delta;
 
@@ -929,7 +1108,7 @@ async fn stream_and_accumulate(
             .collect()
     };
 
-    Ok(ChatMessage::assistant(
+    let message = ChatMessage::assistant(
         if content_buf.is_empty() {
             None
         } else {
@@ -940,7 +1119,8 @@ async fn stream_and_accumulate(
         } else {
             Some(tool_calls)
         },
-    ))
+    );
+    Ok((message, usage))
 }
 
 #[derive(Default)]
@@ -962,8 +1142,8 @@ mod tests {
     use crate::policy::{Mode, Policy};
     use crate::provider::types::FunctionCall;
     use crate::provider::{
-        ChatCompletion, ChatMessage, Choice, FinishReason, ProviderClient, StreamChunk, Tool,
-        ToolCall, Usage,
+        ChatCompletion, ChatMessage, Choice, Delta, FinishReason, ProviderClient, StreamChunk,
+        StreamDelta, Tool, ToolCall, Usage,
     };
     use crate::telemetry::Telemetry;
     use crate::tools::registry::default_registry;
@@ -1126,6 +1306,8 @@ mod tests {
             context_limit: 0,
             model_context_limits: std::collections::HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         }
     }
 
@@ -1458,6 +1640,8 @@ mod tests {
             context_limit: 0,
             model_context_limits: std::collections::HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         };
 
         let result = run_loop(
@@ -1505,6 +1689,8 @@ mod tests {
             context_limit: 0,
             model_context_limits: std::collections::HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         };
 
         let err = run_loop(
@@ -1807,6 +1993,8 @@ mod tests {
             context_limit: 0,
             model_context_limits: std::collections::HashMap::new(),
             token_pressure_models: Vec::new(),
+            checkpoint: None,
+            budget: crate::budget::BudgetConfig::default(),
         };
 
         let result = run_loop(
@@ -2466,5 +2654,367 @@ mod tests {
         );
         assert!("invalid".parse::<VettedMode>().is_err());
         assert!("Warn".parse::<VettedMode>().is_err()); // case-sensitive
+    }
+
+    // ── Durability / resume (HV2-2) ───────────────────────────────────────────
+
+    /// Resuming seeds the loop from the checkpoint and continues the turn count
+    /// without replaying past turns; a successful finish drops the checkpoint.
+    #[tokio::test]
+    async fn resume_continues_turn_count_no_replay() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(tmp.path());
+
+        // A prior run that had reached turn 3 with its own history + state.
+        let prior_history = vec![
+            ChatMessage::system("resumed-system-prompt"),
+            ChatMessage::user("original task"),
+            ChatMessage::assistant(Some("partial progress".to_string()), None),
+        ];
+        let state = RunState {
+            run_id: "resume-1".to_string(),
+            task: "original task".to_string(),
+            history: prior_history.clone(),
+            turns: 3,
+            compactions: 1,
+            token_pressure_switches: 2,
+            active_model: "mock".to_string(),
+            workdir: std::path::PathBuf::new(), // empty → resume guard skipped
+        };
+        let ckpt = CheckpointConfig {
+            run_id: "resume-1".to_string(),
+            root: tmp.path().join("runs"),
+            resume: Some(state),
+        };
+
+        // The provider returns a final answer immediately → exactly one more turn.
+        let provider = Arc::new(MockProvider::new(vec![make_final_response(
+            "resumed answer",
+        )]));
+        let registry = Arc::new(default_registry());
+        let mut telem = noop_telemetry();
+        let mut config = test_config(20);
+        config.checkpoint = Some(ckpt);
+
+        // A *fresh* system prompt + empty initial messages: if the loop replayed
+        // or rebuilt, history[0] would be "fresh-system", not the resumed one.
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "fresh-system".to_string(),
+            vec![],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.turns, 4, "continues 3 → 4 (one new turn, no replay)");
+        assert_eq!(result.compactions, 1, "carried over from checkpoint");
+        assert_eq!(
+            result.token_pressure_switches, 2,
+            "carried over from checkpoint"
+        );
+        assert_eq!(
+            result.history[0].content.as_deref(),
+            Some("resumed-system-prompt"),
+            "used resumed history, not the fresh system prompt"
+        );
+        // Success drops the checkpoint dir (Anattā: nothing left to resume).
+        assert!(!tmp.path().join("runs").join("resume-1").exists());
+    }
+
+    /// Resuming with a `--workdir` that differs from the checkpoint's worktree
+    /// is refused rather than silently re-attaching to the wrong directory.
+    #[tokio::test]
+    async fn resume_workdir_mismatch_is_refused() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(tmp.path()); // current run points here
+        let state = RunState {
+            run_id: "resume-mm".to_string(),
+            task: "t".to_string(),
+            history: vec![ChatMessage::system("s")],
+            turns: 1,
+            compactions: 0,
+            token_pressure_switches: 0,
+            active_model: "mock".to_string(),
+            // A different worktree than `ctx` → must be refused.
+            workdir: tmp.path().join("some-other-worktree"),
+        };
+        let mut config = test_config(20);
+        config.checkpoint = Some(CheckpointConfig {
+            run_id: "resume-mm".to_string(),
+            root: tmp.path().join("runs"),
+            resume: Some(state),
+        });
+
+        let err = run_loop(
+            Arc::new(MockProvider::new(vec![make_final_response("x")])),
+            Arc::new(default_registry()),
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![],
+            &mut noop_telemetry(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{err}").contains("workdir mismatch"), "got: {err}");
+    }
+
+    /// State is persisted at each turn boundary; a run that ends in error keeps
+    /// its checkpoint, and the loaded snapshot reflects the completed turns.
+    #[tokio::test]
+    async fn checkpoint_persisted_per_turn_and_kept_on_error() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(tmp.path());
+        let root = tmp.path().join("runs");
+
+        // Always returns a tool call → the loop never reaches a final answer and
+        // hits MaxIterations(2), which returns Err without deleting the checkpoint.
+        let provider = Arc::new(MockProvider::new(vec![
+            make_tool_call_response("list_dir", "{}"),
+            make_tool_call_response("list_dir", "{}"),
+        ]));
+        let registry = Arc::new(default_registry());
+        let mut telem = noop_telemetry();
+        let mut config = test_config(2);
+        config.checkpoint = Some(CheckpointConfig {
+            run_id: "crash-1".to_string(),
+            root: root.clone(),
+            resume: None,
+        });
+
+        let err = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("keep going")],
+            &mut telem,
+        )
+        .await;
+        assert!(matches!(err, Err(HarnessError::MaxIterations(2))));
+
+        // Checkpoint survives the error and reflects the two completed turns.
+        let path = root.join("crash-1").join("checkpoint.json");
+        assert!(path.exists(), "checkpoint kept on error (resumable)");
+        let loaded = RunState::load_from(&path).unwrap();
+        assert_eq!(loaded.turns, 2);
+        assert_eq!(loaded.task, "keep going");
+        assert_eq!(loaded.run_id, "crash-1");
+    }
+
+    // ── Streaming usage (HV2-7) ───────────────────────────────────────────────
+
+    /// A provider whose `stream()` replays a fixed list of chunks — including a
+    /// final usage-only chunk, as an OpenAI-compatible endpoint emits when
+    /// `stream_options.include_usage` is set.
+    struct StreamingMockProvider {
+        chunks: Vec<StreamChunk>,
+    }
+
+    #[async_trait]
+    impl ProviderClient for StreamingMockProvider {
+        async fn complete(
+            &self,
+            _m: Vec<ChatMessage>,
+            _t: Vec<Tool>,
+            _model: &str,
+        ) -> Result<ChatCompletion, HarnessError> {
+            unimplemented!("streaming-only mock")
+        }
+
+        async fn stream(
+            &self,
+            _m: Vec<ChatMessage>,
+            _t: Vec<Tool>,
+            _model: &str,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<StreamChunk, HarnessError>> + Send>>,
+            HarnessError,
+        > {
+            let items: Vec<Result<StreamChunk, HarnessError>> =
+                self.chunks.iter().cloned().map(Ok).collect();
+            Ok(Box::pin(futures_util::stream::iter(items)))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<(), HarnessError> {
+            Ok(())
+        }
+    }
+
+    fn content_chunk(text: &str) -> StreamChunk {
+        StreamChunk {
+            id: "c".to_string(),
+            choices: vec![StreamDelta {
+                index: 0,
+                delta: Delta {
+                    role: None,
+                    content: Some(text.to_string()),
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_path_exposes_usage() {
+        let provider = StreamingMockProvider {
+            chunks: vec![
+                content_chunk("hello "),
+                content_chunk("world"),
+                // Final usage-only chunk: empty choices, usage present.
+                StreamChunk {
+                    id: "final".to_string(),
+                    choices: vec![],
+                    usage: Some(Usage {
+                        prompt_tokens: 12,
+                        completion_tokens: 7,
+                        total_tokens: 19,
+                    }),
+                },
+            ],
+        };
+
+        let (msg, usage) = stream_and_accumulate(&provider, vec![], vec![], "mock")
+            .await
+            .unwrap();
+
+        assert_eq!(msg.content.as_deref(), Some("hello world"));
+        let usage = usage.expect("streaming path must surface usage (HV2-7)");
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn streaming_without_usage_chunk_returns_none() {
+        let provider = StreamingMockProvider {
+            chunks: vec![content_chunk("no usage here")],
+        };
+        let (_msg, usage) = stream_and_accumulate(&provider, vec![], vec![], "mock")
+            .await
+            .unwrap();
+        assert!(
+            usage.is_none(),
+            "no usage chunk → None, not a fabricated zero"
+        );
+    }
+
+    // ── Concurrent tool execution (HV2-7) ─────────────────────────────────────
+
+    /// Multiple independent tool calls in one turn all execute and come back in
+    /// input order (join_all preserves order).
+    #[tokio::test]
+    async fn independent_tool_calls_all_execute_in_order() {
+        let tmp = TempDir::new().unwrap();
+        let registry = default_registry();
+        let ctx = ToolContext::new(tmp.path());
+        let config = test_config(5);
+
+        let calls = vec![
+            ToolCall {
+                id: "call-0".to_string(),
+                kind: "function".to_string(),
+                function: FunctionCall {
+                    name: "list_dir".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            },
+            ToolCall {
+                id: "call-1".to_string(),
+                kind: "function".to_string(),
+                function: FunctionCall {
+                    name: "list_dir".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            },
+            ToolCall {
+                id: "call-2".to_string(),
+                kind: "function".to_string(),
+                function: FunctionCall {
+                    name: "list_dir".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            },
+        ];
+
+        let results = execute_tool_calls(&calls, &registry, &ctx, &config).await;
+
+        assert_eq!(results.len(), 3);
+        // Order preserved: result[i] corresponds to calls[i].
+        for (i, r) in results.iter().enumerate() {
+            assert_eq!(r.call_id, format!("call-{i}"));
+            assert!(!r.denied, "allow-all policy → not denied");
+        }
+    }
+
+    // ── Budget hard gate (HV2-6) ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn token_budget_aborts_run_when_exceeded() {
+        let tmp = TempDir::new().unwrap();
+        // One response reporting 8+5 = 13 tokens; budget is 10.
+        let provider = Arc::new(MockProvider::new(vec![make_final_response_with_usage(
+            "done", 8, 5,
+        )]));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+        let mut config = test_config(5);
+        config.budget = crate::budget::BudgetConfig {
+            max_tokens: Some(10),
+            ..Default::default()
+        };
+
+        let err = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("go")],
+            &mut telem,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(err, HarnessError::BudgetExceeded { kind: "token", .. }),
+            "expected token BudgetExceeded, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_within_token_budget_completes() {
+        let tmp = TempDir::new().unwrap();
+        let provider = Arc::new(MockProvider::new(vec![make_final_response_with_usage(
+            "done", 8, 5,
+        )]));
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext::new(tmp.path());
+        let mut telem = noop_telemetry();
+        let mut config = test_config(5);
+        config.budget = crate::budget::BudgetConfig {
+            max_tokens: Some(100), // 13 ≤ 100
+            ..Default::default()
+        };
+
+        let result = run_loop(
+            provider,
+            registry,
+            ctx,
+            config,
+            "sys".to_string(),
+            vec![ChatMessage::user("go")],
+            &mut telem,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.final_response, "done");
     }
 }

@@ -1,5 +1,5 @@
 ---
-title: ISO 9001 Quality Management System Audit (stub)
+title: ISO 9001 Quality Management System Audit
 aliases:
   - audit-iso-9001
 tags:
@@ -8,23 +8,30 @@ tags:
   - kind/audit
   - domain/compliance
   - standard/iso-9001
-  - status/stub
-maturity: L0
+  - status/runtime
+maturity: L1
 ---
 
-# ISO 9001 Quality Management System Audit (stub)
+# ISO 9001 Quality Management System Audit
 
-> [!abstract] **Stub plugin.** Declares the QMS criteria the future runtime will check; emits `status = "not_implemented"` for every criterion with the uniform remedy `"Runtime deferred to BWOC-EPIC-3."` Schema conformance only — no real audit logic. The full runtime lands in [[../../notes/2026-05-26_iso-compliance-plugins|BWOC-EPIC-3]].
+> [!abstract] **Attestation runtime (v0.2.0).** Reads operator-signed attestations from `.bwoc/workspace.toml` under `[[plugins.audit-iso-9001.attestations]]` and emits `evidence.kind = "attestation"` findings (`signer` + `signed_at` + optional `valid_through`) per the [BWOC-27 schema extension](../../docs/en/PLUGINS.en.md#evidence-kinds). Criteria without an operator attestation emit `status = "fail"` pointing at the `workspace.toml` block. Replaces the v0.1.0 stub from EPIC-2.
 
-## Why This Is a Stub
+## Status & Roadmap
 
-[[../../notes/2026-05-26_iso-compliance-plugins|The EPIC-2 framing note]] explains the layered depth (full / stub / stub / stub) for the four ISO plugins. The short version:
+| Version | Date | Change |
+|---|---|---|
+| v0.1.0 | 2026-05-26 | Stub. Eight criteria declared; every finding `status = "not_implemented"`. Schema conformance only — no workspace inspection. Landed in EPIC-2. |
+| v0.2.0 | 2026-05-27 | **Attestation runtime.** Reads `[[plugins.audit-iso-9001.attestations]]` from `workspace.toml`; emits `kind = "attestation"` for criteria with an operator attestation and `status = "fail"` with a `workspace.toml`-pointing remedy for the rest. The eight `criterion_id`s carry over unchanged (stability contract, PLUGINS.en.md §Stability). Companion change in `crates/bwoc-cli/src/audit.rs` extends the dispatcher's schema validator to accept attestation + sample evidence kinds and pass through sub-fields — runtime-side companion to the BWOC-27 doc-side schema bump. Landed in EPIC-3 BWOC-28. See [[../../notes/2026-05-27_9001-runtime-attestation-source]] for the design. |
 
-- ISO 9001 describes **organizational practices** — quality policy, management review, internal audit, corrective action — that do not reduce to file-existence on a workspace. Inferring "this organization has a documented quality policy" from "this repo contains `POLICY.md`" would falsify the audit (Musāvāda — see [PHILOSOPHY.en.md](../../docs/en/PHILOSOPHY.en.md) §Sila 5).
-- Runtime for 9001-class plugins needs a richer evidence model (operator attestations, time-bounded evidence, sampling) that is not present in v1 of the [PLUGINS.en.md §Audit Findings Schema](../../docs/en/PLUGINS.en.md#audit-findings-schema). Building that is EPIC-3 work.
-- Operators running `bwoc plugin list --kind audit` after Sprint 3 see all four ISO frameworks. The absence of 9001 would imply "BWOC has no opinion on QMS"; the stub form says "BWOC has a placeholder, runtime is on the roadmap." That is the honest signal.
+## Why a Runtime Now
 
-## Criteria (v0.1.0)
+[[../../notes/2026-05-26_iso-compliance-plugins|The EPIC-2 framing note]] explained why 9001 shipped as a stub first — its evidence is organisational, not file-existence-shaped, and the v1 schema could not express attestation. EPIC-3 closed that gap:
+
+- The [BWOC-26 design note](../../notes/2026-05-27_iso-runtime-evidence-model.md) pinned the new evidence model (`attestation`, `sample`, time-bounded fields).
+- [BWOC-27](../../docs/en/PLUGINS.en.md#evidence-kinds) extended the schema with `attestation` (required `signer` + `signed_at`) and the orthogonal optional `valid_through`.
+- BWOC-28 (this change) implements the 9001 runtime against the new schema. The operator provides attestations in `workspace.toml`; the plugin emits one finding per criterion, honest about which are covered and which are not. Inferring "this organization has a documented quality policy" from "this repo contains `POLICY.md`" would still falsify the audit (Musāvāda — [PHILOSOPHY.en.md](../../docs/en/PHILOSOPHY.en.md) §Sila 5). Attestation evidence keeps the audit honest by requiring an operator to vouch for the practice, dated, with provenance.
+
+## Criteria (v0.2.0)
 
 Eight headline QMS criteria, drawn from the main clauses of ISO 9001:2015[^iso-9001-2015]. Declaration order in [[criteria]] is the report order (PLUGINS.en.md line 84). `criterion_id` values are stable across releases (PLUGINS.en.md §Stability); renames are a major version bump.
 
@@ -39,7 +46,7 @@ Eight headline QMS criteria, drawn from the main clauses of ISO 9001:2015[^iso-9
 | `9001-management-review` | 9.3 | Management review | high |
 | `9001-corrective-action` | 10.2 | Nonconformity and corrective action | medium |
 
-The eight criteria cover one practice per major clause (4 through 10) that every QMS-conformant organization is expected to operate. The residual sub-clauses (resources, infrastructure, monitoring & measurement of operational processes, customer satisfaction surveys, etc.) are deferred to v0.2.0 once the EPIC-3 runtime exists and can support them.
+The eight criteria cover one practice per major clause (4 through 10) that every QMS-conformant organization is expected to operate. The residual sub-clauses (resources, infrastructure, monitoring & measurement of operational processes, customer satisfaction surveys, etc.) remain deferred — adding criteria is a minor-version bump, never a rename of an existing id.
 
 ## How It Runs (Today)
 
@@ -47,64 +54,97 @@ The eight criteria cover one practice per major clause (4 through 10) that every
 bwoc audit run --plugin audit-iso-9001 --json
 ```
 
-The dispatcher spawns `audit.sh` (per `BWOC-12`) with the standard env contract: `BWOC_WORKSPACE`, `BWOC_PLUGIN_DIR`, `BWOC_AUDIT_OPERATION`. The stub:
+The dispatcher spawns `audit.sh` (per `BWOC-12`) with the standard env contract: `BWOC_WORKSPACE`, `BWOC_PLUGIN_DIR`, `BWOC_AUDIT_OPERATION`. The runtime:
 
-1. Reads `criteria.toml` from `BWOC_PLUGIN_DIR`.
-2. For each criterion in declaration order, emits a finding with `status = "not_implemented"`, `evidence = { kind: "none", value: "" }`, and `remedy = "Runtime deferred to BWOC-EPIC-3."`
-3. Exits `0` on success.
+1. Reads `criteria.toml` from `BWOC_PLUGIN_DIR` for the declared criteria (id, severity).
+2. Reads `.bwoc/workspace.toml` from `BWOC_WORKSPACE` and walks `[[plugins.audit-iso-9001.attestations]]`, building an attestation table keyed by `criterion_id`.
+3. For each criterion in declaration order:
+   - **Attestation present and complete** (`statement` + `signer` + `signed_at`) → `status = "pass"`, `evidence.kind = "attestation"` with `value = statement`, `signer`, `signed_at`, optional `valid_through`.
+   - **Attestation present but incomplete** → `status = "fail"`, `evidence.kind = "file"` pointing at `.bwoc/workspace.toml`, remedy names the missing required field(s).
+   - **Attestation absent** → `status = "fail"`, `evidence.kind = "file"` pointing at `.bwoc/workspace.toml`, remedy names the criterion_id and the required fields.
+4. Exits `0` on success — non-pass findings are *findings*, not errors. A non-zero exit signals a framework-side problem (unreadable `criteria.toml`).
 
-`BWOC_WORKSPACE` is intentionally **unread**. The stub does not inspect the workspace, and pretending to would falsify the audit. This is the Musāvāda guard at the plugin layer.
+The dispatcher's process exit code is the count of `fail` findings (BWOC-12), so a workspace with no attestations exits `8`, one with two attestations exits `6`, and one with all eight exits `0`.
 
 ## Sample Output
 
+A criterion with an attestation:
+
 ```json
-[
-  {
-    "criterion_id": "9001-context-of-organization",
-    "severity": "high",
-    "status": "not_implemented",
-    "evidence": { "kind": "none", "value": "" },
-    "remedy": "Runtime deferred to BWOC-EPIC-3."
-  },
-  {
-    "criterion_id": "9001-leadership-and-policy",
-    "severity": "high",
-    "status": "not_implemented",
-    "evidence": { "kind": "none", "value": "" },
-    "remedy": "Runtime deferred to BWOC-EPIC-3."
+{
+  "criterion_id": "9001-management-review",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence": {
+    "kind":          "attestation",
+    "value":         "Management review held 2026-04-15 covering Q1 QMS performance, customer feedback, internal audit results, improvement opportunities.",
+    "signer":        "Quality Manager: Tonkla K.",
+    "signed_at":     "2026-04-15",
+    "valid_through": "2027-04-15"
   }
-]
+}
 ```
 
-`bwoc audit run` wraps this into its canonical envelope `{ workspace, runs: [{ plugin, version, started_at, finished_at, findings: [...] }, ...], summary }`. The stub conforms to the same envelope as the runnable `audit-iso-29110` plugin — operators who learn one learn both.
+A criterion without an attestation:
+
+```json
+{
+  "criterion_id": "9001-internal-audit",
+  "severity":     "high",
+  "status":       "fail",
+  "evidence":     { "kind": "file", "value": ".bwoc/workspace.toml" },
+  "remedy":       "Provide a signed attestation in .bwoc/workspace.toml under [[plugins.audit-iso-9001.attestations]] with criterion_id=\"9001-internal-audit\", statement, signer, and signed_at (ISO 8601 date) to satisfy this criterion."
+}
+```
+
+`bwoc audit run` wraps the findings array in the canonical envelope `{ workspace, runs: [{ plugin, version, started_at, finished_at, findings: [...] }, ...], summary }`.
 
 ## Configuration
 
 ```toml
-# workspace.toml
+# .bwoc/workspace.toml
 [plugins.audit-iso-9001]
 enabled = true
+
+[[plugins.audit-iso-9001.attestations]]
+criterion_id  = "9001-management-review"
+statement     = "Management review held 2026-04-15 covering Q1 QMS performance, customer feedback, internal audit results, improvement opportunities."
+signer        = "Quality Manager: Tonkla K."
+signed_at     = "2026-04-15"
+valid_through = "2027-04-15"   # optional
+
+[[plugins.audit-iso-9001.attestations]]
+criterion_id = "9001-leadership-and-policy"
+statement    = "Quality policy v1.2 ratified 2026-01-10 — aligned with strategic direction."
+signer       = "Top Management: Tonkla K."
+signed_at    = "2026-01-10"
 ```
 
-The plugin declares no `[config.schema]` in its manifest — the only workspace-level surface is the universal `enabled` key. A `profile` or `scope` key may be added once the EPIC-3 runtime exists.
+Each `[[plugins.audit-iso-9001.attestations]]` entry is an **array-of-tables** under the universal `[plugins.audit-iso-9001]` block. Fields:
 
-## What EPIC-3 Will Add
+| Field | Required | Notes |
+|---|---|---|
+| `criterion_id` | yes | Must match an entry in `criteria.toml` (one of the eight declared `9001-*` ids). |
+| `statement` | yes | Verbatim attestation text. Becomes `evidence.value` on the finding. v0.2.0 expects a single-line basic TOML string. |
+| `signer` | yes | Free-text identity. Becomes `evidence.signer`. Example: `"Quality Manager: Tonkla K."`. |
+| `signed_at` | yes | ISO 8601 date (or datetime). Becomes `evidence.signed_at`. |
+| `valid_through` | optional | ISO 8601 date when the attestation stops being authoritative. Becomes `evidence.valid_through`. The dispatcher stamps but does not enforce expiry — that is downstream tooling's job (per BWOC-26). |
 
-The EPIC-3 runtime needs at minimum:
+The first occurrence of a given `criterion_id` wins; the runtime does not flag duplicates (that is `bwoc check`'s job — see BWOC-29).
 
-- **Attestation evidence.** Operator-provided statements ("our last management review was 2026-04-15, signed off by X") that the framework can record and stamp with provenance.
-- **Time-bounded evidence.** A management review from three years ago does not satisfy the same clause as one from last quarter. The schema needs a "valid through" or "as of" dimension.
-- **Sampling.** Internal audit conformance is about coverage across the QMS, not a single artifact. The runtime needs a way to declare "sampled N of M processes" without inflating finding count.
-
-Until those land, every criterion in this file emits `not_implemented`. The `criterion_id`s are stable — when EPIC-3 lands the runtime, the IDs do not change; only the `status` / `evidence` / `remedy` values do.
+`workspace.toml` was chosen over a separate `attestations/9001.toml` file or a `BWOC_AUDIT_ATTESTATIONS` env path because it is the smallest-blast-radius mechanism: operators already touch this file to enable the plugin, every change is diff-able in `git log`, and `bwoc check` already walks it. See [[../../notes/2026-05-27_9001-runtime-attestation-source]] for the full rationale.
 
 ## Maturity
 
-Declared **L0** — stub, no runtime, schema conformance only. Bumps to **L1** once EPIC-3 lands the runtime and at least one criterion emits non-`not_implemented` findings against a real workspace.
+Declared **L1** — runtime operational, emits real attestation findings per BWOC-27. Bumps to **L2** when:
+
+- `bwoc check` validates the workspace `[[attestations]]` block against the schema (BWOC-29).
+- A `bwoc audit report --expired` flag surfaces `valid_through` expiry as warnings.
+- Multi-line `statement` strings are supported (TOML triple-quoted form).
 
 ## Neutrality
 
-Manifest values name no LLM backend, vendor, or model. `kind = "audit"` is the framework's own enum (`BWOC-10`). The plugin references "ISO 9001" exclusively in `description`, in this SPEC's prose, and in the standardized `9001-*` criterion-id namespace — never in `criteria.toml` keys or in finding values beyond that namespace. Satisfies the **Samānattatā** rule.
+Manifest values name no LLM backend, vendor, or model. `kind = "audit"` is the framework's own enum (`BWOC-10`). The plugin references "ISO 9001" exclusively in `description`, in this SPEC's prose, and in the standardised `9001-*` criterion-id namespace — never in `criteria.toml` keys or in finding values beyond that namespace. Satisfies the **Samānattatā** rule.
 
 ## Sources
 
@@ -114,11 +154,13 @@ The QMS criteria are drawn from the published ISO 9001:2015 main-body clauses (4
 - ISO/TC 176/SC 2 — *Quality management and quality assurance — Quality systems.* Public landing page: <https://www.iso.org/committee/53896.html>. The technical committee responsible for the ISO 9000 family.
 - ISO — *Quality management principles* (publicly available brochure summarising the seven QMS principles that underpin the 2015 revision): <https://www.iso.org/publication/PUB100080.html>.
 
-[^iso-9001-2015]: ISO 9001:2015 is structured around the Annex SL high-level structure (clauses 4 Context, 5 Leadership, 6 Planning, 7 Support, 8 Operation, 9 Performance evaluation, 10 Improvement). The eight criteria here cover one headline practice per main clause that every QMS-conformant organization is expected to operate; the residual sub-clauses (7.1 Resources, 8.5 Production and service provision, 9.1.2 Customer satisfaction, etc.) are deferred to a v0.2.0 expansion once the EPIC-3 runtime exists.
+[^iso-9001-2015]: ISO 9001:2015 is structured around the Annex SL high-level structure (clauses 4 Context, 5 Leadership, 6 Planning, 7 Support, 8 Operation, 9 Performance evaluation, 10 Improvement). The eight criteria here cover one headline practice per main clause that every QMS-conformant organization is expected to operate; the residual sub-clauses (7.1 Resources, 8.5 Production and service provision, 9.1.2 Customer satisfaction, etc.) are not yet declared — adding criteria in a future minor-version bump is the path forward.
 
 ## See Also
 
-- [[../../docs/en/PLUGINS.en|PLUGINS.en.md]] — the plugin spec; `audit` kind row (BWOC-10), Audit Findings Schema (BWOC-11), stub-status example.
-- [[../../notes/2026-05-26_iso-compliance-plugins|2026-05-26_iso-compliance-plugins.md]] — EPIC-2 framing note (why stubs, why deferred to EPIC-3).
+- [[../../docs/en/PLUGINS.en|PLUGINS.en.md]] — the plugin spec; `audit` kind row (BWOC-10), Audit Findings Schema (BWOC-11 + BWOC-27 evidence kinds).
+- [[../../notes/2026-05-26_iso-compliance-plugins|2026-05-26_iso-compliance-plugins.md]] — EPIC-2 framing note (why stubs).
+- [[../../notes/2026-05-27_iso-runtime-evidence-model|2026-05-27_iso-runtime-evidence-model.md]] — BWOC-26 evidence-model design (attestation, sample, time-bounded fields).
+- [[../../notes/2026-05-27_9001-runtime-attestation-source|2026-05-27_9001-runtime-attestation-source.md]] — BWOC-28 design (attestation source mechanism + dispatcher reach).
 - [[../audit-iso-29110/SPEC|audit-iso-29110]] — the runnable reference audit plugin from BWOC-13.
-- [[../audit-iso-20000-1/SPEC|audit-iso-20000-1]], [[../audit-iso-27001/SPEC|audit-iso-27001]] — sibling stub plugins shipping in the same sprint.
+- [[../audit-iso-20000-1/SPEC|audit-iso-20000-1]], [[../audit-iso-27001/SPEC|audit-iso-27001]] — sibling stubs (runtimes scheduled for S5).

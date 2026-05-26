@@ -224,7 +224,35 @@ fn workspace_enabled_set(root: &Path) -> Result<BTreeMap<String, bool>, String> 
 
 const SEVERITIES: &[&str] = &["info", "low", "medium", "high", "critical"];
 const STATUSES: &[&str] = &["pass", "fail", "not_applicable", "not_implemented"];
-const EVIDENCE_KINDS: &[&str] = &["file", "content", "command", "none"];
+// BWOC-27 grew the enum from {file, content, command, none} to add `attestation`
+// + `sample`. v1 producers still validate — the additive shape is the contract
+// pinned in PLUGINS.en.md §Evidence kinds.
+const EVIDENCE_KINDS: &[&str] = &[
+    "file",
+    "content",
+    "command",
+    "attestation",
+    "sample",
+    "none",
+];
+
+/// Kind-specific and orthogonal sub-fields on `evidence` (BWOC-27). All optional
+/// at the struct level; `parse_finding` enforces the per-kind required-ness rule
+/// before constructing this. Unset fields are dropped from the canonical JSON
+/// output so a kind=`file` finding does not carry empty `signer` noise.
+#[derive(Debug, Clone, Default)]
+struct EvidenceExtras {
+    // attestation kind
+    signer: Option<String>,
+    signed_at: Option<String>,
+    // sample kind
+    sampled_count: Option<i64>,
+    sampled_of: Option<i64>,
+    window: Option<String>,
+    // orthogonal to kind (any kind may carry these)
+    as_of: Option<String>,
+    valid_through: Option<String>,
+}
 
 /// One validated finding. `severity`, `status`, `evidence.kind` are stored as
 /// the closed-enum strings; we re-emit them verbatim so canonical JSON output
@@ -236,6 +264,7 @@ struct Finding {
     status: String,
     evidence_kind: String,
     evidence_value: String,
+    evidence_extras: EvidenceExtras,
     remedy: Option<String>,
 }
 
@@ -263,6 +292,28 @@ impl Finding {
             "value".into(),
             serde_json::Value::String(self.evidence_value.clone()),
         );
+        let x = &self.evidence_extras;
+        if let Some(s) = &x.signer {
+            ev.insert("signer".into(), serde_json::Value::String(s.clone()));
+        }
+        if let Some(s) = &x.signed_at {
+            ev.insert("signed_at".into(), serde_json::Value::String(s.clone()));
+        }
+        if let Some(n) = x.sampled_count {
+            ev.insert("sampled_count".into(), serde_json::Value::from(n));
+        }
+        if let Some(n) = x.sampled_of {
+            ev.insert("sampled_of".into(), serde_json::Value::from(n));
+        }
+        if let Some(s) = &x.window {
+            ev.insert("window".into(), serde_json::Value::String(s.clone()));
+        }
+        if let Some(s) = &x.as_of {
+            ev.insert("as_of".into(), serde_json::Value::String(s.clone()));
+        }
+        if let Some(s) = &x.valid_through {
+            ev.insert("valid_through".into(), serde_json::Value::String(s.clone()));
+        }
         obj.insert("evidence".into(), serde_json::Value::Object(ev));
         if let Some(r) = &self.remedy {
             obj.insert("remedy".into(), serde_json::Value::String(r.clone()));
@@ -362,6 +413,10 @@ fn parse_finding(v: &serde_json::Value, index: usize) -> Result<Finding, String>
         ));
     }
 
+    // BWOC-27 sub-fields. Extract whatever is present; per-kind required-field
+    // validation runs after extraction.
+    let evidence_extras = parse_evidence_extras(evidence, &evidence_kind, index)?;
+
     let remedy = obj
         .get("remedy")
         .map(|x| {
@@ -399,7 +454,124 @@ fn parse_finding(v: &serde_json::Value, index: usize) -> Result<Finding, String>
         status,
         evidence_kind,
         evidence_value,
+        evidence_extras,
         remedy,
+    })
+}
+
+/// Extract and validate BWOC-27 evidence sub-fields. Per-kind required-ness:
+///
+/// - `attestation` → `signer` (non-empty string) + `signed_at` (non-empty string).
+/// - `sample` → `sampled_count` (integer ≥ 0) + `sampled_of` (integer ≥ count).
+///   `window` is optional. Strict ISO 8601 date parsing for `signed_at` /
+///   `as_of` / `valid_through` is deferred to `bwoc check` (BWOC-29) — here
+///   the dispatcher only enforces shape and required-ness.
+///
+/// Sub-fields present on a kind that doesn't claim them (e.g. `signer` on a
+/// `file` finding) are passed through unmodified; flagging them as semantic
+/// noise is `bwoc check`'s job, not the runtime dispatcher's.
+fn parse_evidence_extras(
+    evidence: &serde_json::Map<String, serde_json::Value>,
+    kind: &str,
+    index: usize,
+) -> Result<EvidenceExtras, String> {
+    fn opt_string(
+        evidence: &serde_json::Map<String, serde_json::Value>,
+        field: &str,
+        index: usize,
+    ) -> Result<Option<String>, String> {
+        match evidence.get(field) {
+            None => Ok(None),
+            Some(v) => v
+                .as_str()
+                .ok_or_else(|| format!("findings[{index}]: 'evidence.{field}' must be a string"))
+                .map(|s| Some(s.to_string())),
+        }
+    }
+    fn opt_i64(
+        evidence: &serde_json::Map<String, serde_json::Value>,
+        field: &str,
+        index: usize,
+    ) -> Result<Option<i64>, String> {
+        match evidence.get(field) {
+            None => Ok(None),
+            Some(v) => v
+                .as_i64()
+                .ok_or_else(|| format!("findings[{index}]: 'evidence.{field}' must be an integer"))
+                .map(Some),
+        }
+    }
+
+    let signer = opt_string(evidence, "signer", index)?;
+    let signed_at = opt_string(evidence, "signed_at", index)?;
+    let sampled_count = opt_i64(evidence, "sampled_count", index)?;
+    let sampled_of = opt_i64(evidence, "sampled_of", index)?;
+    let window = opt_string(evidence, "window", index)?;
+    let as_of = opt_string(evidence, "as_of", index)?;
+    let valid_through = opt_string(evidence, "valid_through", index)?;
+
+    if kind == "attestation" {
+        // PLUGINS.en.md §Evidence kinds — attestation row: signer + signed_at
+        // are required. Empty string fails the same as missing — the operator
+        // attestation has to actually carry an identity and a date.
+        match signer.as_deref() {
+            Some(s) if !s.is_empty() => {}
+            Some(_) => {
+                return Err(format!(
+                    "findings[{index}]: evidence.kind = 'attestation' requires non-empty 'signer'"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "findings[{index}]: evidence.kind = 'attestation' requires 'signer'"
+                ));
+            }
+        }
+        match signed_at.as_deref() {
+            Some(s) if !s.is_empty() => {}
+            Some(_) => {
+                return Err(format!(
+                    "findings[{index}]: evidence.kind = 'attestation' requires non-empty \
+                     'signed_at'"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "findings[{index}]: evidence.kind = 'attestation' requires 'signed_at'"
+                ));
+            }
+        }
+    } else if kind == "sample" {
+        // PLUGINS.en.md §Evidence kinds — sample row: sampled_count + sampled_of
+        // are required. `window` stays optional.
+        let count = sampled_count.ok_or_else(|| {
+            format!(
+                "findings[{index}]: evidence.kind = 'sample' requires 'sampled_count' (integer)"
+            )
+        })?;
+        let of = sampled_of.ok_or_else(|| {
+            format!("findings[{index}]: evidence.kind = 'sample' requires 'sampled_of' (integer)")
+        })?;
+        if count < 0 {
+            return Err(format!(
+                "findings[{index}]: 'sampled_count' must be ≥ 0, got {count}"
+            ));
+        }
+        if of < count {
+            return Err(format!(
+                "findings[{index}]: 'sampled_of' ({of}) must be ≥ 'sampled_count' ({count})"
+            ));
+        }
+    }
+
+    Ok(EvidenceExtras {
+        signer,
+        signed_at,
+        sampled_count,
+        sampled_of,
+        window,
+        as_of,
+        valid_through,
     })
 }
 
@@ -1094,6 +1266,7 @@ mod tests {
             } else {
                 "X".to_string()
             },
+            evidence_extras: EvidenceExtras::default(),
             remedy: if has_remedy {
                 Some("r".to_string())
             } else {
@@ -1190,5 +1363,269 @@ mod tests {
         assert_eq!(compute_exit_code(254, false), 254);
         assert_eq!(compute_exit_code(255, false), 254);
         assert_eq!(compute_exit_code(10_000, false), 254);
+    }
+
+    // -----------------------------------------------------------------------
+    // BWOC-27 evidence kinds — attestation + sample + orthogonal time-bounded
+    // fields. The dispatcher enforces enum + required sub-fields; per-criterion
+    // expected_evidence_kind validation lives in `bwoc check` (BWOC-29).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn finding_attestation_happy_path() {
+        let v = json!({
+            "criterion_id": "9001-management-review",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "Management review held 2026-04-15.",
+                "signer": "Quality Manager: Tonkla K.",
+                "signed_at": "2026-04-15",
+                "valid_through": "2027-04-15",
+            },
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        assert_eq!(f.evidence_kind, "attestation");
+        assert_eq!(
+            f.evidence_extras.signer.as_deref(),
+            Some("Quality Manager: Tonkla K.")
+        );
+        assert_eq!(f.evidence_extras.signed_at.as_deref(), Some("2026-04-15"));
+        assert_eq!(
+            f.evidence_extras.valid_through.as_deref(),
+            Some("2027-04-15")
+        );
+
+        let out = f.to_json();
+        assert_eq!(out["evidence"]["kind"], "attestation");
+        assert_eq!(out["evidence"]["signer"], "Quality Manager: Tonkla K.");
+        assert_eq!(out["evidence"]["signed_at"], "2026-04-15");
+        assert_eq!(out["evidence"]["valid_through"], "2027-04-15");
+    }
+
+    #[test]
+    fn finding_attestation_requires_signer() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "statement text",
+                "signed_at": "2026-04-15",
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("requires 'signer'"), "{e}");
+    }
+
+    #[test]
+    fn finding_attestation_requires_signed_at() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "statement",
+                "signer": "X",
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("requires 'signed_at'"), "{e}");
+    }
+
+    #[test]
+    fn finding_attestation_rejects_empty_signer() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "statement",
+                "signer": "",
+                "signed_at": "2026-04-15",
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("non-empty 'signer'"), "{e}");
+    }
+
+    #[test]
+    fn finding_sample_happy_path() {
+        let v = json!({
+            "criterion_id": "20000-1-incident-management",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "49 of 50 incidents resolved within SLA",
+                "sampled_count": 49,
+                "sampled_of": 50,
+                "window": "2026-Q1",
+            },
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        assert_eq!(f.evidence_kind, "sample");
+        assert_eq!(f.evidence_extras.sampled_count, Some(49));
+        assert_eq!(f.evidence_extras.sampled_of, Some(50));
+        assert_eq!(f.evidence_extras.window.as_deref(), Some("2026-Q1"));
+
+        let out = f.to_json();
+        assert_eq!(out["evidence"]["sampled_count"], 49);
+        assert_eq!(out["evidence"]["sampled_of"], 50);
+        assert_eq!(out["evidence"]["window"], "2026-Q1");
+    }
+
+    #[test]
+    fn finding_sample_requires_sampled_count() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "summary",
+                "sampled_of": 50,
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'sampled_count'"), "{e}");
+    }
+
+    #[test]
+    fn finding_sample_requires_sampled_of() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "summary",
+                "sampled_count": 49,
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'sampled_of'"), "{e}");
+    }
+
+    #[test]
+    fn finding_sample_rejects_count_greater_than_of() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "summary",
+                "sampled_count": 60,
+                "sampled_of": 50,
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("must be ≥ 'sampled_count'"), "{e}");
+    }
+
+    #[test]
+    fn finding_sample_rejects_negative_count() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "summary",
+                "sampled_count": -1,
+                "sampled_of": 50,
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("must be ≥ 0"), "{e}");
+    }
+
+    #[test]
+    fn finding_attestation_drops_unset_fields_in_json() {
+        // Optional `valid_through` omitted — to_json must NOT emit the key.
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "statement",
+                "signer": "X",
+                "signed_at": "2026-04-15",
+            },
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        let out = f.to_json();
+        let ev = out["evidence"].as_object().unwrap();
+        assert!(!ev.contains_key("valid_through"));
+        assert!(!ev.contains_key("as_of"));
+        assert!(!ev.contains_key("window"));
+        assert!(!ev.contains_key("sampled_count"));
+    }
+
+    #[test]
+    fn finding_file_finding_drops_attestation_subfields_in_json() {
+        // Sub-fields not declared for `file` are still passed through if the
+        // plugin sends them (dispatcher does not strip), but `to_json` only
+        // emits what's set in `EvidenceExtras` — and `signer` IS set here
+        // because we extract regardless of kind.
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "low",
+            "status": "pass",
+            "evidence": {
+                "kind": "file",
+                "value": "X.md",
+            },
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        let out = f.to_json();
+        let ev = out["evidence"].as_object().unwrap();
+        assert_eq!(ev["kind"], "file");
+        assert_eq!(ev["value"], "X.md");
+        assert!(!ev.contains_key("signer"));
+        assert!(!ev.contains_key("signed_at"));
+    }
+
+    #[test]
+    fn finding_attestation_string_sub_field_must_be_string() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "attestation",
+                "value": "statement",
+                "signer": 42,
+                "signed_at": "2026-04-15",
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'evidence.signer' must be a string"), "{e}");
+    }
+
+    #[test]
+    fn finding_sample_integer_sub_field_must_be_integer() {
+        let v = json!({
+            "criterion_id": "a-b",
+            "severity": "high",
+            "status": "pass",
+            "evidence": {
+                "kind": "sample",
+                "value": "summary",
+                "sampled_count": "49",
+                "sampled_of": 50,
+            },
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(
+            e.contains("'evidence.sampled_count' must be an integer"),
+            "{e}"
+        );
     }
 }

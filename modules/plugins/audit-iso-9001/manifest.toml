@@ -1,12 +1,14 @@
 [plugin]
 name        = "audit-iso-9001"
 kind        = "audit"
-version     = "0.1.0"
-description = "ISO 9001 Quality Management System audit — stub. Runtime deferred to BWOC-EPIC-3."
+version     = "0.2.0"
+description = "ISO 9001 Quality Management System audit — attestation runtime (BWOC-28)."
 compat      = ">=2.5.0"
 entry       = "audit.sh"
 
-# [config.schema] intentionally omitted. The stub reports every criterion as
-# `not_implemented`; there is nothing to configure until the EPIC-3 runtime
-# lands. The only workspace-level surface is the universal `enabled` key
-# on `[plugins.audit-iso-9001]`.
+# [config.schema] intentionally omitted. v0.2.0 adopts a per-criterion
+# attestation block on the workspace's [[plugins.audit-iso-9001.attestations]]
+# array (criterion_id + statement + signer + signed_at + optional
+# valid_through). That shape is not a key/value config and is documented in
+# SPEC.md §Configuration, not as a manifest schema. The universal `enabled`
+# key on `[plugins.audit-iso-9001]` is the only manifest-declared surface.

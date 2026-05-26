@@ -29,14 +29,18 @@
 //!    Findings serialize in the order the plugin emits them — per BWOC-11 line 84,
 //!    that order is itself **criterion-declaration order**, owned by the plugin.
 //!
-//! ## Exit-code convention (proposed; PLUGINS.en.md does not pin it down)
+//! ## Exit-code convention — normative
 //!
-//! - `0` — no `fail` findings across selected plugins.
+//! Pinned in `PLUGINS.en.md` §"Exit codes — `bwoc audit run`" and its TH
+//! parity. The four codes:
+//!
+//! - `0` — no `fail` findings across selected plugins (or no plugins selected).
 //! - `1..=254` — number of `fail` findings, clamped to 254.
-//! - `255` — framework/plugin error (spawn failure, non-JSON output, schema
-//!   violation, missing plugin). Mirrors the typical Unix audit-tool
-//!   convention (ShellCheck, eslint with `--max-warnings`) and keeps the
-//!   structured count in JSON regardless.
+//! - `255` — framework/plugin runtime error (spawn failure, non-JSON output,
+//!   schema violation, manifest parse error). `summary.framework_error` is
+//!   `true` in the `--json` envelope.
+//! - `2` — operator/usage error (no workspace context, or `--plugin <name>`
+//!   did not resolve to an audit-kind plugin).
 //!
 //! The exit code can be ignored entirely by passing `--json`; the
 //! `summary.fail_count` and `summary.framework_error` fields carry the same
@@ -697,8 +701,22 @@ impl Summary {
 // `bwoc audit run` — the public entry point.
 // ---------------------------------------------------------------------------
 
-/// Exit-code convention (see module doc for the full rationale).
+/// Exit-code constants — see module doc for the normative convention.
 const EXIT_FRAMEWORK_ERROR: i32 = 255;
+const EXIT_FAIL_COUNT_MAX: i32 = 254;
+
+/// Map the post-run state to a process exit code per the module-doc
+/// convention. Framework errors win over fail counts — if any plugin failed
+/// to produce a valid report, the run did not complete cleanly and we
+/// surface `255` even when other plugins reported zero fails. Otherwise
+/// the count of `fail` findings is returned, clamped to `254` so it never
+/// collides with the framework-error code.
+fn compute_exit_code(fail_count: usize, framework_error: bool) -> i32 {
+    if framework_error {
+        return EXIT_FRAMEWORK_ERROR;
+    }
+    (fail_count as i32).min(EXIT_FAIL_COUNT_MAX)
+}
 
 pub fn run(args: RunArgs) -> i32 {
     let root = match resolve_workspace(&args.common) {
@@ -850,11 +868,7 @@ pub fn run(args: RunArgs) -> i32 {
         }
     }
 
-    if framework_error {
-        return EXIT_FRAMEWORK_ERROR;
-    }
-    // fail count, clamped to [0, 254]. 255 is reserved for framework error.
-    summary.fail_count.min(254) as i32
+    compute_exit_code(summary.fail_count, framework_error)
 }
 
 // ===========================================================================
@@ -1142,5 +1156,39 @@ mod tests {
         let f = parse_finding(&v, 0).unwrap();
         let out = f.to_json();
         assert_eq!(out["remedy"], "fix it");
+    }
+
+    // -----------------------------------------------------------------------
+    // Exit-code convention — pins PLUGINS.en.md §"Exit codes — `bwoc audit run`".
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn exit_code_all_pass_returns_zero() {
+        assert_eq!(compute_exit_code(0, false), 0);
+    }
+
+    #[test]
+    fn exit_code_one_fail_returns_one() {
+        assert_eq!(compute_exit_code(1, false), 1);
+    }
+
+    #[test]
+    fn exit_code_two_fail_returns_two() {
+        assert_eq!(compute_exit_code(2, false), 2);
+    }
+
+    #[test]
+    fn exit_code_framework_error_returns_255() {
+        // framework error wins regardless of fail count — even zero fails.
+        assert_eq!(compute_exit_code(0, true), 255);
+        assert_eq!(compute_exit_code(7, true), 255);
+    }
+
+    #[test]
+    fn exit_code_clamps_at_254() {
+        // 255 is reserved for framework error; fail counts can never collide.
+        assert_eq!(compute_exit_code(254, false), 254);
+        assert_eq!(compute_exit_code(255, false), 254);
+        assert_eq!(compute_exit_code(10_000, false), 254);
     }
 }

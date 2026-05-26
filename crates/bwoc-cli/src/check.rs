@@ -825,6 +825,35 @@ pub fn run_all(workspace_path: Option<&Path>, lang: &str, json: bool) -> i32 {
         per_agent_reports.push((entry.id.clone(), report));
     }
 
+    // Skill + plugin manifest audits (BWOC-8) — extend the fleet tally with
+    // any installed `modules/skills/<name>/manifest.toml` and
+    // `modules/plugins/<name>/manifest.toml`. Spec source of truth:
+    // docs/en/SKILLS.en.md and docs/en/PLUGINS.en.md.
+    let mut per_skill_reports: Vec<(String, AuditReport)> = Vec::new();
+    for dir in discover_skill_dirs(&root) {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let report = audit_skill_manifest(&dir);
+        total_violations += report.violations.len() as u32;
+        total_warnings += report.warnings.len() as u32;
+        total_passes += report.passes.len() as u32;
+        per_skill_reports.push((name, report));
+    }
+    let mut per_plugin_reports: Vec<(String, AuditReport)> = Vec::new();
+    for dir in discover_plugin_dirs(&root) {
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let report = audit_plugin_manifest(&dir);
+        total_violations += report.violations.len() as u32;
+        total_warnings += report.warnings.len() as u32;
+        total_passes += report.passes.len() as u32;
+        per_plugin_reports.push((name, report));
+    }
+
     if json {
         let agents: Vec<serde_json::Value> = per_agent_reports
             .iter()
@@ -843,11 +872,49 @@ pub fn run_all(workspace_path: Option<&Path>, lang: &str, json: bool) -> i32 {
                 })
             })
             .collect();
+        let skills: Vec<serde_json::Value> = per_skill_reports
+            .iter()
+            .map(|(name, r)| {
+                serde_json::json!({
+                    "skill": name,
+                    "target": r.target,
+                    "passes": r.passes,
+                    "warnings": r.warnings,
+                    "violations": r.violations,
+                    "summary": {
+                        "passes": r.passes.len(),
+                        "warnings": r.warnings.len(),
+                        "violations": r.violations.len(),
+                    },
+                })
+            })
+            .collect();
+        let plugins: Vec<serde_json::Value> = per_plugin_reports
+            .iter()
+            .map(|(name, r)| {
+                serde_json::json!({
+                    "plugin": name,
+                    "target": r.target,
+                    "passes": r.passes,
+                    "warnings": r.warnings,
+                    "violations": r.violations,
+                    "summary": {
+                        "passes": r.passes.len(),
+                        "warnings": r.warnings.len(),
+                        "violations": r.violations.len(),
+                    },
+                })
+            })
+            .collect();
         let value = serde_json::json!({
             "workspace": root.display().to_string(),
             "agents": agents,
+            "skills": skills,
+            "plugins": plugins,
             "summary": {
                 "agents_checked": per_agent_reports.len(),
+                "skills_checked": per_skill_reports.len(),
+                "plugins_checked": per_plugin_reports.len(),
                 "total_passes": total_passes,
                 "total_warnings": total_warnings,
                 "total_violations": total_violations,
@@ -867,10 +934,22 @@ pub fn run_all(workspace_path: Option<&Path>, lang: &str, json: bool) -> i32 {
             println!("=== {id} ===");
             print_report(report, &bundle);
         }
+        for (name, report) in &per_skill_reports {
+            println!();
+            println!("=== skill: {name} ===");
+            print_report(report, &bundle);
+        }
+        for (name, report) in &per_plugin_reports {
+            println!();
+            println!("=== plugin: {name} ===");
+            print_report(report, &bundle);
+        }
         println!();
         println!(
-            "=== Fleet summary ===\n  {} agent(s): {} pass, {} warn, {} violation(s)",
+            "=== Fleet summary ===\n  {} agent(s) + {} skill(s) + {} plugin(s): {} pass, {} warn, {} violation(s)",
             per_agent_reports.len(),
+            per_skill_reports.len(),
+            per_plugin_reports.len(),
             total_passes,
             total_warnings,
             total_violations,
@@ -879,6 +958,416 @@ pub fn run_all(workspace_path: Option<&Path>, lang: &str, json: bool) -> i32 {
     }
 
     if total_violations > 0 { 1 } else { 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Skill + plugin manifest audits (BWOC-8).
+//
+// Each installed skill (`modules/skills/<name>/manifest.toml`) and plugin
+// (`modules/plugins/<name>/manifest.toml`) gets its own AuditReport so the
+// fleet-wide `bwoc check --all` tally surfaces manifest violations alongside
+// agent neutrality findings. Source of truth for these checks:
+//   - docs/en/SKILLS.en.md §"Manifest" + §"Verification"
+//   - docs/en/PLUGINS.en.md §"Manifest" + §"Verification"
+// ---------------------------------------------------------------------------
+
+/// Backend identifiers — the five declared backends from ARCHITECTURE.en.md.
+/// A skill manifest naming any of these is backend-specific and belongs as
+/// that backend's integration plugin, not as a framework skill (Samānattatā).
+/// Whole-word match: substring is too loose (e.g. "claude" would trip on
+/// any name containing those letters); too-strict matching is fine here
+/// because manifest values are short, kebab-case-or-sentence text.
+const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "ollama"];
+
+/// Plugin kinds accepted by the framework. The task brief enumerates
+/// `audit (future)` as a forward-compatible value — accept it now so
+/// the EPIC-2 ISO compliance plugins land without a v2 audit bump.
+const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "audit"];
+
+/// Maturity values accepted in a skill manifest (Ariya-dhana 7 scale).
+const MATURITY_LEVELS: &[&str] = &["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
+
+/// Audit one skill installed at `<workspace>/modules/skills/<name>/`. Required
+/// fields, types, neutrality, and the spec's non-empty-`exposes` rule are all
+/// checked. Returns a report keyed by the manifest path so fleet output
+/// disambiguates skills from agents and plugins.
+pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
+    let manifest_path = skill_dir.join("manifest.toml");
+    let mut report = AuditReport {
+        target: manifest_path.display().to_string(),
+        passes: Vec::new(),
+        warnings: Vec::new(),
+        violations: Vec::new(),
+    };
+
+    let body = match fs::read_to_string(&manifest_path) {
+        Ok(s) => s,
+        Err(e) => {
+            report
+                .violations
+                .push(format!("manifest.toml unreadable: {e}"));
+            return report;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("manifest.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("manifest.toml is not valid TOML: {e}"));
+            return report;
+        }
+    };
+
+    let skill_table = match raw.get("skill").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => {
+            report
+                .violations
+                .push("[skill] table missing — required per SKILLS.en.md".to_string());
+            return report;
+        }
+    };
+    report.passes.push("[skill] table present".to_string());
+
+    // Required string fields under [skill].
+    for field in &["name", "version", "description", "maturity"] {
+        match skill_table.get(*field) {
+            Some(v) if v.is_str() => report
+                .passes
+                .push(format!("[skill].{field} present (string)")),
+            Some(_) => report
+                .violations
+                .push(format!("[skill].{field} has wrong type — expected string")),
+            None => report
+                .violations
+                .push(format!("[skill].{field} missing — required field")),
+        }
+    }
+
+    // Name matches directory basename.
+    let dir_name = skill_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if let Some(name) = skill_table.get("name").and_then(|v| v.as_str()) {
+        if name == dir_name {
+            report
+                .passes
+                .push(format!("[skill].name matches directory '{dir_name}'"));
+        } else {
+            report.violations.push(format!(
+                "[skill].name '{name}' does not match directory '{dir_name}'"
+            ));
+        }
+    }
+
+    // Maturity in L1..L7.
+    if let Some(m) = skill_table.get("maturity").and_then(|v| v.as_str()) {
+        if MATURITY_LEVELS.contains(&m) {
+            report
+                .passes
+                .push(format!("[skill].maturity '{m}' in L1..L7"));
+        } else {
+            report
+                .violations
+                .push(format!("[skill].maturity '{m}' not in L1..L7"));
+        }
+    }
+
+    // [contract].exposes — required, array of strings, non-empty.
+    let contract = raw.get("contract").and_then(|v| v.as_table());
+    match contract.and_then(|c| c.get("exposes")) {
+        Some(toml::Value::Array(arr)) => {
+            if arr.is_empty() {
+                report.violations.push(
+                    "[contract].exposes is empty — must be non-empty per spec (a skill that exposes nothing should not exist)"
+                        .to_string(),
+                );
+            } else if !arr.iter().all(|v| v.is_str()) {
+                report
+                    .violations
+                    .push("[contract].exposes contains non-string entries".to_string());
+            } else {
+                report.passes.push(format!(
+                    "[contract].exposes is non-empty ({} operation(s))",
+                    arr.len()
+                ));
+            }
+        }
+        Some(_) => report
+            .violations
+            .push("[contract].exposes has wrong type — expected array of strings".to_string()),
+        None => report
+            .violations
+            .push("[contract].exposes missing — required field".to_string()),
+    }
+
+    // [contract].requires (optional) — when present must be array of strings.
+    if let Some(req) = contract.and_then(|c| c.get("requires")) {
+        match req {
+            toml::Value::Array(arr) if arr.iter().all(|v| v.is_str()) => {
+                report.passes.push(format!(
+                    "[contract].requires is array of strings (length {})",
+                    arr.len()
+                ));
+            }
+            _ => report
+                .violations
+                .push("[contract].requires has wrong type — expected array of strings".to_string()),
+        }
+    }
+
+    // Neutrality — no backend / model names anywhere in manifest values.
+    check_manifest_neutrality_skill(&raw, &mut report);
+
+    report
+}
+
+/// Audit one plugin installed at `<workspace>/modules/plugins/<name>/`.
+/// Same shape as the skill audit, with plugin-specific rules: kind ∈ the
+/// declared enum, neutrality lets vendor names appear in `description` only.
+pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
+    let manifest_path = plugin_dir.join("manifest.toml");
+    let mut report = AuditReport {
+        target: manifest_path.display().to_string(),
+        passes: Vec::new(),
+        warnings: Vec::new(),
+        violations: Vec::new(),
+    };
+
+    let body = match fs::read_to_string(&manifest_path) {
+        Ok(s) => s,
+        Err(e) => {
+            report
+                .violations
+                .push(format!("manifest.toml unreadable: {e}"));
+            return report;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("manifest.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("manifest.toml is not valid TOML: {e}"));
+            return report;
+        }
+    };
+
+    let plugin_table = match raw.get("plugin").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => {
+            report
+                .violations
+                .push("[plugin] table missing — required per PLUGINS.en.md".to_string());
+            return report;
+        }
+    };
+    report.passes.push("[plugin] table present".to_string());
+
+    // Required string fields under [plugin].
+    for field in &["name", "kind", "version", "description", "compat", "entry"] {
+        match plugin_table.get(*field) {
+            Some(v) if v.is_str() => report
+                .passes
+                .push(format!("[plugin].{field} present (string)")),
+            Some(_) => report
+                .violations
+                .push(format!("[plugin].{field} has wrong type — expected string")),
+            None => report
+                .violations
+                .push(format!("[plugin].{field} missing — required field")),
+        }
+    }
+
+    // Name matches directory basename.
+    let dir_name = plugin_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if let Some(name) = plugin_table.get("name").and_then(|v| v.as_str()) {
+        if name == dir_name {
+            report
+                .passes
+                .push(format!("[plugin].name matches directory '{dir_name}'"));
+        } else {
+            report.violations.push(format!(
+                "[plugin].name '{name}' does not match directory '{dir_name}'"
+            ));
+        }
+    }
+
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit}.
+    if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
+        if PLUGIN_KINDS.contains(&kind) {
+            report
+                .passes
+                .push(format!("[plugin].kind '{kind}' in supported set"));
+        } else {
+            report.violations.push(format!(
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit}}"
+            ));
+        }
+    }
+
+    // Neutrality — vendor names tolerated in description only.
+    check_manifest_neutrality_plugin(&raw, &mut report);
+
+    report
+}
+
+/// Recursively scan every string value in `raw`, refusing any that name a
+/// declared backend or hardcoded model. Skill manifests have no exempt
+/// field — Samānattatā is total at this layer.
+fn check_manifest_neutrality_skill(raw: &toml::Value, report: &mut AuditReport) {
+    let mut findings: Vec<String> = Vec::new();
+    walk_strings(raw, "", &mut |path, val| {
+        for vendor in BACKEND_NAMES {
+            if contains_word(val, vendor) {
+                findings.push(format!(
+                    "{path} contains backend name '{vendor}' — skills must be backend-neutral"
+                ));
+            }
+        }
+        for model in HARDCODED_MODELS {
+            if val.to_lowercase().contains(model) {
+                findings.push(format!("{path} contains hardcoded model id '{model}'"));
+            }
+        }
+    });
+    if findings.is_empty() {
+        report
+            .passes
+            .push("manifest values are backend-neutral".to_string());
+    } else {
+        report.violations.extend(findings);
+    }
+}
+
+/// Same as the skill check, with one exemption: `[plugin].description` is
+/// the only manifest value where a vendor name is tolerated (the description
+/// often names the integration target). Everywhere else still rejects.
+fn check_manifest_neutrality_plugin(raw: &toml::Value, report: &mut AuditReport) {
+    let mut findings: Vec<String> = Vec::new();
+    walk_strings(raw, "", &mut |path, val| {
+        if path == "[plugin].description" {
+            return;
+        }
+        for vendor in BACKEND_NAMES {
+            if contains_word(val, vendor) {
+                findings.push(format!(
+                    "{path} contains backend name '{vendor}' — only [plugin].description may name a vendor"
+                ));
+            }
+        }
+        for model in HARDCODED_MODELS {
+            if val.to_lowercase().contains(model) {
+                findings.push(format!("{path} contains hardcoded model id '{model}'"));
+            }
+        }
+    });
+    if findings.is_empty() {
+        report
+            .passes
+            .push("manifest values are backend-neutral (description exempt)".to_string());
+    } else {
+        report.violations.extend(findings);
+    }
+}
+
+/// Walk every string leaf in a TOML value, invoking `visit(path, value)` per
+/// leaf. `path` is a dotted breadcrumb like `[skill].description` or
+/// `[contract].exposes[0]`, sufficient to localize a finding.
+fn walk_strings<F: FnMut(&str, &str)>(value: &toml::Value, path: &str, visit: &mut F) {
+    match value {
+        toml::Value::String(s) => visit(path, s),
+        toml::Value::Array(arr) => {
+            for (i, v) in arr.iter().enumerate() {
+                let sub = format!("{path}[{i}]");
+                walk_strings(v, &sub, visit);
+            }
+        }
+        toml::Value::Table(t) => {
+            for (k, v) in t.iter() {
+                let sub = if path.is_empty() {
+                    format!("[{k}]")
+                } else {
+                    format!("{path}.{k}")
+                };
+                walk_strings(v, &sub, visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Word-boundary substring match (case-insensitive). Avoids the false
+/// positives a raw `lower.contains("kimi")` would emit on otherwise-fine
+/// strings like "Kimimaro" or "claudette" (none in practice today, but
+/// the neutrality rule is brittle without it). Word boundary = anything
+/// that is NOT an ASCII alphanumeric or `_`.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let lower = haystack.to_lowercase();
+    let n = needle.to_lowercase();
+    let mut start = 0;
+    while let Some(idx) = lower[start..].find(&n) {
+        let abs = start + idx;
+        let before_ok = abs == 0
+            || !lower
+                .as_bytes()
+                .get(abs - 1)
+                .map(|b| (*b as char).is_ascii_alphanumeric() || *b == b'_')
+                .unwrap_or(false);
+        let after = abs + n.len();
+        let after_ok = after >= lower.len()
+            || !lower
+                .as_bytes()
+                .get(after)
+                .map(|b| (*b as char).is_ascii_alphanumeric() || *b == b'_')
+                .unwrap_or(false);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + n.len();
+    }
+    false
+}
+
+/// Discover every installed skill manifest under `<root>/modules/skills/*/manifest.toml`.
+/// Returns the per-skill directory paths sorted by directory name. Missing
+/// `modules/skills/` dir is not an error — workspaces may have no skills yet.
+pub fn discover_skill_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    discover_module_dirs(root, "modules/skills")
+}
+
+/// Discover every installed plugin manifest under `<root>/modules/plugins/*/manifest.toml`.
+pub fn discover_plugin_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    discover_module_dirs(root, "modules/plugins")
+}
+
+fn discover_module_dirs(root: &Path, sub: &str) -> Vec<std::path::PathBuf> {
+    let dir = root.join(sub);
+    let Ok(read) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::path::PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join("manifest.toml").is_file())
+        .collect();
+    out.sort();
+    out
 }
 
 /// Local ancestor-walk helper (kept here to avoid pulling in
@@ -1057,6 +1546,405 @@ mod tests {
             "got unexpected violations: {:?}",
             report.violations
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- Skill + plugin manifest audits (BWOC-8) ----------------------------
+
+    fn write_skill_manifest(label: &str, name: &str, body: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bwoc-skill-{label}-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("modules/skills").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manifest.toml"), body).unwrap();
+        dir
+    }
+
+    fn write_plugin_manifest(label: &str, name: &str, body: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bwoc-plugin-{label}-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("modules/plugins").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manifest.toml"), body).unwrap();
+        dir
+    }
+
+    #[test]
+    fn audit_skill_manifest_reference_passes() {
+        // The reference manifest from modules/skills/worktree-discipline/.
+        let dir = write_skill_manifest(
+            "ref",
+            "worktree-discipline",
+            r#"[skill]
+name        = "worktree-discipline"
+version     = "0.1.0"
+description = "Create, isolate, and cleanup task worktrees per Anattā."
+maturity    = "L1"
+
+[contract]
+requires    = []
+exposes     = ["claim_task", "release_task"]
+
+[gates]
+verify      = "bwoc skill verify worktree-discipline"
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected reference skill manifest to pass, got: {:?}",
+            report.violations
+        );
+        assert!(report.passes.iter().any(|p| p.contains("non-empty")));
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_empty_exposes_fails() {
+        let dir = write_skill_manifest(
+            "empty-exposes",
+            "no-ops",
+            r#"[skill]
+name        = "no-ops"
+version     = "0.1.0"
+description = "Skill that exposes nothing."
+maturity    = "L1"
+
+[contract]
+exposes     = []
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[contract].exposes is empty")),
+            "expected non-empty-exposes violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_missing_required_field_fails() {
+        let dir = write_skill_manifest(
+            "missing-version",
+            "broken",
+            r#"[skill]
+name        = "broken"
+description = "Missing version."
+maturity    = "L1"
+
+[contract]
+exposes     = ["op"]
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[skill].version missing")),
+            "expected missing-version violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_name_mismatch_fails() {
+        let dir = write_skill_manifest(
+            "mismatch",
+            "directory-name",
+            r#"[skill]
+name        = "different-name"
+version     = "0.1.0"
+description = "Name mismatch."
+maturity    = "L1"
+
+[contract]
+exposes     = ["op"]
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("does not match directory")),
+            "expected name-mismatch violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_bad_maturity_fails() {
+        let dir = write_skill_manifest(
+            "bad-maturity",
+            "wrong-level",
+            r#"[skill]
+name        = "wrong-level"
+version     = "0.1.0"
+description = "Bad maturity."
+maturity    = "L9"
+
+[contract]
+exposes     = ["op"]
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("maturity 'L9' not in L1..L7")),
+            "expected bad-maturity violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_vendor_name_fails() {
+        let dir = write_skill_manifest(
+            "vendor",
+            "claude-only",
+            r#"[skill]
+name        = "claude-only"
+version     = "0.1.0"
+description = "Skill that names Claude — should fail neutrality."
+maturity    = "L1"
+
+[contract]
+exposes     = ["op"]
+"#,
+        );
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("backend name 'claude'")),
+            "expected vendor-name violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_reference_passes() {
+        // The reference manifest from modules/plugins/memory-tier2-noop/.
+        let dir = write_plugin_manifest(
+            "ref",
+            "memory-tier2-noop",
+            r#"[plugin]
+name        = "memory-tier2-noop"
+kind        = "memory-backend"
+version     = "0.1.0"
+description = "No-op Tier 2 memory backend that forwards to Tier 1."
+compat      = ">=2.5.0"
+entry       = "bwoc-plugin-memory-tier2-noop"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected reference plugin manifest to pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_bad_kind_fails() {
+        let dir = write_plugin_manifest(
+            "bad-kind",
+            "weird-kind",
+            r#"[plugin]
+name        = "weird-kind"
+kind        = "frobnicator"
+version     = "0.1.0"
+description = "Plugin with unknown kind."
+compat      = ">=2.5.0"
+entry       = "bin"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("kind 'frobnicator' not in")),
+            "expected bad-kind violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_audit_kind_accepted() {
+        // EPIC-2 forward-compat: 'audit' kind must be accepted today.
+        let dir = write_plugin_manifest(
+            "audit-kind",
+            "iso-29110",
+            r#"[plugin]
+name        = "iso-29110"
+kind        = "audit"
+version     = "0.1.0"
+description = "ISO/IEC 29110 compliance audit."
+compat      = ">=2.5.0"
+entry       = "bwoc-plugin-iso-29110"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected 'audit' kind to be accepted, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_vendor_in_description_allowed() {
+        // Vendor names ARE allowed in description (per PLUGINS.en.md §"Neutrality").
+        let dir = write_plugin_manifest(
+            "vendor-desc",
+            "kimi-bridge",
+            r#"[plugin]
+name        = "kimi-bridge"
+kind        = "llm-backend"
+version     = "0.1.0"
+description = "Bridge to the kimi backend (vendor name allowed here only)."
+compat      = ">=2.5.0"
+entry       = "bin"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        // We still expect the name itself to trip neutrality (it contains 'kimi'),
+        // but the description should not — so any violations should not name description.
+        for v in &report.violations {
+            assert!(
+                !v.contains("[plugin].description contains"),
+                "description should be exempt, got: {v}"
+            );
+        }
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_vendor_outside_description_fails() {
+        let dir = write_plugin_manifest(
+            "vendor-entry",
+            "neutral-name",
+            r#"[plugin]
+name        = "neutral-name"
+kind        = "llm-backend"
+version     = "0.1.0"
+description = "A plugin."
+compat      = ">=2.5.0"
+entry       = "claude-cli-wrapper"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[plugin].entry") && v.contains("'claude'")),
+            "expected vendor-in-entry violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_missing_required_field_fails() {
+        let dir = write_plugin_manifest(
+            "no-compat",
+            "broken-plugin",
+            r#"[plugin]
+name        = "broken-plugin"
+kind        = "workflow"
+version     = "0.1.0"
+description = "Missing compat."
+entry       = "bin"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[plugin].compat missing")),
+            "expected missing-compat violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_skill_manifest_invalid_toml_fails() {
+        let dir = write_skill_manifest("bad-toml", "broken", "this is not valid TOML = [\n");
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("not valid TOML")),
+            "expected invalid-TOML violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn contains_word_does_not_match_substrings() {
+        // Word-boundary match: 'claude' should NOT trip on 'claudette',
+        // but should trip on 'claude' as a standalone token.
+        assert!(contains_word("uses claude backend", "claude"));
+        assert!(contains_word("claude", "claude"));
+        assert!(contains_word("CLAUDE", "claude"));
+        assert!(contains_word("with-claude-suffix", "claude")); // hyphen is a boundary
+        assert!(!contains_word("claudette", "claude"));
+        assert!(!contains_word("claude_marketing", "claude")); // underscore is NOT a boundary
+    }
+
+    #[test]
+    fn discover_skill_dirs_handles_missing_modules() {
+        let root = std::env::temp_dir().join(format!("bwoc-discover-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        assert!(discover_skill_dirs(&root).is_empty());
+        assert!(discover_plugin_dirs(&root).is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_module_dirs_skips_dirs_without_manifest() {
+        let root = std::env::temp_dir().join(format!("bwoc-discover-mixed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let skills = root.join("modules/skills");
+        fs::create_dir_all(skills.join("with-manifest")).unwrap();
+        fs::create_dir_all(skills.join("without-manifest")).unwrap();
+        fs::write(
+            skills.join("with-manifest/manifest.toml"),
+            "[skill]\nname = \"with-manifest\"\n",
+        )
+        .unwrap();
+        let found = discover_skill_dirs(&root);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].ends_with("with-manifest"));
         let _ = fs::remove_dir_all(&root);
     }
 

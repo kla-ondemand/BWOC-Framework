@@ -1,0 +1,388 @@
+---
+title: Plugins
+parent: English
+nav_order: 12
+---
+
+# Framework Plugins
+
+A **framework plugin** extends the framework with capabilities that do not belong in every agent but should be available to agents and workspaces that need them. Plugins are loaded by the **framework runtime** — they are operator-facing, not agent-facing.
+
+This spec defines the plugin kinds, manifest format, lifecycle hooks, loading mechanism, and verification gates. The first reference plugin (`memory-tier2-noop`) ships alongside this spec — both lands and proves the format together.
+
+> [!abstract] Status: initial scaffold. Manifest tables and lifecycle hooks below are normative; prose may be refined as story BWOC-1..3 work refines the contract. The first reference plugin lands in BWOC-7.
+
+---
+
+## Skill vs Plugin
+
+Skills and plugins share a substrate (TOML manifest, neutrality gate, per-workspace opt-in) and split on **who invokes them**.
+
+| | Skill | Plugin |
+|---|---|---|
+| Spec | [`SKILLS.en.md`](SKILLS.en.md) | this doc |
+| Audience | Agent author | Workspace operator |
+| Opt-in via | `<agent>/config.manifest.json` | `workspace.toml [plugins]` |
+| Invoker | The agent during its own operation | The framework runtime |
+| Example | worktree discipline, bilingual parity check | Tier 2 memory backend, additional LLM backend |
+| Lifecycle scope | Per-agent | Per-workspace |
+
+Pick the layer that matches *who turns it on*. If an individual agent's logic calls it, it is a skill. If the workspace loads it once for everyone, it is a plugin.
+
+---
+
+## Plugin Kinds
+
+Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Three kinds ship with this spec:
+
+| Kind | What it extends | Lifecycle owner |
+|---|---|---|
+| `memory-backend` | Tier 2 memory (semantic search, vector store, deep-memory CLI) | The agent's memory subsystem |
+| `llm-backend` | Backends beyond the five declared (`claude`, `antigravity`, `codex`, `kimi`, `ollama`) | `bwoc spawn` |
+| `workflow` | External system integrations (issue trackers, code review, CI) | The agent calling out |
+
+A plugin sets `kind` once. Cross-kind plugins are not supported — split them.
+
+### What plugins are NOT
+
+- **Not a loophole for vendor-specific framework logic.** The five declared backends are first-class and live in spec, not as plugins. Vendor phrasing in `AGENTS.md` is still forbidden (**Samānattatā**).
+- **Not a place for one-off scripts.** Those belong with the agent that uses them.
+- **Not skills with extra steps.** If an agent calls it during its own operation, it is a skill (see [`SKILLS.en.md`](SKILLS.en.md)).
+
+---
+
+## Directory Layout
+
+```
+modules/plugins/
+└── <name>/
+    ├── manifest.toml       # required — the contract
+    ├── SPEC.md             # required — Obsidian-formatted plugin description
+    └── ...                 # implementation (binary, Rust crate, script)
+```
+
+`<name>` is `kebab-case`. One plugin per directory. The plugin's `kind` is declared in `manifest.toml` (see [Manifest](#manifest--manifesttoml)) and is not encoded in the directory path — symmetric with [`SKILLS.en.md`](SKILLS.en.md#directory-layout).
+
+---
+
+## Manifest — `manifest.toml`
+
+```toml
+[plugin]
+name        = "memory-tier2-noop"               # required — must match the directory name
+kind        = "memory-backend"                  # required — one of: memory-backend | llm-backend | workflow
+version     = "0.1.0"                           # required — semver
+description = "No-op Tier 2 memory backend that forwards to Tier 1."   # required — one-sentence summary
+compat      = ">=2.5.0"                         # required — semver range; framework versions this plugin works with
+entry       = "bwoc-plugin-memory-tier2-noop"   # required — binary on PATH (preferred) or sibling Rust crate name
+
+[config.schema]                                 # optional — omit the table entirely if the plugin takes no config
+# Plugin-defined; JSON-schema-lite. The workspace's [plugins.<name>] table is validated against this.
+# Each key maps to an inline table with: type, required (bool), and (when required = false) default.
+# Example:
+# storage_path = { type = "string", required = false, default = "memories/tier2" }
+# max_results  = { type = "integer", required = true }
+```
+
+### Field reference
+
+| Section | Field | Required | Type | Meaning |
+|---|---|---|---|---|
+| `[plugin]` | `name` | yes | string (kebab-case) | Plugin identifier; must equal the directory name under `modules/plugins/` |
+| `[plugin]` | `kind` | yes | enum | One of `memory-backend`, `llm-backend`, `workflow`; immutable after `init` |
+| `[plugin]` | `version` | yes | string (semver) | Semver of the plugin itself, separate from the framework version |
+| `[plugin]` | `description` | yes | string | One-sentence summary; the **only** manifest value where a vendor name is tolerated |
+| `[plugin]` | `compat` | yes | string (semver range) | Framework versions this plugin is compatible with; framework refuses to load on mismatch |
+| `[plugin]` | `entry` | yes | string | Binary on `PATH` (preferred) or sibling Rust crate name the framework dispatches to |
+| `[config.schema]` | (free keys) | no | inline-table per key | Schema the operator's `workspace.toml [plugins.<name>]` block is validated against; each key declares `type`, `required`, optional `default` |
+
+### Neutrality constraint (HARD)
+
+A `memory-backend` plugin must work for any agent regardless of backend. An `llm-backend` plugin must not pretend it is one of the five declared backends. Vendor names in plugin **manifest values** are tolerated only inside `description` (where they describe the integration target); they remain forbidden anywhere else. This is the same **Samānattatā** rule that `bwoc check` already enforces on `AGENTS.md`.
+
+---
+
+## Lifecycle
+
+```
+init  → configure → invoke (many) → teardown
+```
+
+- **`init`** — called once when the framework first sees the plugin in `workspace.toml`. **Idempotent.** No side-effects on external systems beyond what is necessary to confirm the plugin can run.
+- **`configure`** — called with the resolved `[plugins.<name>]` config block. **Idempotent**: re-running with the same block is a no-op; re-running with a changed block reconciles to the new state. Validates the config against `[config.schema]`; refuses to proceed on schema violation.
+- **`invoke`** — called once per logical operation (write a memory, dispatch a model call, post to an issue tracker). **Idempotent at the operation level.**
+- **`teardown`** — called once when the framework shuts down or the plugin is disabled. **Idempotent.** Cleanup-only.
+
+Idempotency is a **hard requirement at every phase**. The framework may retry an init or configure call after a crash; an `invoke` may run twice if the framework's caller retried; teardown may be replayed across shutdowns. A plugin that mutates external state non-idempotently is broken by design.
+
+### Lifecycle owner per kind
+
+| Kind | Owner | When init fires | When invoke fires |
+|---|---|---|---|
+| `memory-backend` | Agent's memory subsystem | First memory read/write that escalates to Tier 2 | Per Tier 2 read/write |
+| `llm-backend` | `bwoc spawn` | Agent spawn whose registry entry names this plugin | Per model call from the agent's harness |
+| `workflow` | Agent code that imports the integration | First call from the agent | Per agent-initiated operation |
+
+### Hook contract — success, failure, partial state
+
+Plugins integrate via the `entry` field — either a binary on `PATH` or a sibling Rust crate. The contract is therefore expressed in both exit-code (binary) and return-value (crate) forms; the framework treats them as equivalent. For each hook, "success" and "failure" are the dispatch result the framework observes; "partial state" is the plugin author's responsibility to bound.
+
+| Hook | Success means | Failure means | Partial state |
+|---|---|---|---|
+| `init` | Exit `0` (binary) / returns `Ok` (crate). | Non-zero exit / `Err`. Framework refuses to load the plugin and surfaces the diagnostic on stderr. | Init must fully complete or roll back before failing. The framework treats a failed init as if it never ran. |
+| `configure` | Exit `0` / `Ok`. The plugin is ready for `invoke`. | Non-zero exit / `Err` citing the offending key (e.g. `max_results: required, missing`). Framework refuses to start the workspace. | Validate-first, apply-second — never half-apply config. A partial apply is a plugin bug. |
+| `invoke` | Exit `0` / `Ok` with a typed result. Stdout is the payload, stderr is diagnostics (binary form). | Non-zero exit / `Err`. Framework surfaces the error to the caller (agent or operator); caller decides whether to retry. | Operations are durable-or-discarded — never half-applied. Retries land on the idempotent path. |
+| `teardown` | Exit `0` / `Ok`. Framework releases the plugin slot. | Non-zero exit / `Err`. Logged, not fatal — framework shutdown must not block. | Idempotent on replay. The framework may call teardown again on a subsequent shutdown if the first never completed. |
+
+### Per-phase examples
+
+```text
+# init — confirm the plugin can run; no business side-effects yet
+init():
+  if not writable(cfg.storage_path):
+    exit 1, "storage_path not writable: <path>"
+  open_lazy_handle(cfg.storage_path)
+  exit 0
+
+# configure — validate against [config.schema], then apply atomically
+configure({ storage_path: "memories/tier2", max_results: 8 }):
+  errors = validate_against_schema(input)
+  if errors:
+    exit 2, "configure: " + errors.join(", ")
+  apply_atomic(input)               # all-or-nothing
+  exit 0
+
+# invoke — operation-level idempotency
+invoke("write_memory", { id: "m-1", body: "..." }):
+  existing = lookup("m-1")
+  if existing and body_hash(existing) == body_hash(input):
+    exit 0, { status: "noop" }      # replay-safe
+  store("m-1", input)
+  exit 0, { status: "written" }
+
+# teardown — cleanup-only, idempotent
+teardown():
+  flush_pending(timeout = 5s)       # best-effort
+  close_handles()
+  exit 0                            # safe to call twice
+```
+
+---
+
+## Loading — `workspace.toml`
+
+The operator declares which plugins this workspace uses by adding entries to `workspace.toml`:
+
+```toml
+[plugins]
+
+[plugins.memory-tier2-noop]
+enabled      = true
+storage_path = "memories/tier2"
+
+[plugins.workflow-github]
+enabled = false      # registered but off — kept here to document intent
+```
+
+Schema for each `[plugins.<name>]` table:
+
+- `<name>` (table key, string, required) — the installed plugin's directory name under `modules/plugins/`. The key is the plugin name; `kind` is **not** declared in `workspace.toml` — it is owned by the plugin's own `manifest.toml` `[plugin].kind` field and read from there at load time.
+- `enabled` (bool, required) — gates whether the plugin is loaded at framework startup. Set `false` to keep the entry as documented intent without loading. Mirrors the `config.manifest.json skills.framework[] enabled` pattern in [`SKILLS.en.md`](SKILLS.en.md#discovery); flip with `bwoc plugin disable <name>` to preserve the entry.
+- All other keys (plugin-defined) — validated against the plugin's `[config.schema]` at framework startup. Refused on schema violation; never half-applied (see [Lifecycle](#lifecycle)).
+
+A missing `enabled` field is a manifest error — `bwoc check` rejects entries that omit it. There is no implicit default; explicit intent is the contract.
+
+At framework startup the runtime:
+
+1. Reads the `[plugins]` table from `workspace.toml`.
+2. Filters to entries where `enabled` is `true`. Entries with `enabled = false` are kept in `workspace.toml` (as documented intent) but skipped at load.
+3. Resolves each entry against the workspace's `modules/plugins/<name>/` directory. `<kind>` is read from the installed plugin's manifest, not encoded in the path.
+4. Validates the entry's config block against the plugin's `[config.schema]`, then dispatches `init` followed by `configure`.
+5. Refuses to start the workspace if any enabled plugin is missing under `modules/plugins/`, has a `[plugin] compat` mismatch with the running framework version, fails `[config.schema]` validation, or returns a non-zero `init` / `configure` result.
+
+No central index. Plugins exist for a workspace only because they are installed under `modules/plugins/` and named in `workspace.toml`. The resolution lookup is always local to the workspace — no runtime network calls during framework startup. **Anattā** preserved.
+
+---
+
+## CLI Surface
+
+Read-only surfaces (no side-effects on the workspace):
+
+```
+bwoc plugin list                    # list installed plugins (enabled + disabled)
+bwoc plugin list --enabled          # filter to enabled only
+bwoc plugin list --kind memory-backend
+bwoc plugin list --json
+
+bwoc plugin show <name>             # full manifest + spec + current config
+bwoc plugin show <name> --json
+```
+
+Lifecycle surfaces (write — see referenced sections for details):
+
+```
+bwoc plugin init <name> --kind <k>  # scaffold a new plugin from modules/plugin-template/
+                                    #   (see "Scaffolding from template")
+
+bwoc plugin install <source>        # install from local path / git URL / tarball URL
+                                    #   (see "Sources & Installation")
+
+bwoc plugin enable <name>           # set enabled=true in workspace.toml [plugins.<name>]
+bwoc plugin disable <name>          # set enabled=false (keeps the entry)
+
+bwoc plugin remove <name>           # delete modules/plugins/<name>/ and clean workspace.toml
+                                    #   (see "Removal")
+```
+
+No `bwoc plugin verify` in v1 — plugins do not declare a uniform verify gate (the kinds differ too much). Verification is the plugin's own concern, surfaced through its `invoke` exit semantics. A future v2 may add per-kind verify if patterns emerge.
+
+All read-only commands have `--json` twins. Lifecycle commands emit structured JSON when `--json` is passed; `install` exits non-zero on trust-gate failure; `remove` exits non-zero on missing target unless `--yes` was passed.
+
+### "Current workspace" resolution
+
+Plugins are workspace-scoped (unlike skills which are agent-scoped). `enable`, `disable`, `remove` resolve the target workspace in this order:
+
+1. **`--workspace <path>` flag** — explicit override.
+2. **`BWOC_WORKSPACE` environment variable**.
+3. **Working directory** — walks up from cwd to find the nearest `.bwoc/workspace.toml`.
+4. **Otherwise** — error: `no workspace context; pass --workspace <path> or run from inside a workspace`.
+
+The resolution is identical to how `bwoc list` and `bwoc workspace info` already locate the workspace today.
+
+---
+
+## Sources & Installation
+
+A framework plugin enters a workspace either by being authored in place under `modules/plugins/<name>/` or by being installed from one of three source kinds:
+
+| Source kind | Example | Detection |
+|---|---|---|
+| **Local path** | `bwoc plugin install ./vendor/my-plugin/` | Argument starts with `./`, `../`, or `/` and resolves to a directory |
+| **Git URL** | `bwoc plugin install https://github.com/org/plugin.git#v0.1.0` | Argument scheme is `http(s)://` or `git://` AND ends with `.git` (optional `#<ref>`) |
+| **Tarball URL** | `bwoc plugin install https://example.com/plugin-0.1.0.tar.gz` | Argument scheme is `http(s)://` AND ends with `.tar.gz` or `.tgz` |
+
+The install mechanism:
+
+1. Resolves the source kind from the argument.
+2. **Pre-flight** — if source has no `manifest.toml` at its root, refuse with `source missing manifest.toml; cannot resolve name or kind`. Nothing is fetched / extracted / written.
+3. **Trust gate** (see below) — fetches and verifies a SHA-256 checksum.
+4. Reads the plugin's manifest from the source to learn its `name` and `kind`. The kind is **always derived from the source manifest** — it cannot be overridden by a flag.
+5. Materializes the source into `modules/plugins/<name>/` (copy for local; clone-then-discard-`.git` for git; extract for tarball).
+6. Validates the installed manifest with `bwoc check`.
+7. Records the install in `.bwoc/installed-sources.toml` (schema below). Only writes the registry record on successful completion.
+8. **Does not** auto-enable. The installed plugin is dormant until `bwoc plugin enable <name>` adds an entry to `workspace.toml [plugins.<name>]` with `enabled = true`.
+
+### Re-install and failure handling
+
+- **Target already exists** — if `modules/plugins/<name>/` already exists, the default behavior is to refuse with `<name> already installed at version X; pass --upgrade to replace`.
+  - `--upgrade` — replaces in place, retains the `installed-sources.toml` record (updates `last_hash` and `installed_at`).
+  - `--force` — replaces unconditionally, even if the current install has uncommitted local edits (a stderr warning lists what was overwritten).
+- **Network failure during install** — install is non-atomic by design; on transient failure (download interrupted, extract error), the partial directory is removed before exit and `installed-sources.toml` is **not** updated. Safe to retry.
+
+### Trust gate (v1)
+
+Every install verifies a SHA-256 checksum **before** materializing:
+
+- **Tarball URL** — the CLI fetches `<source>.sha256` (same URL with the `.sha256` suffix), reads the expected digest, and compares against the computed digest of the downloaded archive.
+- **Git URL** — the CLI fetches the checksum at the URL with `.git` replaced by `.sha256`. Example:
+  - Source: `https://github.com/org/plugin.git#v0.1.0`
+  - Checksum: `https://github.com/org/plugin.sha256` (operator publishes a manifest of expected tree-shas keyed by ref)
+  - After clone, the framework runs `git rev-parse <ref>^{tree}` and compares against the entry for `<ref>` in the fetched manifest.
+  - Operators typically publish this manifest via a GitHub release asset or a separate static-hosted file.
+- **Local path** — checksum is optional; if a sibling `<dir>.sha256` exists, it is verified; otherwise the install proceeds (local paths are operator-trusted by convention).
+
+Two flags relax the gate:
+
+- `--no-verify` — skips checksum verification. Emits a stderr warning. Intended for in-development sources served locally over HTTP.
+- `--allow-new-source` — required the **first time** a given source URL is installed in this workspace. Establishes "I have inspected this source." Subsequent installs from the same registered source (recorded in `.bwoc/installed-sources.toml`) skip this prompt.
+
+The trust gate matches the SKILLS spec — same flags, same registry file, same semantics. A future Trust v2 (signed envelopes; identity proof) extends both surfaces without breaking the v1 contract.
+
+**Anattā preserved.** There is no central registry, no name-to-URL resolution service, no auto-update mechanism. Every install names its source explicitly. The framework is not a package manager.
+
+### `.bwoc/installed-sources.toml` schema
+
+Shared with SKILLS — a single workspace registry covers both kinds of installs. See [`SKILLS.en.md` — installed-sources schema](SKILLS.en.md#bwocinstalled-sourcestoml-schema) for the full table; plugin entries use `kind = "plugin"` and `target = "modules/plugins/<name>"`.
+
+---
+
+## Scaffolding from template
+
+`bwoc plugin init <name> --kind <kind>` creates a new plugin in `modules/plugins/<name>/` by copying the template at `modules/plugin-template/` and substituting placeholders (including `kind`):
+
+```
+modules/plugin-template/
+├── manifest.toml          # contains {{pluginName}}, {{pluginVersion}}, {{pluginKind}} placeholders
+└── SPEC.md                # Obsidian-formatted; placeholders for plugin name + description
+```
+
+Placeholders use the same `{{camelCase}}` convention as `modules/agent-template/` and `modules/skill-template/`. Required substitutions are listed in the template's own readme.
+
+The `--kind` flag is required — there is no default. Valid values today: `memory-backend`, `llm-backend`, `workflow`. Future kinds (e.g. `audit` per `BWOC-EPIC-2`) extend this enum without changing the template layout. The flag forces the operator to declare intent up front and avoids producing a manifest with a missing or wrong `kind` field.
+
+`bwoc plugin init` is the recommended way to start a new plugin — manual creation is supported but bypasses placeholder consistency.
+
+### `init` vs `install` — why `--kind` works differently
+
+`init` and `install` treat `kind` asymmetrically by design:
+
+- **`init <name> --kind <kind>`** — operator declares intent; `--kind` is substituted into the new template manifest. Required because no manifest exists yet to derive kind from.
+- **`install <source>`** — `kind` is read from the source's `manifest.toml`. Not overridable — a source manifest declaring `kind = "memory-backend"` is installed with that kind preserved in the manifest, regardless of any flag.
+
+This asymmetry exists because the install flow trusts the source author's declared intent: if the source says it is a `workflow` plugin, it is one. Operators who disagree should refuse the install, not edit the manifest after the fact.
+
+---
+
+## Removal
+
+`bwoc plugin remove <name>`:
+
+1. **Confirms with the user** unless `--yes` was passed. Lists what will be deleted (`modules/plugins/<name>/`) and modified (`workspace.toml [plugins.<name>]`); reports the plugin's `kind` (read from the manifest) for context.
+2. **Deletes** `modules/plugins/<name>/` recursively.
+3. **Cleans** `workspace.toml` — removes the `[plugins.<name>]` table entirely (not just `enabled = false`).
+
+Idempotent — `remove` on a non-existent target reports "not installed" and exits 0. The `--yes` flag short-circuits the confirmation prompt.
+
+A removed source is not auto-uninstalled from `.bwoc/installed-sources.toml`. Pass `--forget-source` to also drop the source registration.
+
+---
+
+## Verification
+
+`bwoc check` extends to audit `modules/plugins/<name>/` plus the installed-source registry:
+
+| Check | Pass condition |
+|---|---|
+| Manifest parseable | `manifest.toml` is valid TOML and matches the schema above |
+| Name matches directory | `[plugin].name == basename(directory)` |
+| Kind valid | `[plugin].kind` is one of `memory-backend`, `llm-backend`, `workflow` (or a future kind added to the enum) |
+| Neutrality | Vendor names only inside `description`; nowhere else |
+| `SPEC.md` present | A `SPEC.md` file exists alongside the manifest |
+| Required fields | `name`, `kind`, `version`, `description`, `compat`, `entry` all present |
+| Compat range valid | `[plugin].compat` parses as a semver range |
+| Source registry parseable | `.bwoc/installed-sources.toml` is valid TOML if present |
+| No orphan source records | every entry where `kind = "plugin"` in the registry has a matching `modules/plugins/<name>/` directory |
+| No orphan installations | every `modules/plugins/<name>/` either has a registry entry OR contains an `.authored-in-place` marker file |
+| Registry drift | `installed_hash` in registry matches the current SHA-256 of `modules/plugins/<name>/` (or `bwoc check --update-hashes` was passed to acknowledge drift) |
+
+A failed check exits non-zero on the workspace audit — same surface, same exit semantics as the existing `bwoc check --all`.
+
+---
+
+## What This Spec Does NOT Cover
+
+- **Skills** — see [`SKILLS.en.md`](SKILLS.en.md). Skills are agent-invoked; plugins are framework-loaded.
+- **The five declared backends** (`claude`, `antigravity`, `codex`, `kimi`, `ollama`) — they are first-class, not plugins. See [`ARCHITECTURE.en.md`](ARCHITECTURE.en.md).
+- **The first reference plugin itself** — see story `BWOC-7` and (once landed) `modules/plugins/memory-tier2-noop/SPEC.md`.
+- **Trust v2 / signing of plugin binaries** — deferred. Plugin binaries today are trusted by virtue of being installed under `modules/plugins/`; richer trust gating lands with the broader Trust v2 work.
+
+---
+
+## See Also
+
+- [`SKILLS.en.md`](SKILLS.en.md) — the sibling spec; same substrate, different invoker.
+- [`ARCHITECTURE.en.md`](ARCHITECTURE.en.md) — how modules compose with the rest of the framework.
+- [`WORKSPACE.en.md`](WORKSPACE.en.md) — `workspace.toml` schema; this spec extends it with `[plugins]`.
+- [`HARNESS.en.md`](HARNESS.en.md) — the ollama harness; the pattern future `llm-backend` plugins will follow.
+- [`NAMING.en.md`](NAMING.en.md) — file naming and directory conventions.
+- [`GLOSSARY.en.md`](GLOSSARY.en.md) — Pali term lookup (Anattā, Samānattatā, Mattaññutā).

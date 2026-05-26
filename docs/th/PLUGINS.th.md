@@ -65,17 +65,21 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 | `criterion_id` | string, kebab-case | ใช่ | ตัวระบุของ criterion ที่ตรวจ **Scope ภายในปลั๊กอิน** — unique ภายในปลั๊กอินตัวเดียว ไม่ใช่ทั่วทั้งระบบ ต้องตรงกับ entry ในรายการ criteria ของปลั๊กอินที่ประกาศ **คงที่ข้ามรีลีส** — เปลี่ยนชื่อ `criterion_id` คือ breaking change ของ contract ของปลั๊กอิน (ดู [Stability](#stability)) |
 | `severity` | enum แบบปิด: `info` \| `low` \| `medium` \| `high` \| `critical` | ใช่ | ความรุนแรงในตัวของ criterion ประกาศครั้งเดียวใน criteria list ของปลั๊กอิน — **ไม่ใช่** สิ่งที่ตัดสินต่อ run finding ที่ `critical` กับ `status = "pass"` เป็นเรื่องปกติ หมายถึง "เราตรวจสิ่งที่สำคัญที่สุดและมันโอเค" Severity บอกความสำคัญของ criterion ไม่ใช่ผลลัพธ์ |
 | `status` | enum แบบปิด: `pass` \| `fail` \| `not_applicable` \| `not_implemented` | ใช่ | ผลของการตรวจบน workspace นี้ `not_applicable` ใช้กับ criterion ที่ไม่ใช้กับ profile ของ workspace นี้ (เช่น clause multi-tenant กับ workspace แบบ solo) `not_implemented` เป็นสถานะของ stub plugin — ใช้โดย `audit-iso-9001`, `audit-iso-20000-1`, และ `audit-iso-27001` จนกว่า runtime จะ land ใน `BWOC-EPIC-3` ค่า status แบบ free-text เป็น bug ของปลั๊กอิน |
-| `evidence` | structured: `{ kind, value }` โดย `kind ∈ { "file", "content", "command", "none" }` และ `value` เป็น string | ใช่ | ที่ที่ปลั๊กอินไปดู `kind` บังคับเสมอ; `value` บังคับยกเว้น `kind = "none"` Evidence ต้องทำซ้ำได้ — operator ที่รันการตรวจเดียวกันด้วยมือต้องเจอ artifact เดียวกัน นี่คือการ์ด **Musāvāda**: ไม่มีคำกล่าวอ้างใดที่ไม่มี referent ดู [Evidence kinds](#evidence-kinds) |
+| `evidence` | structured: `{ kind, value, ...sub-field ตาม kind }` โดย `kind ∈ { "file", "content", "command", "attestation", "sample", "none" }` และ `value` เป็น string บาง kind มี sub-field บังคับเพิ่ม (ดู [Evidence kinds](#evidence-kinds)) ฟิลด์เสริม 2 ตัวใช้ได้กับทุก kind: `as_of` (ISO 8601 date — วันที่ evidence ยังเป็นปัจจุบัน) และ `valid_through` (ISO 8601 date — วันหมดอายุที่ operator ประกาศ) | ใช่ | ที่ที่ปลั๊กอินไปดู `kind` บังคับเสมอ; `value` บังคับยกเว้น `kind = "none"` Evidence ต้องทำซ้ำได้ — operator ที่รันการตรวจเดียวกันด้วยมือต้องเจอ artifact เดียวกัน นี่คือการ์ด **Musāvāda**: ไม่มีคำกล่าวอ้างใดที่ไม่มี referent dispatcher ประทับ `as_of` / `valid_through` ถ้ามี; ไม่บังคับ semantics ของวันหมดอายุ — tooling ปลายทางตัดสินใจ ดู [Evidence kinds](#evidence-kinds) |
 | `remedy` | string, ข้อความปกติ | conditional | ขั้นถัดไปที่ลงมือทำได้ **บังคับ** เมื่อ `status` เป็น `fail`, `not_applicable`, หรือ `not_implemented` ("ทำไมสถานะนี้ และต้องทำอะไรต่อ") **ตัดออก** เมื่อ `status = "pass"` เฟรมเวิร์กปฏิเสธ finding ที่ใส่ `remedy` กับ `pass` และ finding ที่ไม่ใส่กับ status อื่น |
 
 ### Evidence kinds
 
-| `evidence.kind` | ความหมายของ `evidence.value` | ใช้เมื่อ |
-|---|---|---|
-| `file` | Path สัมพัทธ์กับ workspace root (เช่น `docs/en/PROJECT-PLAN.en.md`) ไฟล์มีอยู่จริงที่ path นั้น | Criterion คือ "artifact นี้มีอยู่" |
-| `content` | Path พร้อม locator (เช่น `Cargo.toml#workspace.package.license`, `docs/en/SRS.en.md:§3.2`) ปลั๊กอินพบเนื้อหาที่คาดหวังที่ locator นั้น | Criterion คือ "artifact นี้มี/ประกาศ X" |
-| `command` | คำสั่ง shell-safe ที่ operator รันซ้ำได้ (เช่น `bwoc check --all`) ปลั๊กอินรันคำสั่งและสังเกต exit code | Criterion คือ "คำสั่งนี้ผ่านบน workspace นี้" |
-| `none` | String ว่าง | `status = "not_applicable"` (ไม่ต้องตรวจ) หรือ `status = "not_implemented"` (runtime ถูกเลื่อน) ห้ามปรากฏกับ `status = "pass"` หรือ `"fail"` — สอง status นั้นต้องมี referent เสมอ |
+| `evidence.kind` | ความหมายของ `evidence.value` | Sub-field บังคับ | ใช้เมื่อ |
+|---|---|---|---|
+| `file` | Path สัมพัทธ์กับ workspace root (เช่น `docs/en/PROJECT-PLAN.en.md`) ไฟล์มีอยู่จริงที่ path นั้น | — | Criterion คือ "artifact นี้มีอยู่" |
+| `content` | Path พร้อม locator (เช่น `Cargo.toml#workspace.package.license`, `docs/en/SRS.en.md:§3.2`) ปลั๊กอินพบเนื้อหาที่คาดหวังที่ locator นั้น | — | Criterion คือ "artifact นี้มี/ประกาศ X" |
+| `command` | คำสั่ง shell-safe ที่ operator รันซ้ำได้ (เช่น `bwoc check --all`) ปลั๊กอินรันคำสั่งและสังเกต exit code | — | Criterion คือ "คำสั่งนี้ผ่านบน workspace นี้" |
+| `attestation` | ข้อความ free-text แบบ verbatim — multi-line ได้ Artefact เป็นการลงนามของ operator ไม่ใช่ไฟล์ใน workspace | `signer` (string — ตัวตน free-text เช่น `"CISO: สุชาดา น."`), `signed_at` (ISO 8601 date หรือ datetime) | Criterion ลดเป็น "X เกิดขึ้น, นี่คือผู้ลงนามและเวลา" ใช้โดย ISO 9001 (clause ส่วนใหญ่), ISO/IEC 27001 (5.2 / 6.1.2 / 6.1.3), ISO/IEC 20000-1 (5.2 service policy) |
+| `sample` | ข้อความสรุปสั้น (เช่น `"49 of 50 incidents resolved within SLA"`) | `sampled_count` (จำนวนเต็ม N), `sampled_of` (จำนวนเต็ม M), เสริม `window` (free-text ช่วงเวลา เช่น `"2026-Q1"`, `"last 90 days"`) | Criterion เป็นเชิงสถิติ — "N จาก M รายการผ่านเกณฑ์ในช่วงเวลานี้" ใช้โดย ISO/IEC 20000-1 (อัตรา incident/change, SLA performance), ISO/IEC 27001 (Annex A sampling, SoA-driven scope) |
+| `none` | String ว่าง | — | `status = "not_applicable"` (ไม่ต้องตรวจ) หรือ `status = "not_implemented"` (runtime ถูกเลื่อน) ห้ามปรากฏกับ `status = "pass"` หรือ `"fail"` — สอง status นั้นต้องมี referent เสมอ |
+
+**`attestation` และ `sample` เป็นการเพิ่มในรอบนี้ (additive)** — `file`, `content`, `command`, และ `none` ไม่เปลี่ยน producer และ consumer v1 ยังคง validate ผ่าน ดู [บันทึกออกแบบ 2026-05-27_iso-runtime-evidence-model](../../notes/2026-05-27_iso-runtime-evidence-model.md) สำหรับ rationale การจับคู่แต่ละมาตรฐาน
 
 ### กติกาของสคีมา
 
@@ -122,6 +126,40 @@ Stub plugin (`audit-iso-9001`, `audit-iso-20000-1`, `audit-iso-27001` ตาม 
   "status":       "not_implemented",
   "evidence":     { "kind": "none", "value": "" },
   "remedy":       "Runtime เลื่อนไป BWOC-EPIC-3"
+}
+```
+
+Finding แบบ `attestation` (รูปเป้าหมายของ EPIC-3 ISO 9001 runtime ตาม BWOC-28):
+
+```json
+{
+  "criterion_id": "9001-management-review",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence": {
+    "kind":       "attestation",
+    "value":      "การทบทวนของผู้บริหารจัดขึ้น 2026-04-15 ครอบคลุมผลการทำงาน QMS Q1, feedback ลูกค้า, ผล internal audit, โอกาสปรับปรุง บันทึกการประชุมเก็บไว้",
+    "signer":     "ผู้จัดการคุณภาพ: ต้นกล้า ก.",
+    "signed_at":  "2026-04-15",
+    "valid_through": "2027-04-15"
+  }
+}
+```
+
+Finding แบบ `sample` (รูปเป้าหมายของ EPIC-3 ISO/IEC 20000-1 runtime):
+
+```json
+{
+  "criterion_id": "20000-1-incident-management",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence": {
+    "kind":          "sample",
+    "value":         "49 จาก 50 incidents แก้ไขภายใน SLA",
+    "sampled_count": 49,
+    "sampled_of":    50,
+    "window":        "2026-Q1"
+  }
 }
 ```
 

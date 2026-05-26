@@ -65,17 +65,21 @@ Every `audit` plugin's `invoke` returns a list of **findings**. The schema below
 | `criterion_id` | string, kebab-case | yes | Stable identifier for the criterion being checked. **Plugin-scoped** — unique within one plugin, not globally. MUST match an entry in the plugin's declared criteria list. **Stable across releases** — renaming a `criterion_id` is a breaking change to the plugin's contract (see [Stability](#stability)). |
 | `severity` | closed enum: `info` \| `low` \| `medium` \| `high` \| `critical` | yes | Intrinsic severity of the criterion, declared once in the plugin's criteria list — **not** decided per-run. A `critical` finding with `status = "pass"` is normal and means "we checked the most important thing and it's fine." Severity describes the criterion's importance, not the outcome. |
 | `status` | closed enum: `pass` \| `fail` \| `not_applicable` \| `not_implemented` | yes | Outcome of this check on this workspace. `not_applicable` is for criteria that don't apply to this workspace's profile (e.g. a multi-tenant clause on a solo workspace). `not_implemented` is the stub-plugin status — used by `audit-iso-9001`, `audit-iso-20000-1`, and `audit-iso-27001` until runtime lands in `BWOC-EPIC-3`. Free-text status values are a plugin bug. |
-| `evidence` | structured: `{ kind, value }` where `kind ∈ { "file", "content", "command", "none" }` and `value` is a string | yes | Where the plugin looked. `kind` is always required; `value` is required unless `kind = "none"`. Evidence MUST be reproducible — an operator running the same check by hand finds the same artifact. This is the **Musāvāda** guard: no claim without a referent. See [Evidence kinds](#evidence-kinds). |
+| `evidence` | structured: `{ kind, value, ...kind-specific fields }` where `kind ∈ { "file", "content", "command", "attestation", "sample", "none" }` and `value` is a string. Some kinds carry additional required sub-fields (see [Evidence kinds](#evidence-kinds)). Two optional fields apply across any kind: `as_of` (ISO 8601 date when evidence was current) and `valid_through` (ISO 8601 date when evidence expires, operator-declared). | yes | Where the plugin looked. `kind` is always required; `value` is required unless `kind = "none"`. Evidence MUST be reproducible — an operator running the same check by hand finds the same artifact. This is the **Musāvāda** guard: no claim without a referent. The dispatcher stamps `as_of` / `valid_through` if present; it does not enforce expiry semantics — downstream tooling decides. See [Evidence kinds](#evidence-kinds). |
 | `remedy` | string, plain prose | conditional | Actionable next step. **Required** when `status` is `fail`, `not_applicable`, or `not_implemented` ("why this status, and what to do"). **Omitted** when `status = "pass"`. The framework rejects findings that supply `remedy` with `pass`, and findings that omit it with any other status. |
 
 ### Evidence kinds
 
-| `evidence.kind` | `evidence.value` semantics | Use when |
-|---|---|---|
-| `file` | Path relative to the workspace root (e.g. `docs/en/PROJECT-PLAN.en.md`). The file exists at that path. | The criterion is "this artifact exists." |
-| `content` | Path with a locator (e.g. `Cargo.toml#workspace.package.license`, `docs/en/SRS.en.md:§3.2`). The plugin found the expected content at the locator. | The criterion is "this artifact contains/declares X." |
-| `command` | Shell-safe command the operator can rerun (e.g. `bwoc check --all`). The plugin ran the command and observed its exit. | The criterion is "this command succeeds on this workspace." |
-| `none` | Empty string. | `status = "not_applicable"` (no check needed) or `status = "not_implemented"` (runtime deferred). MUST NOT appear with `status = "pass"` or `"fail"` — those statuses always have a referent. |
+| `evidence.kind` | `evidence.value` semantics | Required sub-fields | Use when |
+|---|---|---|---|
+| `file` | Path relative to the workspace root (e.g. `docs/en/PROJECT-PLAN.en.md`). The file exists at that path. | — | The criterion is "this artifact exists." |
+| `content` | Path with a locator (e.g. `Cargo.toml#workspace.package.license`, `docs/en/SRS.en.md:§3.2`). The plugin found the expected content at the locator. | — | The criterion is "this artifact contains/declares X." |
+| `command` | Shell-safe command the operator can rerun (e.g. `bwoc check --all`). The plugin ran the command and observed its exit. | — | The criterion is "this command succeeds on this workspace." |
+| `attestation` | Free-text statement, verbatim — multi-line allowed. The artefact is an operator-signed assertion, not a workspace file. | `signer` (string — free-text identity, e.g. `"CISO: Suchada N."`), `signed_at` (ISO 8601 date or datetime) | The criterion reduces to "X happened, here's who signed off when." Used by ISO 9001 (most clauses), ISO/IEC 27001 (5.2 / 6.1.2 / 6.1.3), ISO/IEC 20000-1 (5.2 service policy). |
+| `sample` | Short human summary (e.g. `"49 of 50 incidents resolved within SLA"`). | `sampled_count` (integer N), `sampled_of` (integer M), optional `window` (free-text time period, e.g. `"2026-Q1"`, `"last 90 days"`) | The criterion is statistical — "N of M items meet the bar over a window." Used by ISO/IEC 20000-1 (incident/change rates, SLA performance), ISO/IEC 27001 (Annex A sampling, SoA-driven scope). |
+| `none` | Empty string. | — | `status = "not_applicable"` (no check needed) or `status = "not_implemented"` (runtime deferred). MUST NOT appear with `status = "pass"` or `"fail"` — those statuses always have a referent. |
+
+**`attestation` and `sample` are additive in this revision** — `file`, `content`, `command`, and `none` are unchanged. v1 producers and consumers continue to validate. See [design note 2026-05-27_iso-runtime-evidence-model](../../notes/2026-05-27_iso-runtime-evidence-model.md) for the per-standard mapping rationale.
 
 ### Schema rules
 
@@ -122,6 +126,40 @@ Stub plugins (`audit-iso-9001`, `audit-iso-20000-1`, `audit-iso-27001` per `BWOC
   "status":       "not_implemented",
   "evidence":     { "kind": "none", "value": "" },
   "remedy":       "Runtime deferred to BWOC-EPIC-3."
+}
+```
+
+An `attestation` finding (target shape for the EPIC-3 ISO 9001 runtime per BWOC-28):
+
+```json
+{
+  "criterion_id": "9001-management-review",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence": {
+    "kind":       "attestation",
+    "value":      "Management review held 2026-04-15 covering Q1 QMS performance, customer feedback, internal audit results, improvement opportunities. Minutes archived.",
+    "signer":     "Quality Manager: Tonkla K.",
+    "signed_at":  "2026-04-15",
+    "valid_through": "2027-04-15"
+  }
+}
+```
+
+A `sample` finding (target shape for the EPIC-3 ISO/IEC 20000-1 runtime):
+
+```json
+{
+  "criterion_id": "20000-1-incident-management",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence": {
+    "kind":          "sample",
+    "value":         "49 of 50 incidents resolved within SLA",
+    "sampled_count": 49,
+    "sampled_of":    50,
+    "window":        "2026-Q1"
+  }
 }
 ```
 

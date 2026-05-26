@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.5.0"
+version = "2.6.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -29,6 +29,7 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 include_dir = "0.7"
 thiserror = "2"
+sha2 = "0.10"
 
 [profile.release]
 lto = "thin"

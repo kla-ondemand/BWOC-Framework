@@ -33,21 +33,97 @@ Pick the layer that matches *who turns it on*. If an individual agent's logic ca
 
 ## Plugin Kinds
 
-Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Three kinds ship with this spec:
+Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Four kinds ship with this spec:
 
 | Kind | What it extends | Lifecycle owner |
 |---|---|---|
 | `memory-backend` | Tier 2 memory (semantic search, vector store, deep-memory CLI) | The agent's memory subsystem |
 | `llm-backend` | Backends beyond the five declared (`claude`, `antigravity`, `codex`, `kimi`, `ollama`) | `bwoc spawn` |
 | `workflow` | External system integrations (issue trackers, code review, CI) | The agent calling out |
+| `audit` | Inspection of the workspace against external standards (ISO/IEC 29110, ISO 9001, ISO 20000-1, ISO 27001) or operator-authored audits (license headers, doc parity, secret scans) | `bwoc audit` CLI |
 
 A plugin sets `kind` once. Cross-kind plugins are not supported — split them.
+
+The `audit` kind was added in `BWOC-EPIC-2`; for the rationale (why `audit`, not `compliance` or `policy`) and the ISO standards roadmap that motivates it, see the [BWOC-19 design note](../../notes/2026-05-26_iso-compliance-plugins.md).
 
 ### What plugins are NOT
 
 - **Not a loophole for vendor-specific framework logic.** The five declared backends are first-class and live in spec, not as plugins. Vendor phrasing in `AGENTS.md` is still forbidden (**Samānattatā**).
 - **Not a place for one-off scripts.** Those belong with the agent that uses them.
 - **Not skills with extra steps.** If an agent calls it during its own operation, it is a skill (see [`SKILLS.en.md`](SKILLS.en.md)).
+
+---
+
+## Audit Findings Schema
+
+Every `audit` plugin's `invoke` returns a list of **findings**. The schema below is normative — runnable plugins and stubs alike MUST emit findings conforming to this shape, and the `bwoc audit run --json` envelope from `BWOC-12` is built directly over it. The framework validates closed enums at every `invoke` boundary; an unknown value is a plugin bug that fails the audit run, not a finding the operator must triage.
+
+### Fields
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `criterion_id` | string, kebab-case | yes | Stable identifier for the criterion being checked. **Plugin-scoped** — unique within one plugin, not globally. MUST match an entry in the plugin's declared criteria list. **Stable across releases** — renaming a `criterion_id` is a breaking change to the plugin's contract (see [Stability](#stability)). |
+| `severity` | closed enum: `info` \| `low` \| `medium` \| `high` \| `critical` | yes | Intrinsic severity of the criterion, declared once in the plugin's criteria list — **not** decided per-run. A `critical` finding with `status = "pass"` is normal and means "we checked the most important thing and it's fine." Severity describes the criterion's importance, not the outcome. |
+| `status` | closed enum: `pass` \| `fail` \| `not_applicable` \| `not_implemented` | yes | Outcome of this check on this workspace. `not_applicable` is for criteria that don't apply to this workspace's profile (e.g. a multi-tenant clause on a solo workspace). `not_implemented` is the stub-plugin status — used by `audit-iso-9001`, `audit-iso-20000-1`, and `audit-iso-27001` until runtime lands in `BWOC-EPIC-3`. Free-text status values are a plugin bug. |
+| `evidence` | structured: `{ kind, value }` where `kind ∈ { "file", "content", "command", "none" }` and `value` is a string | yes | Where the plugin looked. `kind` is always required; `value` is required unless `kind = "none"`. Evidence MUST be reproducible — an operator running the same check by hand finds the same artifact. This is the **Musāvāda** guard: no claim without a referent. See [Evidence kinds](#evidence-kinds). |
+| `remedy` | string, plain prose | conditional | Actionable next step. **Required** when `status` is `fail`, `not_applicable`, or `not_implemented` ("why this status, and what to do"). **Omitted** when `status = "pass"`. The framework rejects findings that supply `remedy` with `pass`, and findings that omit it with any other status. |
+
+### Evidence kinds
+
+| `evidence.kind` | `evidence.value` semantics | Use when |
+|---|---|---|
+| `file` | Path relative to the workspace root (e.g. `docs/en/PROJECT-PLAN.en.md`). The file exists at that path. | The criterion is "this artifact exists." |
+| `content` | Path with a locator (e.g. `Cargo.toml#workspace.package.license`, `docs/en/SRS.en.md:§3.2`). The plugin found the expected content at the locator. | The criterion is "this artifact contains/declares X." |
+| `command` | Shell-safe command the operator can rerun (e.g. `bwoc check --all`). The plugin ran the command and observed its exit. | The criterion is "this command succeeds on this workspace." |
+| `none` | Empty string. | `status = "not_applicable"` (no check needed) or `status = "not_implemented"` (runtime deferred). MUST NOT appear with `status = "pass"` or `"fail"` — those statuses always have a referent. |
+
+### Schema rules
+
+- **Closed enums, not free strings.** `severity`, `status`, and `evidence.kind` are validated at plugin load and at every `invoke` boundary. An unknown value is a plugin bug that fails the audit run.
+- **No nested findings.** A criterion passes or fails as a unit. Sub-checks are separate criterion entries with their own `criterion_id`. The report stays flat and machine-parseable.
+- **Stable serialization order.** Findings serialize in **criterion-declaration order** — the order in which they appear in the plugin's criteria list — not check-execution order. Diffs across runs are meaningful only with this guarantee.
+- **JSON is the canonical wire format.** `bwoc audit run --json` (per `BWOC-12`) emits one envelope per plugin: `{ plugin, version, started_at, finished_at, findings: [...] }`. Human-readable output is a renderer over this shape; the JSON is normative.
+
+### Stability
+
+`criterion_id` values are part of the plugin's public surface. Adding criteria is a minor-version bump under the plugin's own semver. **Renaming or removing** a `criterion_id` is a major-version bump (independent of the framework version in `[plugin].compat`) — downstream consumers (diff tooling, report archives, dashboards) key on these identifiers.
+
+### Examples
+
+A passing finding omits `remedy`:
+
+```json
+{
+  "criterion_id": "29110-bp-project-plan-exists",
+  "severity":     "high",
+  "status":       "pass",
+  "evidence":     { "kind": "file", "value": "docs/en/PROJECT-PLAN.en.md" }
+}
+```
+
+A failing finding carries `remedy`:
+
+```json
+{
+  "criterion_id": "29110-bp-traceability-matrix",
+  "severity":     "medium",
+  "status":       "fail",
+  "evidence":     { "kind": "file", "value": "docs/en/TRACEABILITY.en.md" },
+  "remedy":       "Create docs/en/TRACEABILITY.en.md linking each SRS requirement to its design element and test case."
+}
+```
+
+Stub plugins (`audit-iso-9001`, `audit-iso-20000-1`, `audit-iso-27001` per `BWOC-EPIC-2`) emit `status = "not_implemented"` with a uniform remedy:
+
+```json
+{
+  "criterion_id": "iso-9001-internal-audit-program",
+  "severity":     "medium",
+  "status":       "not_implemented",
+  "evidence":     { "kind": "none", "value": "" },
+  "remedy":       "Runtime deferred to BWOC-EPIC-3."
+}
+```
 
 ---
 
@@ -70,7 +146,7 @@ modules/plugins/
 ```toml
 [plugin]
 name        = "memory-tier2-noop"               # required — must match the directory name
-kind        = "memory-backend"                  # required — one of: memory-backend | llm-backend | workflow
+kind        = "memory-backend"                  # required — one of: memory-backend | llm-backend | workflow | audit
 version     = "0.1.0"                           # required — semver
 description = "No-op Tier 2 memory backend that forwards to Tier 1."   # required — one-sentence summary
 compat      = ">=2.5.0"                         # required — semver range; framework versions this plugin works with
@@ -89,7 +165,7 @@ entry       = "bwoc-plugin-memory-tier2-noop"   # required — binary on PATH (p
 | Section | Field | Required | Type | Meaning |
 |---|---|---|---|---|
 | `[plugin]` | `name` | yes | string (kebab-case) | Plugin identifier; must equal the directory name under `modules/plugins/` |
-| `[plugin]` | `kind` | yes | enum | One of `memory-backend`, `llm-backend`, `workflow`; immutable after `init` |
+| `[plugin]` | `kind` | yes | enum | One of `memory-backend`, `llm-backend`, `workflow`, `audit`; immutable after `init` |
 | `[plugin]` | `version` | yes | string (semver) | Semver of the plugin itself, separate from the framework version |
 | `[plugin]` | `description` | yes | string | One-sentence summary; the **only** manifest value where a vendor name is tolerated |
 | `[plugin]` | `compat` | yes | string (semver range) | Framework versions this plugin is compatible with; framework refuses to load on mismatch |
@@ -122,6 +198,7 @@ Idempotency is a **hard requirement at every phase**. The framework may retry an
 | `memory-backend` | Agent's memory subsystem | First memory read/write that escalates to Tier 2 | Per Tier 2 read/write |
 | `llm-backend` | `bwoc spawn` | Agent spawn whose registry entry names this plugin | Per model call from the agent's harness |
 | `workflow` | Agent code that imports the integration | First call from the agent | Per agent-initiated operation |
+| `audit` | `bwoc audit` CLI | First `bwoc audit run` that selects this plugin in the current invocation | Per `bwoc audit run [--plugin <name>]` operator invocation; never implicit |
 
 ### Hook contract — success, failure, partial state
 
@@ -316,9 +393,9 @@ modules/plugin-template/
 └── SPEC.md                # Obsidian-formatted; placeholders for plugin name + description
 ```
 
-Placeholders use the same `{{camelCase}}` convention as `modules/agent-template/` and `modules/skill-template/`. Required substitutions are listed in the template's own readme.
+Placeholders use the same `{{camelCase}}` convention as `modules/agent-template/` and `modules/skill-template/`. Required substitutions are listed in the template's own [`SPEC.md`](../../modules/plugin-template/SPEC.md).
 
-The `--kind` flag is required — there is no default. Valid values today: `memory-backend`, `llm-backend`, `workflow`. Future kinds (e.g. `audit` per `BWOC-EPIC-2`) extend this enum without changing the template layout. The flag forces the operator to declare intent up front and avoids producing a manifest with a missing or wrong `kind` field.
+The `--kind` flag is required — there is no default. Valid values: `memory-backend`, `llm-backend`, `workflow`, `audit`. Future kinds extend this enum without changing the template layout. The flag forces the operator to declare intent up front and avoids producing a manifest with a missing or wrong `kind` field.
 
 `bwoc plugin init` is the recommended way to start a new plugin — manual creation is supported but bypasses placeholder consistency.
 
@@ -355,7 +432,7 @@ A removed source is not auto-uninstalled from `.bwoc/installed-sources.toml`. Pa
 |---|---|
 | Manifest parseable | `manifest.toml` is valid TOML and matches the schema above |
 | Name matches directory | `[plugin].name == basename(directory)` |
-| Kind valid | `[plugin].kind` is one of `memory-backend`, `llm-backend`, `workflow` (or a future kind added to the enum) |
+| Kind valid | `[plugin].kind` is one of `memory-backend`, `llm-backend`, `workflow`, `audit` (or a future kind added to the enum) |
 | Neutrality | Vendor names only inside `description`; nowhere else |
 | `SPEC.md` present | A `SPEC.md` file exists alongside the manifest |
 | Required fields | `name`, `kind`, `version`, `description`, `compat`, `entry` all present |

@@ -27,6 +27,7 @@ fluent-bundle = { workspace = true }
 unic-langid = { workspace = true }
 include_dir = { workspace = true }
 thiserror = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 # Integration smoke test (crates/bwoc-cli/tests/smoke.rs) — isolates the

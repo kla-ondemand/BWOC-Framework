@@ -1,0 +1,17 @@
+# Template manifest — copied + substituted by `bwoc skill init <name>`.
+# Placeholders use the `{{camelCase}}` convention shared with
+# `modules/agent-template/` and `modules/plugin-template/`. See SPEC.md
+# in this directory for the substitution table.
+
+[skill]
+name        = "{{skillName}}"
+version     = "{{skillVersion}}"
+description = "{{skillDescription}}"
+maturity    = "L1"
+
+[contract]
+requires    = []
+exposes     = ["{{skillOperation}}"]
+
+[gates]
+verify      = "bwoc skill verify {{skillName}}"

@@ -125,6 +125,19 @@ Stub plugin (`audit-iso-9001`, `audit-iso-20000-1`, `audit-iso-27001` ตาม 
 }
 ```
 
+### Exit code — `bwoc audit run`
+
+Process exit code เป็น normative และคงรูปข้ามเวอร์ชัน operator และ CI สามารถ branch ด้วย `$?` ได้โดยไม่ต้องแกะ stdout — `--json` envelope ก็พกข้อมูลเดียวกันในฟิลด์ `summary.fail_count` และ `summary.framework_error`
+
+| Code | ความหมาย |
+|---|---|
+| `0` | ไม่มี finding ที่ `status = "fail"` ใน plugin ที่ถูกเลือกทั้งหมด (รวมถึงกรณีไม่มี audit plugin ที่ enabled หรือ `--plugin <name>` เจอ plugin ที่ปล่อยแต่ `pass` / `not_applicable` / `not_implemented`) |
+| `1..=254` | จำนวน `fail` finding รวมจากทุก plugin ที่ถูกเลือก clamp ไว้สูงสุดที่ `254` ถ้า run จริงสร้าง `fail` ≥ 255 ค่าจริงยังอ่านได้จาก `summary.fail_count` ใน `--json` |
+| `255` | Framework หรือ plugin runtime error — ค้น manifest ไม่เจอ parse manifest ผิด plugin spawn ไม่ได้ คืน stdout ไม่ใช่ JSON หรือ finding ละเมิดสคีมาข้างบน — `--json` envelope จะมี `summary.framework_error = true` |
+| `2` | Operator/usage error — หาตัว workspace ไม่เจอ (ไม่มี `--workspace`, ไม่มี `BWOC_WORKSPACE`, ไม่มี `.bwoc/workspace.toml` ใน ancestor) หรือ `--plugin <name>` ที่ส่งมาไม่ตรงกับ audit-kind plugin ที่ติดตั้งอยู่ |
+
+`0` กับ `1..=254` หมายความว่า framework รัน run จบสมบูรณ์และกำลังรายงานผลของ plugin `255` หมายความว่า framework เองสร้างรายงานที่เชื่อถือได้ไม่ได้ `2` หมายความว่า invocation ของ operator ผิดตั้งแต่ก่อน plugin จะถูกเรียก
+
 ---
 
 ## โครงสร้างไดเรกทอรี

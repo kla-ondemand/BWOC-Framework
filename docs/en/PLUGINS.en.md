@@ -125,6 +125,19 @@ Stub plugins (`audit-iso-9001`, `audit-iso-20000-1`, `audit-iso-27001` per `BWOC
 }
 ```
 
+### Exit codes — `bwoc audit run`
+
+The process exit code is normative and stable across releases. Operators and CI consumers can branch on `$?` without parsing stdout; the `--json` envelope's `summary.fail_count` and `summary.framework_error` fields carry the same signal in structured form.
+
+| Code | Meaning |
+|---|---|
+| `0` | No `fail` findings across the selected plugins. Also returned when no audit plugins are enabled (or `--plugin <name>` matched a plugin that emitted only `pass` / `not_applicable` / `not_implemented` findings). |
+| `1..=254` | Count of `fail` findings across all selected plugins, clamped at `254`. A run that produces ≥ 255 fails still reports the exact count under `summary.fail_count` in `--json`. |
+| `255` | Framework or plugin runtime error — discovery failed, manifest parsed badly, a plugin failed to spawn or returned non-JSON, or a finding violated the schema above. The `--json` envelope's `summary.framework_error` is `true` in this case. |
+| `2` | Operator/usage error — no workspace found (no `--workspace`, no `BWOC_WORKSPACE`, no ancestor `.bwoc/workspace.toml`), or `--plugin <name>` did not resolve to an installed audit-kind plugin. |
+
+`0` and `1..=254` mean the framework completed the run cleanly and is reporting on plugin output. `255` means the framework itself could not produce a trustworthy report. `2` means the operator's invocation was wrong before any plugin ran.
+
 ---
 
 ## Directory Layout

@@ -29,11 +29,13 @@ mod memory;
 mod new;
 mod peer;
 mod ping;
+mod plugin;
 mod retire;
 mod run;
 mod sangha;
 mod send;
 mod sessions;
+mod skill;
 mod spawn;
 mod start;
 mod status;
@@ -173,6 +175,110 @@ enum Commands {
     /// Fleet governance — Aparihāniya-dhamma 7 health signals (read-only, report-only).
     #[command(name = "fleet", subcommand)]
     Fleet(FleetCommand),
+    /// Framework skills under `modules/skills/<name>/` — list, show, verify
+    /// (read-side only; lifecycle writers land in later stories).
+    /// See `docs/en/SKILLS.en.md`.
+    #[command(name = "skill", subcommand)]
+    Skill(SkillCommand),
+    /// Framework plugins under `modules/plugins/<name>/` — list, show
+    /// (read-side only; lifecycle writers land in later stories;
+    /// no `verify` in v1 per PLUGINS.en.md §"CLI Surface").
+    /// See `docs/en/PLUGINS.en.md`.
+    #[command(name = "plugin", subcommand)]
+    Plugin(PluginCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum PluginCommand {
+    /// List installed framework plugins (`modules/plugins/<name>/manifest.toml`).
+    List(PluginListArgs),
+    /// Show one plugin's manifest + SPEC location + workspace registration.
+    Show(PluginShowArgs),
+}
+
+#[derive(Args, Debug)]
+struct PluginListArgs {
+    /// Filter to plugins enabled in `workspace.toml [plugins.<name>]`.
+    #[arg(long)]
+    enabled: bool,
+    /// Filter to one plugin kind. Valid values today:
+    /// `memory-backend`, `llm-backend`, `workflow`.
+    #[arg(long)]
+    kind: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON `{ workspace, plugins: [...] }` instead of the human table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PluginShowArgs {
+    /// Plugin name — must match a directory under `modules/plugins/`.
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON `{ workspace, plugin: { ... } }` instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum SkillCommand {
+    /// List installed framework skills (`modules/skills/<name>/manifest.toml`).
+    List(SkillListArgs),
+    /// Show one skill's manifest + SPEC location (full detail).
+    Show(SkillShowArgs),
+    /// Run a skill's `[gates].verify` command. Exits non-zero on any failure.
+    Verify(SkillVerifyArgs),
+}
+
+#[derive(Args, Debug)]
+struct SkillListArgs {
+    /// Filter to skills enabled on the current agent (resolved from
+    /// `--agent`, `BWOC_AGENT` env, or cwd → `<workspace>/agents/<id>/`).
+    #[arg(long)]
+    enabled: bool,
+    /// Override the current-agent resolution (pair with `--enabled` to
+    /// inspect what is enabled on a specific agent without changing cwd).
+    #[arg(long)]
+    agent: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON `{ workspace, skills: [...] }` instead of the human table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct SkillShowArgs {
+    /// Skill name — must match a directory under `modules/skills/`.
+    name: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON `{ workspace, skill: { ... } }` instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).args(["name", "all"])))]
+struct SkillVerifyArgs {
+    /// Skill name. Mutually exclusive with `--all`.
+    name: Option<String>,
+    /// Verify every installed skill. Mutually exclusive with `name`.
+    #[arg(long)]
+    all: bool,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON `{ workspace, ok, results: [...] }` instead of the human report.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1735,6 +1841,54 @@ fn main() -> ExitCode {
                     workspace: args.workspace,
                     json: args.json,
                     stale_days: args.stale_days,
+                }),
+            };
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Skill(sub)) => {
+            let code = match sub {
+                SkillCommand::List(args) => skill::run_list(skill::ListArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    enabled: args.enabled,
+                    agent: args.agent,
+                    json: args.json,
+                }),
+                SkillCommand::Show(args) => skill::run_show(skill::ShowArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    json: args.json,
+                }),
+                SkillCommand::Verify(args) => skill::run_verify(skill::VerifyArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    all: args.all,
+                    json: args.json,
+                }),
+            };
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Plugin(sub)) => {
+            let code = match sub {
+                PluginCommand::List(args) => plugin::run_list(plugin::ListArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    enabled: args.enabled,
+                    kind: args.kind,
+                    json: args.json,
+                }),
+                PluginCommand::Show(args) => plugin::run_show(plugin::ShowArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    json: args.json,
                 }),
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))

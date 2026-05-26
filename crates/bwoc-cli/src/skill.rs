@@ -198,8 +198,8 @@ fn enabled_skill_names(agent_dir: &Path) -> Result<Vec<String>, String> {
     let manifest_path = agent_dir.join("config.manifest.json");
     let body = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("{}: parse: {e}", manifest_path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("{}: parse: {e}", manifest_path.display()))?;
     let Some(entries) = value
         .get("skills")
         .and_then(|s| s.get("framework"))
@@ -238,10 +238,7 @@ fn enabled_skill_names(agent_dir: &Path) -> Result<Vec<String>, String> {
 /// Resolve which agent's `config.manifest.json` to consult, per SKILLS.en.md
 /// §"Current agent resolution" (lines 205–213). v1 supports `--agent`,
 /// `BWOC_AGENT` env, and cwd-descent; falls through to a clear error.
-fn resolve_current_agent(
-    root: &Path,
-    explicit: Option<&str>,
-) -> Result<(String, PathBuf), String> {
+fn resolve_current_agent(root: &Path, explicit: Option<&str>) -> Result<(String, PathBuf), String> {
     if let Some(id) = explicit {
         let dir = root.join("agents").join(id);
         if !dir.is_dir() {
@@ -275,9 +272,7 @@ fn resolve_current_agent(
             }
         }
     }
-    Err(
-        "no agent context; pass --agent <name> or run from within an agent directory".to_string(),
-    )
+    Err("no agent context; pass --agent <name> or run from within an agent directory".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -621,10 +616,7 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
             println!("- {}  (skipped — no [gates].verify)", s.manifest.skill.name);
         } else {
             let tag = if ok { "OK" } else { "FAIL" };
-            println!(
-                "{tag:<5} {}  ({elapsed_ms} ms)",
-                s.manifest.skill.name
-            );
+            println!("{tag:<5} {}  ({elapsed_ms} ms)", s.manifest.skill.name);
         }
     }
 

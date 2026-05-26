@@ -1011,7 +1011,9 @@ pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
     };
     let raw: toml::Value = match toml::from_str(&body) {
         Ok(v) => {
-            report.passes.push("manifest.toml is valid TOML".to_string());
+            report
+                .passes
+                .push("manifest.toml is valid TOML".to_string());
             v
         }
         Err(e) => {
@@ -1150,7 +1152,9 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     };
     let raw: toml::Value = match toml::from_str(&body) {
         Ok(v) => {
-            report.passes.push("manifest.toml is valid TOML".to_string());
+            report
+                .passes
+                .push("manifest.toml is valid TOML".to_string());
             v
         }
         Err(e) => {
@@ -1933,7 +1937,11 @@ entry       = "bin"
         let skills = root.join("modules/skills");
         fs::create_dir_all(skills.join("with-manifest")).unwrap();
         fs::create_dir_all(skills.join("without-manifest")).unwrap();
-        fs::write(skills.join("with-manifest/manifest.toml"), "[skill]\nname = \"with-manifest\"\n").unwrap();
+        fs::write(
+            skills.join("with-manifest/manifest.toml"),
+            "[skill]\nname = \"with-manifest\"\n",
+        )
+        .unwrap();
         let found = discover_skill_dirs(&root);
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("with-manifest"));

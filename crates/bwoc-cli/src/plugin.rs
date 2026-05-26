@@ -179,10 +179,12 @@ struct WorkspaceEntry {
 ///
 /// Per PLUGINS.en.md line 193, a missing `enabled` field is a manifest error;
 /// we surface it the same way `bwoc check` will.
-fn workspace_plugins(root: &Path) -> Result<std::collections::BTreeMap<String, WorkspaceEntry>, String> {
+fn workspace_plugins(
+    root: &Path,
+) -> Result<std::collections::BTreeMap<String, WorkspaceEntry>, String> {
     let path = root.join(".bwoc/workspace.toml");
-    let body = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let value: toml::Value =
         toml::from_str(&body).map_err(|e| format!("{}: parse: {e}", path.display()))?;
     let mut out = std::collections::BTreeMap::new();
@@ -190,12 +192,9 @@ fn workspace_plugins(root: &Path) -> Result<std::collections::BTreeMap<String, W
         return Ok(out);
     };
     for (name, entry) in plugins {
-        let table = entry.as_table().ok_or_else(|| {
-            format!(
-                "{}: [plugins.{name}] is not a table",
-                path.display()
-            )
-        })?;
+        let table = entry
+            .as_table()
+            .ok_or_else(|| format!("{}: [plugins.{name}] is not a table", path.display()))?;
         let enabled = table
             .get("enabled")
             .and_then(|v| v.as_bool())
@@ -226,9 +225,7 @@ fn toml_to_json(v: &toml::Value) -> serde_json::Value {
             .unwrap_or(serde_json::Value::Null),
         toml::Value::Boolean(b) => serde_json::Value::Bool(*b),
         toml::Value::Datetime(d) => serde_json::Value::String(d.to_string()),
-        toml::Value::Array(a) => {
-            serde_json::Value::Array(a.iter().map(toml_to_json).collect())
-        }
+        toml::Value::Array(a) => serde_json::Value::Array(a.iter().map(toml_to_json).collect()),
         toml::Value::Table(t) => {
             let mut m = serde_json::Map::new();
             for (k, v) in t {
@@ -243,10 +240,7 @@ fn toml_to_json(v: &toml::Value) -> serde_json::Value {
 // JSON helpers.
 // ---------------------------------------------------------------------------
 
-fn plugin_summary_json(
-    p: &DiscoveredPlugin,
-    entry: Option<&WorkspaceEntry>,
-) -> serde_json::Value {
+fn plugin_summary_json(p: &DiscoveredPlugin, entry: Option<&WorkspaceEntry>) -> serde_json::Value {
     let mut v = serde_json::json!({
         "name": p.manifest.plugin.name,
         "kind": p.manifest.plugin.kind,
@@ -449,7 +443,10 @@ pub fn run_show(args: ShowArgs) -> i32 {
     }
     match entry {
         Some(e) => {
-            println!("Registered    yes  (workspace.toml [plugins.{}])", p.manifest.plugin.name);
+            println!(
+                "Registered    yes  (workspace.toml [plugins.{}])",
+                p.manifest.plugin.name
+            );
             println!("Enabled       {}", if e.enabled { "yes" } else { "no" });
             if e.extra.is_empty() {
                 println!("Config        (none)");

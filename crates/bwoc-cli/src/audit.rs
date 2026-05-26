@@ -1,0 +1,1146 @@
+//! `bwoc audit run [--plugin <name>] [--json]` — dispatch audit-kind plugins
+//! and emit a canonical report.
+//!
+//! ## What this does
+//!
+//! 1. Discovers `modules/plugins/<name>/manifest.toml` with `[plugin].kind = "audit"`.
+//! 2. Selects plugins to run:
+//!    - default: every audit plugin **enabled** in `.bwoc/workspace.toml [plugins.<name>]`.
+//!    - `--plugin <name>`: that one plugin (regardless of `enabled`); errors if it is not an audit plugin.
+//! 3. For each selected plugin, dispatches its `[plugin].entry` per PLUGINS.en.md
+//!    §"Hook contract — success, failure, partial state" (lines 203-212):
+//!      - if `<plugin_dir>/<entry>` is an executable file, runs it directly;
+//!      - otherwise resolves `entry` against `PATH`.
+//!
+//!    CWD = plugin dir (so the entry can find sibling `criteria.toml`).
+//!    Env vars `BWOC_WORKSPACE`, `BWOC_PLUGIN_DIR`, `BWOC_AUDIT_OPERATION` carry
+//!    the invocation context. Stdin receives
+//!    `{"operation":"audit_run","workspace":"<abs>"}` (plugins MAY ignore stdin;
+//!    the env vars are the canonical channel).
+//! 4. Parses stdout as JSON — accepts either `[ <finding>, ... ]` or
+//!    `{"findings":[ ... ]}`. Validates each finding against the normative BWOC-11
+//!    schema (closed enums for `severity`/`status`/`evidence.kind`, the
+//!    `remedy` ↔ `status = pass` rule, the `evidence.value`-empty ↔
+//!    `evidence.kind = none` rule). Any violation rejects the plugin's run as
+//!    a **plugin bug** (PLUGINS.en.md line 59), exits 255.
+//! 5. Emits the canonical report — either a per-plugin human-readable table
+//!    plus an aggregate summary, OR the `--json` envelope:
+//!    `{ workspace, runs: [{ plugin, version, started_at, finished_at, findings: [...] }, ...], summary }`
+//!    Findings serialize in the order the plugin emits them — per BWOC-11 line 84,
+//!    that order is itself **criterion-declaration order**, owned by the plugin.
+//!
+//! ## Exit-code convention (proposed; PLUGINS.en.md does not pin it down)
+//!
+//! - `0` — no `fail` findings across selected plugins.
+//! - `1..=254` — number of `fail` findings, clamped to 254.
+//! - `255` — framework/plugin error (spawn failure, non-JSON output, schema
+//!   violation, missing plugin). Mirrors the typical Unix audit-tool
+//!   convention (ShellCheck, eslint with `--max-warnings`) and keeps the
+//!   structured count in JSON regardless.
+//!
+//! The exit code can be ignored entirely by passing `--json`; the
+//! `summary.fail_count` and `summary.framework_error` fields carry the same
+//! signal in structured form.
+
+use serde::Deserialize;
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Instant;
+
+// ---------------------------------------------------------------------------
+// Args.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct CommonArgs {
+    /// Workspace root override. Resolution: `--workspace` > `BWOC_WORKSPACE`
+    /// env > ancestor-walk for `.bwoc/workspace.toml` > error.
+    pub workspace: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunArgs {
+    pub common: CommonArgs,
+    /// Scope to one audit plugin (overrides the default "all enabled" set).
+    pub plugin: Option<String>,
+    pub json: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Manifest schema (mirror of PLUGINS.en.md §"Manifest", lines 144-173).
+// Kept local rather than re-using plugin.rs's private types — keeps the audit
+// surface decoupled from the read/write plugin surface.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestRaw {
+    plugin: PluginSection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PluginSection {
+    name: String,
+    kind: String,
+    version: String,
+    #[allow(dead_code)]
+    description: String,
+    #[allow(dead_code)]
+    compat: String,
+    entry: String,
+}
+
+#[derive(Debug, Clone)]
+struct DiscoveredAudit {
+    path: PathBuf,
+    manifest: ManifestRaw,
+}
+
+// ---------------------------------------------------------------------------
+// Workspace resolution (mirror of plugin.rs:143 — ancestor walk for
+// .bwoc/workspace.toml unless overridden).
+// ---------------------------------------------------------------------------
+
+fn find_workspace_root(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p);
+    }
+    if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+        let p = PathBuf::from(env_path);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_workspace(common: &CommonArgs) -> Result<PathBuf, String> {
+    find_workspace_root(common.workspace.clone()).ok_or_else(|| {
+        "no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+         Pass --workspace, set BWOC_WORKSPACE, or run `bwoc init` first."
+            .to_string()
+    })
+}
+
+fn plugins_dir(root: &Path) -> PathBuf {
+    root.join("modules/plugins")
+}
+
+fn parse_manifest(path: &Path) -> Result<ManifestRaw, String> {
+    let body =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    toml::from_str::<ManifestRaw>(&body).map_err(|e| format!("parse: {e}"))
+}
+
+/// Walk `modules/plugins/*/manifest.toml`, keep only `kind = "audit"`.
+fn discover_audit(root: &Path) -> Result<Vec<DiscoveredAudit>, String> {
+    let dir = plugins_dir(root);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read {}: {e}", dir.display()))?
+        .filter_map(|r| r.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    let mut out = Vec::new();
+    for entry in entries {
+        let plugin_dir = entry.path();
+        let dir_name = entry.file_name().to_string_lossy().into_owned();
+        let manifest_path = plugin_dir.join("manifest.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let manifest = parse_manifest(&manifest_path)
+            .map_err(|e| format!("{}/manifest.toml: {e}", dir_name))?;
+        if manifest.plugin.name != dir_name {
+            return Err(format!(
+                "modules/plugins/{dir_name}/manifest.toml: [plugin].name = {:?} \
+                 does not match directory name {dir_name:?}",
+                manifest.plugin.name
+            ));
+        }
+        if manifest.plugin.kind != "audit" {
+            continue;
+        }
+        out.push(DiscoveredAudit {
+            path: plugin_dir,
+            manifest,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// workspace.toml [plugins.<name>] resolution — just enabled-set discovery.
+// ---------------------------------------------------------------------------
+
+fn workspace_enabled_set(root: &Path) -> Result<BTreeMap<String, bool>, String> {
+    let path = root.join(".bwoc/workspace.toml");
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let value: toml::Value =
+        toml::from_str(&body).map_err(|e| format!("{}: parse: {e}", path.display()))?;
+    let mut out = BTreeMap::new();
+    let Some(plugins) = value.get("plugins").and_then(|v| v.as_table()) else {
+        return Ok(out);
+    };
+    for (name, entry) in plugins {
+        let table = entry
+            .as_table()
+            .ok_or_else(|| format!("{}: [plugins.{name}] is not a table", path.display()))?;
+        let enabled = table
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                format!(
+                    "{}: [plugins.{name}] is missing required 'enabled' field",
+                    path.display()
+                )
+            })?;
+        out.insert(name.clone(), enabled);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Finding schema — normative per BWOC-11 (PLUGINS.en.md lines 57-127).
+// ---------------------------------------------------------------------------
+
+const SEVERITIES: &[&str] = &["info", "low", "medium", "high", "critical"];
+const STATUSES: &[&str] = &["pass", "fail", "not_applicable", "not_implemented"];
+const EVIDENCE_KINDS: &[&str] = &["file", "content", "command", "none"];
+
+/// One validated finding. `severity`, `status`, `evidence.kind` are stored as
+/// the closed-enum strings; we re-emit them verbatim so canonical JSON output
+/// matches the plugin's own spelling.
+#[derive(Debug, Clone)]
+struct Finding {
+    criterion_id: String,
+    severity: String,
+    status: String,
+    evidence_kind: String,
+    evidence_value: String,
+    remedy: Option<String>,
+}
+
+impl Finding {
+    fn to_json(&self) -> serde_json::Value {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "criterion_id".into(),
+            serde_json::Value::String(self.criterion_id.clone()),
+        );
+        obj.insert(
+            "severity".into(),
+            serde_json::Value::String(self.severity.clone()),
+        );
+        obj.insert(
+            "status".into(),
+            serde_json::Value::String(self.status.clone()),
+        );
+        let mut ev = serde_json::Map::new();
+        ev.insert(
+            "kind".into(),
+            serde_json::Value::String(self.evidence_kind.clone()),
+        );
+        ev.insert(
+            "value".into(),
+            serde_json::Value::String(self.evidence_value.clone()),
+        );
+        obj.insert("evidence".into(), serde_json::Value::Object(ev));
+        if let Some(r) = &self.remedy {
+            obj.insert("remedy".into(), serde_json::Value::String(r.clone()));
+        }
+        serde_json::Value::Object(obj)
+    }
+}
+
+/// Parse one finding object. Returns Err with a precise diagnostic on any
+/// schema violation — every closed-enum check, the remedy ↔ status rule, and
+/// the evidence-kind ↔ evidence-value rule are validated here.
+fn parse_finding(v: &serde_json::Value, index: usize) -> Result<Finding, String> {
+    let obj = v
+        .as_object()
+        .ok_or_else(|| format!("findings[{index}] is not an object"))?;
+
+    let criterion_id = obj
+        .get("criterion_id")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| format!("findings[{index}]: missing 'criterion_id' (string)"))?
+        .to_string();
+    if criterion_id.is_empty() {
+        return Err(format!("findings[{index}]: 'criterion_id' is empty"));
+    }
+    if !is_kebab_case(&criterion_id) {
+        return Err(format!(
+            "findings[{index}]: 'criterion_id' = {criterion_id:?} is not kebab-case \
+             ([a-z0-9-], no leading/trailing/double dashes)"
+        ));
+    }
+
+    let severity = obj
+        .get("severity")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| format!("findings[{index}]: missing 'severity'"))?
+        .to_string();
+    if !SEVERITIES.contains(&severity.as_str()) {
+        return Err(format!(
+            "findings[{index}]: 'severity' = {severity:?} not in closed enum {:?}",
+            SEVERITIES
+        ));
+    }
+
+    let status = obj
+        .get("status")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| format!("findings[{index}]: missing 'status'"))?
+        .to_string();
+    if !STATUSES.contains(&status.as_str()) {
+        return Err(format!(
+            "findings[{index}]: 'status' = {status:?} not in closed enum {:?}",
+            STATUSES
+        ));
+    }
+
+    let evidence = obj
+        .get("evidence")
+        .and_then(|x| x.as_object())
+        .ok_or_else(|| format!("findings[{index}]: missing 'evidence' object {{ kind, value }}"))?;
+    let evidence_kind = evidence
+        .get("kind")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| format!("findings[{index}]: missing 'evidence.kind'"))?
+        .to_string();
+    if !EVIDENCE_KINDS.contains(&evidence_kind.as_str()) {
+        return Err(format!(
+            "findings[{index}]: 'evidence.kind' = {evidence_kind:?} not in closed enum {:?}",
+            EVIDENCE_KINDS
+        ));
+    }
+    let evidence_value = evidence
+        .get("value")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| format!("findings[{index}]: missing 'evidence.value' (string)"))?
+        .to_string();
+
+    // Schema rule (PLUGINS.en.md line 78): evidence.kind = "none" iff
+    // evidence.value is empty. Closed enum — no other combo permitted.
+    if evidence_kind == "none" {
+        if !evidence_value.is_empty() {
+            return Err(format!(
+                "findings[{index}]: evidence.kind = 'none' must have empty value, \
+                 got {evidence_value:?}"
+            ));
+        }
+    } else if evidence_value.is_empty() {
+        return Err(format!(
+            "findings[{index}]: evidence.kind = {evidence_kind:?} requires a non-empty value"
+        ));
+    }
+
+    // evidence.kind = "none" is forbidden with status = pass / fail
+    // (PLUGINS.en.md line 78: "MUST NOT appear with status = pass or fail").
+    if evidence_kind == "none" && (status == "pass" || status == "fail") {
+        return Err(format!(
+            "findings[{index}]: evidence.kind = 'none' is forbidden with status = {status:?}"
+        ));
+    }
+
+    let remedy = obj
+        .get("remedy")
+        .map(|x| {
+            x.as_str()
+                .ok_or_else(|| format!("findings[{index}]: 'remedy' must be a string"))
+                .map(|s| s.to_string())
+        })
+        .transpose()?;
+
+    // remedy ↔ status rule (PLUGINS.en.md line 69): required when status is
+    // fail / not_applicable / not_implemented; forbidden when status = pass.
+    match (status.as_str(), remedy.as_deref()) {
+        ("pass", Some(_)) => {
+            return Err(format!(
+                "findings[{index}]: status = 'pass' must not carry 'remedy' (PLUGINS.en.md line 69)"
+            ));
+        }
+        ("pass", None) => {}
+        (_, None) => {
+            return Err(format!(
+                "findings[{index}]: status = {status:?} requires 'remedy' (PLUGINS.en.md line 69)"
+            ));
+        }
+        (_, Some("")) => {
+            return Err(format!(
+                "findings[{index}]: 'remedy' is empty (status = {status:?} requires actionable text)"
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(Finding {
+        criterion_id,
+        severity,
+        status,
+        evidence_kind,
+        evidence_value,
+        remedy,
+    })
+}
+
+fn is_kebab_case(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    if bytes[0] == b'-' || bytes[bytes.len() - 1] == b'-' {
+        return false;
+    }
+    let mut prev_dash = false;
+    for &b in bytes {
+        let ok = b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-';
+        if !ok {
+            return false;
+        }
+        if b == b'-' && prev_dash {
+            return false;
+        }
+        prev_dash = b == b'-';
+    }
+    true
+}
+
+/// Accept either bare `[ <finding>, ... ]` or `{"findings":[ ... ]}`.
+fn parse_findings_stdout(raw: &str) -> Result<Vec<Finding>, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("plugin emitted no stdout (expected JSON findings)".to_string());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(trimmed).map_err(|e| format!("stdout is not valid JSON: {e}"))?;
+    let arr = if let Some(a) = value.as_array() {
+        a.clone()
+    } else if let Some(obj) = value.as_object() {
+        obj.get("findings")
+            .and_then(|x| x.as_array())
+            .ok_or_else(|| {
+                "stdout object missing 'findings': [...] (or emit a bare array)".to_string()
+            })?
+            .clone()
+    } else {
+        return Err(
+            "stdout JSON must be an array of findings or {\"findings\": [...]}".to_string(),
+        );
+    };
+
+    let mut out = Vec::with_capacity(arr.len());
+    for (i, v) in arr.iter().enumerate() {
+        out.push(parse_finding(v, i)?);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Plugin invocation.
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn is_executable_file(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(p) {
+        Ok(m) => m.is_file() && (m.permissions().mode() & 0o111 != 0),
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(p: &Path) -> bool {
+    p.is_file()
+}
+
+/// Resolve `entry` to a runnable program. PLUGINS.en.md §"Manifest" line 172
+/// allows two forms — a binary on `PATH` (preferred), or a sibling Rust crate
+/// name. For BWOC-12 we additionally accept an executable file living
+/// alongside `manifest.toml` (lets a shell script or compiled helper ship
+/// inside the plugin dir without polluting `PATH`). Resolution order:
+///   1. `<plugin_dir>/<entry>` if it is an executable regular file → run that.
+///   2. Otherwise treat `entry` as a PATH-resolved program name.
+fn resolve_entry_program(plugin_dir: &Path, entry: &str) -> String {
+    let sibling = plugin_dir.join(entry);
+    if is_executable_file(&sibling) {
+        sibling.to_string_lossy().into_owned()
+    } else {
+        entry.to_string()
+    }
+}
+
+#[derive(Debug)]
+struct InvokeOutcome {
+    started_at: String,
+    finished_at: String,
+    findings: Vec<Finding>,
+    stderr: String,
+    duration_ms: u64,
+}
+
+fn invoke_plugin(plugin: &DiscoveredAudit, workspace: &Path) -> Result<InvokeOutcome, String> {
+    let program = resolve_entry_program(&plugin.path, &plugin.manifest.plugin.entry);
+    let started_at = current_utc_iso8601();
+    let start = Instant::now();
+
+    let mut child = Command::new(&program)
+        .current_dir(&plugin.path)
+        .env("BWOC_WORKSPACE", workspace)
+        .env("BWOC_PLUGIN_DIR", &plugin.path)
+        .env("BWOC_AUDIT_OPERATION", "audit_run")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn '{program}': {e}"))?;
+
+    // Stdin: the same context as the env vars, in the operation-envelope shape
+    // suggested by PLUGINS.en.md §"Per-phase examples" line 233. Plugins MAY
+    // ignore stdin and read the env vars instead — both channels carry the
+    // same data, env-var-first lets `/bin/echo`-style wrappers work.
+    let payload = serde_json::json!({
+        "operation": "audit_run",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin.path.display().to_string(),
+    });
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = writeln!(stdin, "{}", payload);
+    }
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait '{program}': {e}"))?;
+    let finished_at = current_utc_iso8601();
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stderr_text = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    if !output.status.success() {
+        return Err(format!(
+            "'{program}' exited {} (stderr: {})",
+            output.status.code().unwrap_or(-1),
+            stderr_text.trim()
+        ));
+    }
+
+    let stdout_text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let findings = parse_findings_stdout(&stdout_text)?;
+
+    Ok(InvokeOutcome {
+        started_at,
+        finished_at,
+        findings,
+        stderr: stderr_text,
+        duration_ms,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Mini stdlib-only ISO 8601 (copied from plugin.rs:933 — kept private here
+// to keep the audit module self-contained).
+// ---------------------------------------------------------------------------
+
+fn current_utc_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let sod = (secs % 86_400) as u32;
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    let hh = sod / 3600;
+    let mm = (sod % 3600) / 60;
+    let ss = sod % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, m, d, hh, mm, ss
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Report rendering.
+// ---------------------------------------------------------------------------
+
+fn print_json(value: &serde_json::Value) -> Result<(), String> {
+    let s = serde_json::to_string_pretty(value).map_err(|e| format!("serialize JSON: {e}"))?;
+    println!("{s}");
+    Ok(())
+}
+
+fn render_human(workspace: &Path, runs: &[(String, String, InvokeOutcome)], summary: &Summary) {
+    println!("Audit run — workspace: {}", workspace.display());
+    println!();
+    if runs.is_empty() {
+        println!("(no audit plugins selected)");
+        return;
+    }
+    for (plugin_name, plugin_version, outcome) in runs {
+        println!(
+            "═══ {} (v{}) — {} finding(s), {} ms",
+            plugin_name,
+            plugin_version,
+            outcome.findings.len(),
+            outcome.duration_ms,
+        );
+        if outcome.findings.is_empty() {
+            println!("  (no findings)");
+            println!();
+            continue;
+        }
+        let crit_w = outcome
+            .findings
+            .iter()
+            .map(|f| f.criterion_id.len())
+            .max()
+            .unwrap_or(12)
+            .max(12);
+        let sev_w = outcome
+            .findings
+            .iter()
+            .map(|f| f.severity.len())
+            .max()
+            .unwrap_or(8)
+            .max(8);
+        let st_w = outcome
+            .findings
+            .iter()
+            .map(|f| f.status.len())
+            .max()
+            .unwrap_or(15)
+            .max(15);
+        println!(
+            "  {:<crit_w$}  {:<sev_w$}  {:<st_w$}  EVIDENCE",
+            "CRITERION", "SEVERITY", "STATUS",
+        );
+        for f in &outcome.findings {
+            let ev = if f.evidence_kind == "none" {
+                "(none)".to_string()
+            } else {
+                format!("{}: {}", f.evidence_kind, f.evidence_value)
+            };
+            println!(
+                "  {:<crit_w$}  {:<sev_w$}  {:<st_w$}  {}",
+                f.criterion_id, f.severity, f.status, ev,
+            );
+            if let Some(r) = &f.remedy {
+                println!("    ↳ {}", r);
+            }
+        }
+        if !outcome.stderr.trim().is_empty() {
+            println!("  (stderr from plugin):");
+            for line in outcome.stderr.lines().take(8) {
+                println!("    {line}");
+            }
+        }
+        println!();
+    }
+    println!(
+        "Summary — pass={}, fail={}, not_applicable={}, not_implemented={} (across {} plugin(s))",
+        summary.pass_count,
+        summary.fail_count,
+        summary.not_applicable_count,
+        summary.not_implemented_count,
+        summary.plugin_count,
+    );
+}
+
+#[derive(Debug, Default, Clone)]
+struct Summary {
+    plugin_count: usize,
+    pass_count: usize,
+    fail_count: usize,
+    not_applicable_count: usize,
+    not_implemented_count: usize,
+}
+
+impl Summary {
+    fn add(&mut self, findings: &[Finding]) {
+        for f in findings {
+            match f.status.as_str() {
+                "pass" => self.pass_count += 1,
+                "fail" => self.fail_count += 1,
+                "not_applicable" => self.not_applicable_count += 1,
+                "not_implemented" => self.not_implemented_count += 1,
+                _ => unreachable!("parse_finding gates the closed enum"),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `bwoc audit run` — the public entry point.
+// ---------------------------------------------------------------------------
+
+/// Exit-code convention (see module doc for the full rationale).
+const EXIT_FRAMEWORK_ERROR: i32 = 255;
+
+pub fn run(args: RunArgs) -> i32 {
+    let root = match resolve_workspace(&args.common) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc audit run: {e}");
+            return 2;
+        }
+    };
+
+    let all_audit = match discover_audit(&root) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc audit run: {e}");
+            return EXIT_FRAMEWORK_ERROR;
+        }
+    };
+
+    let enabled_set = match workspace_enabled_set(&root) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("bwoc audit run: {e}");
+            return EXIT_FRAMEWORK_ERROR;
+        }
+    };
+
+    // Select plugins.
+    let selected: Vec<DiscoveredAudit> = if let Some(name) = args.plugin.as_deref() {
+        let Some(p) = all_audit.iter().find(|p| p.manifest.plugin.name == name) else {
+            // Check if a non-audit plugin matches — gives a sharper error.
+            let plugin_dir = plugins_dir(&root).join(name);
+            if plugin_dir.is_dir() {
+                eprintln!(
+                    "bwoc audit run: '{name}' is installed but its [plugin].kind != \"audit\""
+                );
+            } else {
+                eprintln!(
+                    "bwoc audit run: no audit plugin named '{name}' under {}",
+                    plugins_dir(&root).display()
+                );
+            }
+            return 2;
+        };
+        vec![p.clone()]
+    } else {
+        all_audit
+            .iter()
+            .filter(|p| matches!(enabled_set.get(&p.manifest.plugin.name), Some(true)))
+            .cloned()
+            .collect()
+    };
+
+    if selected.is_empty() {
+        if args.json {
+            let value = serde_json::json!({
+                "workspace": root.display().to_string(),
+                "runs": [],
+                "summary": {
+                    "plugin_count": 0,
+                    "pass_count": 0,
+                    "fail_count": 0,
+                    "not_applicable_count": 0,
+                    "not_implemented_count": 0,
+                    "framework_error": false,
+                },
+            });
+            if let Err(e) = print_json(&value) {
+                eprintln!("bwoc audit run: {e}");
+                return EXIT_FRAMEWORK_ERROR;
+            }
+            return 0;
+        }
+        if args.plugin.is_some() {
+            // Unreachable — handled above. Defensive only.
+            return 2;
+        }
+        println!(
+            "Audit run — workspace: {}\n(no audit plugins enabled in workspace.toml [plugins])",
+            root.display()
+        );
+        return 0;
+    }
+
+    let mut runs: Vec<(String, String, InvokeOutcome)> = Vec::with_capacity(selected.len());
+    let mut summary = Summary {
+        plugin_count: selected.len(),
+        ..Summary::default()
+    };
+    let mut framework_error = false;
+    let mut error_messages: Vec<String> = Vec::new();
+
+    for plugin in &selected {
+        match invoke_plugin(plugin, &root) {
+            Ok(outcome) => {
+                summary.add(&outcome.findings);
+                runs.push((
+                    plugin.manifest.plugin.name.clone(),
+                    plugin.manifest.plugin.version.clone(),
+                    outcome,
+                ));
+            }
+            Err(e) => {
+                framework_error = true;
+                let msg = format!("'{}': {e}", plugin.manifest.plugin.name);
+                eprintln!("bwoc audit run: {msg}");
+                error_messages.push(msg);
+            }
+        }
+    }
+
+    if args.json {
+        let mut runs_json = Vec::with_capacity(runs.len());
+        for (name, version, outcome) in &runs {
+            runs_json.push(serde_json::json!({
+                "plugin": name,
+                "version": version,
+                "started_at": outcome.started_at,
+                "finished_at": outcome.finished_at,
+                "duration_ms": outcome.duration_ms,
+                "findings": outcome.findings.iter().map(|f| f.to_json()).collect::<Vec<_>>(),
+                "stderr": outcome.stderr,
+            }));
+        }
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "runs": runs_json,
+            "summary": {
+                "plugin_count": summary.plugin_count,
+                "pass_count": summary.pass_count,
+                "fail_count": summary.fail_count,
+                "not_applicable_count": summary.not_applicable_count,
+                "not_implemented_count": summary.not_implemented_count,
+                "framework_error": framework_error,
+                "errors": error_messages,
+            },
+        });
+        if let Err(e) = print_json(&value) {
+            eprintln!("bwoc audit run: {e}");
+            return EXIT_FRAMEWORK_ERROR;
+        }
+    } else {
+        render_human(&root, &runs, &summary);
+        if framework_error {
+            eprintln!();
+            eprintln!(
+                "bwoc audit run: {} plugin(s) failed to produce a valid report; see stderr above",
+                error_messages.len()
+            );
+        }
+    }
+
+    if framework_error {
+        return EXIT_FRAMEWORK_ERROR;
+    }
+    // fail count, clamped to [0, 254]. 255 is reserved for framework error.
+    summary.fail_count.min(254) as i32
+}
+
+// ===========================================================================
+// Unit tests ================================================================
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ev(kind: &str, value: &str) -> serde_json::Value {
+        json!({ "kind": kind, "value": value })
+    }
+
+    #[test]
+    fn finding_pass_accepts_omitted_remedy() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "high",
+            "status": "pass",
+            "evidence": ev("file", "docs/X.md"),
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        assert_eq!(f.status, "pass");
+        assert!(f.remedy.is_none());
+    }
+
+    #[test]
+    fn finding_pass_rejects_remedy() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "high",
+            "status": "pass",
+            "evidence": ev("file", "docs/X.md"),
+            "remedy": "nothing",
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("status = 'pass' must not carry 'remedy'"), "{e}");
+    }
+
+    #[test]
+    fn finding_fail_requires_remedy() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "medium",
+            "status": "fail",
+            "evidence": ev("file", "docs/X.md"),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("requires 'remedy'"), "{e}");
+    }
+
+    #[test]
+    fn finding_not_implemented_requires_remedy_and_accepts_none_evidence() {
+        let v = json!({
+            "criterion_id": "iso-9001-x",
+            "severity": "medium",
+            "status": "not_implemented",
+            "evidence": ev("none", ""),
+            "remedy": "Runtime deferred to BWOC-EPIC-3.",
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        assert_eq!(f.status, "not_implemented");
+        assert_eq!(f.evidence_kind, "none");
+    }
+
+    #[test]
+    fn finding_rejects_unknown_severity() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "blocker",
+            "status": "pass",
+            "evidence": ev("file", "X.md"),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'severity' = \"blocker\""), "{e}");
+    }
+
+    #[test]
+    fn finding_rejects_unknown_status() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "warning",
+            "evidence": ev("file", "X.md"),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'status' = \"warning\""), "{e}");
+    }
+
+    #[test]
+    fn finding_rejects_unknown_evidence_kind() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "pass",
+            "evidence": ev("url", "https://x"),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'evidence.kind' = \"url\""), "{e}");
+    }
+
+    #[test]
+    fn finding_rejects_none_evidence_with_pass_status() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "pass",
+            "evidence": ev("none", ""),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(
+            e.contains("evidence.kind = 'none' is forbidden with status = \"pass\""),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn finding_rejects_none_evidence_with_nonempty_value() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "not_applicable",
+            "evidence": ev("none", "something"),
+            "remedy": "n/a",
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(
+            e.contains("evidence.kind = 'none' must have empty value"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn finding_rejects_nonnone_evidence_with_empty_value() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "pass",
+            "evidence": ev("file", ""),
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("requires a non-empty value"), "{e}");
+    }
+
+    #[test]
+    fn finding_rejects_non_kebab_criterion_id() {
+        for bad in ["X-Y", "x_y", "-leading", "trailing-", "x--y", ""] {
+            let v = json!({
+                "criterion_id": bad,
+                "severity": "low",
+                "status": "pass",
+                "evidence": ev("file", "X.md"),
+            });
+            assert!(parse_finding(&v, 0).is_err(), "expected {bad:?} to fail");
+        }
+    }
+
+    #[test]
+    fn finding_rejects_empty_remedy_string() {
+        let v = json!({
+            "criterion_id": "x-y",
+            "severity": "low",
+            "status": "fail",
+            "evidence": ev("file", "X.md"),
+            "remedy": "",
+        });
+        let e = parse_finding(&v, 0).unwrap_err();
+        assert!(e.contains("'remedy' is empty"), "{e}");
+    }
+
+    #[test]
+    fn parse_findings_accepts_bare_array() {
+        let raw = r#"[
+            {"criterion_id":"a-1","severity":"low","status":"pass","evidence":{"kind":"file","value":"X"}}
+        ]"#;
+        let v = parse_findings_stdout(raw).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].criterion_id, "a-1");
+    }
+
+    #[test]
+    fn parse_findings_accepts_envelope_object() {
+        let raw = r#"{ "findings": [
+            {"criterion_id":"a-1","severity":"low","status":"pass","evidence":{"kind":"file","value":"X"}}
+        ]}"#;
+        let v = parse_findings_stdout(raw).unwrap();
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn parse_findings_rejects_empty_stdout() {
+        let e = parse_findings_stdout("").unwrap_err();
+        assert!(e.contains("no stdout"), "{e}");
+    }
+
+    #[test]
+    fn parse_findings_rejects_non_json() {
+        let e = parse_findings_stdout("not json").unwrap_err();
+        assert!(e.contains("not valid JSON"), "{e}");
+    }
+
+    #[test]
+    fn parse_findings_rejects_envelope_without_findings_key() {
+        let e = parse_findings_stdout(r#"{"something":1}"#).unwrap_err();
+        assert!(e.contains("missing 'findings'"), "{e}");
+    }
+
+    #[test]
+    fn summary_counts_each_status() {
+        let mk = |status: &str, has_remedy: bool| Finding {
+            criterion_id: "c-1".to_string(),
+            severity: "low".to_string(),
+            status: status.to_string(),
+            evidence_kind: if status == "not_applicable" || status == "not_implemented" {
+                "none".to_string()
+            } else {
+                "file".to_string()
+            },
+            evidence_value: if status == "not_applicable" || status == "not_implemented" {
+                String::new()
+            } else {
+                "X".to_string()
+            },
+            remedy: if has_remedy {
+                Some("r".to_string())
+            } else {
+                None
+            },
+        };
+        let fs = vec![
+            mk("pass", false),
+            mk("pass", false),
+            mk("fail", true),
+            mk("not_applicable", true),
+            mk("not_implemented", true),
+            mk("not_implemented", true),
+        ];
+        let mut s = Summary {
+            plugin_count: 1,
+            ..Summary::default()
+        };
+        s.add(&fs);
+        assert_eq!(s.pass_count, 2);
+        assert_eq!(s.fail_count, 1);
+        assert_eq!(s.not_applicable_count, 1);
+        assert_eq!(s.not_implemented_count, 2);
+    }
+
+    #[test]
+    fn iso8601_shape() {
+        let s = current_utc_iso8601();
+        assert_eq!(s.len(), 20);
+        assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn to_json_round_trips_pass_finding() {
+        let v = json!({
+            "criterion_id": "a-1",
+            "severity": "medium",
+            "status": "pass",
+            "evidence": {"kind":"file","value":"X.md"},
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        let out = f.to_json();
+        assert_eq!(out["criterion_id"], "a-1");
+        assert_eq!(out["severity"], "medium");
+        assert_eq!(out["status"], "pass");
+        assert_eq!(out["evidence"]["kind"], "file");
+        assert_eq!(out["evidence"]["value"], "X.md");
+        assert!(out.as_object().unwrap().get("remedy").is_none());
+    }
+
+    #[test]
+    fn to_json_includes_remedy_when_present() {
+        let v = json!({
+            "criterion_id": "a-1",
+            "severity": "medium",
+            "status": "fail",
+            "evidence": {"kind":"file","value":"X.md"},
+            "remedy": "fix it",
+        });
+        let f = parse_finding(&v, 0).unwrap();
+        let out = f.to_json();
+        assert_eq!(out["remedy"], "fix it");
+    }
+}

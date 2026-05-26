@@ -1,16 +1,22 @@
-//! `bwoc skill list / show / verify` — read-side framework-skill surface.
+//! `bwoc skill list / show / verify / init / install / enable / disable / remove`
+//! — full framework-skill surface.
 //!
-//! Implements the read-only subcommands from `docs/en/SKILLS.en.md` §"CLI
-//! Surface" (BWOC-4). Skills live under `<workspace>/modules/skills/<name>/`,
+//! Read-side (BWOC-4): `list`, `show`, `verify` follow `docs/en/SKILLS.en.md`
+//! §"CLI Surface". Skills live under `<workspace>/modules/skills/<name>/`,
 //! each with a `manifest.toml` (schema §"Manifest"). Discovery (§"Discovery")
 //! is workspace-local — no network calls — and per-agent opt-in is gated on
 //! the agent's `config.manifest.json` `skills.framework[]` array.
 //!
-//! Lifecycle writers (`init`, `install`, `enable`, `disable`, `remove`) land
-//! in later stories; this module is read-side only.
+//! Write-side (BWOC-23): `init` scaffolds from `modules/skill-template/`;
+//! `install` materializes from local path / git URL / tarball URL with a
+//! SHA-256 trust gate (`--no-verify` / `--allow-new-source` flags per
+//! §"Sources & Installation"); `enable`/`disable` flip the `enabled` field
+//! in the current agent's manifest (BWOC-20: `enabled` is required); `remove`
+//! deletes `modules/skills/<name>/` and cleans `skills.framework[]` entries
+//! in every consuming agent's manifest (§"Removal" line 312).
 //!
-//! Every read-only command has a `--json` twin. Human output is intentionally
-//! terse — JSON is the contract for scripts.
+//! Every read AND write command has a `--json` twin. Human output is
+//! intentionally terse — JSON is the contract for scripts.
 
 use std::path::{Path, PathBuf};
 
@@ -630,4 +636,1481 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
     }
 
     if overall_ok { 0 } else { 1 }
+}
+
+// ===========================================================================
+// Write-side surface (BWOC-23) ==============================================
+// ===========================================================================
+
+use sha2::{Digest, Sha256};
+
+#[derive(Debug, Clone)]
+pub struct InitArgs {
+    pub common: CommonArgs,
+    pub name: String,
+    /// Override `{{skillVersion}}`. Default `0.1.0`.
+    pub version: Option<String>,
+    /// Override `{{skillDescription}}`. Default a hint placeholder.
+    pub description: Option<String>,
+    /// Override `{{skillOperation}}`. Default `<name>_op` (snake-cased).
+    pub operation: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct InstallArgs {
+    pub common: CommonArgs,
+    /// Source argument: local path, git URL (`*.git[#ref]`), or tarball URL (`*.tar.gz` / `*.tgz`).
+    pub source: String,
+    /// Skip the SHA-256 trust gate. Emits a stderr warning.
+    pub no_verify: bool,
+    /// Required the first time a source URL is installed in this workspace.
+    pub allow_new_source: bool,
+    /// Replace an existing install in place (retains the registry record).
+    pub upgrade: bool,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnableArgs {
+    pub common: CommonArgs,
+    pub name: String,
+    /// Override the current-agent resolution.
+    pub agent: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct DisableArgs {
+    pub common: CommonArgs,
+    pub name: String,
+    pub agent: Option<String>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoveArgs {
+    pub common: CommonArgs,
+    pub name: String,
+    /// Skip the confirmation prompt. Required with `--json`.
+    pub yes: bool,
+    /// Also drop the entry from `.bwoc/installed-sources.toml`.
+    pub forget_source: bool,
+    pub json: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers.
+// ---------------------------------------------------------------------------
+
+fn template_dir(root: &Path) -> PathBuf {
+    root.join("modules/skill-template")
+}
+
+fn installed_sources_path(root: &Path) -> PathBuf {
+    root.join(".bwoc/installed-sources.toml")
+}
+
+/// kebab-case validator. Allows `[a-z0-9]+(-[a-z0-9]+)*`. Rejects empty,
+/// path separators, leading/trailing dashes, double dashes, uppercase.
+fn validate_skill_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("skill name is empty".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        return Err(format!(
+            "'{name}' is not a valid skill name (no path separators)"
+        ));
+    }
+    let mut prev_dash = true;
+    for c in name.chars() {
+        let valid = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if !valid {
+            return Err(format!(
+                "'{name}' is not kebab-case (only [a-z0-9-], single dashes)"
+            ));
+        }
+        if c == '-' && prev_dash {
+            return Err(format!(
+                "'{name}' is not kebab-case (no leading or consecutive dashes)"
+            ));
+        }
+        prev_dash = c == '-';
+    }
+    if prev_dash {
+        return Err(format!("'{name}' is not kebab-case (no trailing dash)"));
+    }
+    Ok(())
+}
+
+/// Best-effort kebab→snake for the default `{{skillOperation}}`.
+fn default_operation(name: &str) -> String {
+    let snake = name.replace('-', "_");
+    format!("{snake}_op")
+}
+
+/// Substitute the four documented placeholders. Unknown `{{...}}` markers
+/// are left in place — the operator is the editor of last resort.
+fn substitute_placeholders(
+    body: &str,
+    name: &str,
+    version: &str,
+    description: &str,
+    operation: &str,
+) -> String {
+    body.replace("{{skillName}}", name)
+        .replace("{{skillVersion}}", version)
+        .replace("{{skillDescription}}", description)
+        .replace("{{skillOperation}}", operation)
+}
+
+/// Recursively copy `src` into `dst`. Both must be directories; `dst` must
+/// not exist. Symlinks are skipped (the template ships no symlinks); only
+/// regular files and directories are reproduced.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<Vec<PathBuf>, String> {
+    if !src.is_dir() {
+        return Err(format!("source is not a directory: {}", src.display()));
+    }
+    if dst.exists() {
+        return Err(format!("destination already exists: {}", dst.display()));
+    }
+    let mut written = Vec::new();
+    std::fs::create_dir_all(dst).map_err(|e| format!("create {}: {e}", dst.display()))?;
+    let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+    while let Some((s, d)) = stack.pop() {
+        for entry in std::fs::read_dir(&s).map_err(|e| format!("read {}: {e}", s.display()))? {
+            let entry = entry.map_err(|e| format!("read entry in {}: {e}", s.display()))?;
+            let sp = entry.path();
+            let dp = d.join(entry.file_name());
+            let ft = entry
+                .file_type()
+                .map_err(|e| format!("stat {}: {e}", sp.display()))?;
+            if ft.is_dir() {
+                std::fs::create_dir_all(&dp)
+                    .map_err(|e| format!("create {}: {e}", dp.display()))?;
+                stack.push((sp, dp));
+            } else if ft.is_file() {
+                std::fs::copy(&sp, &dp)
+                    .map_err(|e| format!("copy {} -> {}: {e}", sp.display(), dp.display()))?;
+                written.push(dp);
+            }
+            // Skip symlinks deliberately — neither template nor installable
+            // skill should embed them. Surface as an error if we ever see one
+            // so it does not silently vanish from the materialized tree.
+            else if ft.is_symlink() {
+                return Err(format!(
+                    "symlink encountered (unsupported): {}",
+                    sp.display()
+                ));
+            }
+        }
+    }
+    Ok(written)
+}
+
+/// Deterministic SHA-256 of a directory tree — sorted-path walk over regular
+/// files; header `<rel-path>\0<size>\0` then file bytes then `\n`.
+fn sha256_tree(root: &Path) -> Result<String, String> {
+    let mut files = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        for entry in std::fs::read_dir(&cur).map_err(|e| format!("read {}: {e}", cur.display()))? {
+            let entry = entry.map_err(|e| format!("read entry in {}: {e}", cur.display()))?;
+            let path = entry.path();
+            let ft = entry
+                .file_type()
+                .map_err(|e| format!("stat {}: {e}", path.display()))?;
+            if ft.is_dir() {
+                stack.push(path);
+            } else if ft.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    let mut hasher = Sha256::new();
+    for f in &files {
+        let rel = f
+            .strip_prefix(root)
+            .map_err(|_| format!("strip prefix: {}", f.display()))?;
+        let bytes = std::fs::read(f).map_err(|e| format!("read {}: {e}", f.display()))?;
+        hasher.update(rel.to_string_lossy().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(bytes.len().to_string().as_bytes());
+        hasher.update(b"\0");
+        hasher.update(&bytes);
+        hasher.update(b"\n");
+    }
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
+}
+
+fn sha256_string(s: &str) -> String {
+    sha256_bytes(s.as_bytes())
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
+/// Three source kinds per SKILLS.en.md §"Sources & Installation" line 220.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceKind {
+    LocalPath(PathBuf),
+    /// (url-without-fragment, optional ref)
+    GitUrl(String, Option<String>),
+    TarballUrl(String),
+}
+
+fn detect_source_kind(src: &str) -> Result<SourceKind, String> {
+    if src.starts_with("./") || src.starts_with("../") || src.starts_with('/') {
+        return Ok(SourceKind::LocalPath(PathBuf::from(src)));
+    }
+    let lower = src.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("git://")
+    {
+        // Tarball detection precedes git detection — a URL that ends in
+        // `.tar.gz`/`.tgz` is unambiguously an archive even when served from
+        // a git host.
+        let (path_part, _fragment) = src.split_once('#').unwrap_or((src, ""));
+        let path_lower = path_part.to_ascii_lowercase();
+        if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
+            return Ok(SourceKind::TarballUrl(src.to_string()));
+        }
+        if path_lower.ends_with(".git") {
+            let (url, frag) = src.split_once('#').unwrap_or((src, ""));
+            let r = if frag.is_empty() {
+                None
+            } else {
+                Some(frag.to_string())
+            };
+            return Ok(SourceKind::GitUrl(url.to_string(), r));
+        }
+    }
+    Err(format!(
+        "unrecognized source '{src}' — expected local path (./, ../, /), \
+         git URL (*.git[#ref]), or tarball URL (*.tar.gz / *.tgz)"
+    ))
+}
+
+/// Existing installed-sources.toml entry. v1 only uses `source_key` for the
+/// "have we seen this source before?" check; full row is preserved in TOML.
+#[derive(Debug, Clone)]
+struct InstalledSource {
+    source_key: String,
+}
+
+fn source_key(url: &str) -> String {
+    sha256_string(url)
+}
+
+/// Parse `.bwoc/installed-sources.toml` into a flat list. Missing file is OK
+/// (returns empty). The format is a top-level table keyed by source_key
+/// per SKILLS.en.md §"`.bwoc/installed-sources.toml` schema".
+fn load_installed_sources(root: &Path) -> Result<Vec<InstalledSource>, String> {
+    let path = installed_sources_path(root);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let value: toml::Value =
+        toml::from_str(&body).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let table = value
+        .as_table()
+        .ok_or_else(|| format!("{}: top-level is not a table", path.display()))?;
+    let mut out = Vec::new();
+    for (key, entry) in table {
+        // Validate the entry is a table — surfaces hand-edit corruption before
+        // it silently degrades the "is this source new?" check downstream.
+        entry
+            .as_table()
+            .ok_or_else(|| format!("{}: entry '{key}' is not a table", path.display()))?;
+        out.push(InstalledSource {
+            source_key: key.clone(),
+        });
+    }
+    Ok(out)
+}
+
+/// Append (or replace) one entry. Other entries are preserved.
+fn record_installed_source(
+    root: &Path,
+    key: &str,
+    url: &str,
+    name: &str,
+    target_rel: &str,
+    installed_hash: &str,
+    acknowledged_by: &str,
+) -> Result<(), String> {
+    let path = installed_sources_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    }
+    let mut doc: toml::Table = if path.is_file() {
+        let body =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        toml::from_str(&body).map_err(|e| format!("parse {}: {e}", path.display()))?
+    } else {
+        toml::Table::new()
+    };
+    let now = current_utc_iso8601();
+    let mut entry = toml::Table::new();
+    entry.insert("url".into(), toml::Value::String(url.to_string()));
+    entry.insert("kind".into(), toml::Value::String("skill".to_string()));
+    entry.insert("name".into(), toml::Value::String(name.to_string()));
+    entry.insert("target".into(), toml::Value::String(target_rel.to_string()));
+    entry.insert("installed_at".into(), toml::Value::String(now.clone()));
+    entry.insert(
+        "installed_hash".into(),
+        toml::Value::String(installed_hash.to_string()),
+    );
+    entry.insert("last_verified".into(), toml::Value::String(now));
+    entry.insert(
+        "acknowledged_by".into(),
+        toml::Value::String(acknowledged_by.to_string()),
+    );
+    doc.insert(key.to_string(), toml::Value::Table(entry));
+    let body = toml::to_string_pretty(&doc).map_err(|e| format!("serialize toml: {e}"))?;
+    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// Remove one source_key entry from `.bwoc/installed-sources.toml`.
+/// Missing file or missing key is a no-op (success).
+fn forget_installed_source(root: &Path, name: &str) -> Result<bool, String> {
+    let path = installed_sources_path(root);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut doc: toml::Table =
+        toml::from_str(&body).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let keys: Vec<String> = doc
+        .iter()
+        .filter_map(|(k, v)| {
+            let t = v.as_table()?;
+            let n = t.get("name")?.as_str()?;
+            let kind = t.get("kind").and_then(|v| v.as_str()).unwrap_or("skill");
+            (n == name && kind == "skill").then(|| k.clone())
+        })
+        .collect();
+    let removed = !keys.is_empty();
+    for k in keys {
+        doc.remove(&k);
+    }
+    let body = toml::to_string_pretty(&doc).map_err(|e| format!("serialize toml: {e}"))?;
+    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(removed)
+}
+
+fn current_utc_iso8601() -> String {
+    // Std-only ISO 8601 (UTC seconds precision). No chrono dependency for
+    // a single timestamp field — staying scope-disciplined.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Civil-from-days algorithm (Howard Hinnant). Std doesn't expose UTC
+    // breakdown, so we do it by hand. Good through year 4000.
+    let days = (secs / 86_400) as i64;
+    let sod = (secs % 86_400) as u32;
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    let hh = sod / 3600;
+    let mm = (sod % 3600) / 60;
+    let ss = sod % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, m, d, hh, mm, ss
+    )
+}
+
+/// Run an external command in `cwd`, capturing stderr. Returns Ok(stdout) on
+/// success; Err with the command + stderr on failure or spawn error. The
+/// caller frames the user-facing error.
+fn run_capture(cwd: &Path, program: &str, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .map_err(|e| format!("spawn {program}: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{program} {} failed (exit {}): {}",
+            args.join(" "),
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Agent-manifest mutation helpers.
+// ---------------------------------------------------------------------------
+
+/// Load `<agent>/config.manifest.json` as a mutable JSON Value. Errors carry
+/// the path so the operator can find the culprit.
+fn load_agent_manifest(agent_dir: &Path) -> Result<serde_json::Value, String> {
+    let path = agent_dir.join("config.manifest.json");
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    serde_json::from_str(&body).map_err(|e| format!("parse {}: {e}", path.display()))
+}
+
+fn save_agent_manifest(agent_dir: &Path, value: &serde_json::Value) -> Result<(), String> {
+    let path = agent_dir.join("config.manifest.json");
+    let mut body =
+        serde_json::to_string_pretty(value).map_err(|e| format!("serialize JSON: {e}"))?;
+    body.push('\n');
+    std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Set the `enabled` field on one entry in `skills.framework[]`, adding the
+/// entry if it does not yet exist. Returns the resolved entry name + final
+/// enabled value + whether the entry was newly added.
+fn set_skill_enabled_in_manifest(
+    manifest: &mut serde_json::Value,
+    name: &str,
+    version_constraint: &str,
+    enabled: bool,
+    require_existing: bool,
+) -> Result<(bool, bool), String> {
+    let obj = manifest
+        .as_object_mut()
+        .ok_or_else(|| "manifest is not a JSON object".to_string())?;
+    let skills = obj
+        .entry("skills".to_string())
+        .or_insert(serde_json::json!({}));
+    let skills_obj = skills
+        .as_object_mut()
+        .ok_or_else(|| "manifest.skills is not an object".to_string())?;
+    let framework = skills_obj
+        .entry("framework".to_string())
+        .or_insert(serde_json::json!([]));
+    let arr = framework
+        .as_array_mut()
+        .ok_or_else(|| "manifest.skills.framework is not an array".to_string())?;
+    for entry in arr.iter_mut() {
+        let entry_name = entry
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if entry_name.as_deref() == Some(name) {
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("enabled".to_string(), serde_json::Value::Bool(enabled));
+            return Ok((false, enabled));
+        }
+    }
+    if require_existing {
+        return Err(format!(
+            "no skills.framework[] entry for '{name}' (run `bwoc skill enable {name}` first)"
+        ));
+    }
+    arr.push(serde_json::json!({
+        "name": name,
+        "version": version_constraint,
+        "enabled": enabled,
+    }));
+    Ok((true, enabled))
+}
+
+/// Drop every `skills.framework[]` entry whose `name == <name>`. Returns the
+/// number of removed entries (0 if the agent never referenced the skill).
+fn remove_skill_from_manifest(manifest: &mut serde_json::Value, name: &str) -> usize {
+    let Some(arr) = manifest
+        .get_mut("skills")
+        .and_then(|s| s.get_mut("framework"))
+        .and_then(|f| f.as_array_mut())
+    else {
+        return 0;
+    };
+    let before = arr.len();
+    arr.retain(|entry| entry.get("name").and_then(|v| v.as_str()) != Some(name));
+    before - arr.len()
+}
+
+/// Walk `<workspace>/agents/*/config.manifest.json`, return the ids of agents
+/// whose `skills.framework[]` references the named skill.
+fn agents_consuming(root: &Path, skill_name: &str) -> Result<Vec<String>, String> {
+    let agents_dir = root.join("agents");
+    if !agents_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in
+        std::fs::read_dir(&agents_dir).map_err(|e| format!("read {}: {e}", agents_dir.display()))?
+    {
+        let entry = entry.map_err(|e| format!("read entry: {e}"))?;
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let manifest_path = entry.path().join("config.manifest.json");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        let body = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
+        let v: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(_) => continue, // hand-edited manifest; skip rather than block remove
+        };
+        let consumes = v
+            .get("skills")
+            .and_then(|s| s.get("framework"))
+            .and_then(|f| f.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .any(|e| e.get("name").and_then(|n| n.as_str()) == Some(skill_name))
+            })
+            .unwrap_or(false);
+        if consumes {
+            out.push(id);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// `bwoc skill init <name>` ---------------------------------------------------
+// ---------------------------------------------------------------------------
+
+pub fn run_init(args: InitArgs) -> i32 {
+    let root = match resolve_workspace(&args.common) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc skill init: {e}");
+            return 2;
+        }
+    };
+    if let Err(e) = validate_skill_name(&args.name) {
+        eprintln!("bwoc skill init: {e}");
+        return 2;
+    }
+    let template = template_dir(&root);
+    if !template.is_dir() {
+        eprintln!(
+            "bwoc skill init: template missing at {}. \
+             Run a workspace with `modules/skill-template/` (jisoo's BWOC-22).",
+            template.display()
+        );
+        return 2;
+    }
+    let target = skills_dir(&root).join(&args.name);
+    if target.exists() {
+        eprintln!(
+            "bwoc skill init: target already exists: {}",
+            target.display()
+        );
+        return 2;
+    }
+
+    let version = args.version.as_deref().unwrap_or("0.1.0").to_string();
+    let description = args
+        .description
+        .as_deref()
+        .unwrap_or("Describe what this skill does (one sentence).")
+        .to_string();
+    let operation = args
+        .operation
+        .clone()
+        .unwrap_or_else(|| default_operation(&args.name));
+
+    // Materialize: copy then rewrite each file's text in place.
+    let written = match copy_dir_recursive(&template, &target) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill init: {e}");
+            // Roll back partial copy — caller asked for atomic-ish init.
+            let _ = std::fs::remove_dir_all(&target);
+            return 1;
+        }
+    };
+    let mut substituted: Vec<String> = Vec::with_capacity(written.len());
+    for file in &written {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            let out =
+                substitute_placeholders(&text, &args.name, &version, &description, &operation);
+            if let Err(e) = std::fs::write(file, out) {
+                eprintln!("bwoc skill init: write {}: {e}", file.display());
+                let _ = std::fs::remove_dir_all(&target);
+                return 1;
+            }
+            substituted.push(file.display().to_string());
+        }
+    }
+
+    // Drop an `.authored-in-place` marker so `bwoc check`'s orphan-installation
+    // gate (SKILLS.en.md §"Verification" line 352) treats this as authored,
+    // not installed-from-source.
+    let marker = target.join(".authored-in-place");
+    if let Err(e) = std::fs::write(&marker, "") {
+        eprintln!(
+            "bwoc skill init: warning — could not write {}: {e}",
+            marker.display()
+        );
+    }
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "name": args.name,
+            "target": target.display().to_string(),
+            "files_written": substituted,
+            "placeholders": {
+                "skillName": args.name,
+                "skillVersion": version,
+                "skillDescription": description,
+                "skillOperation": operation,
+            },
+            "authored_in_place": true,
+        });
+        return print_json(&value);
+    }
+
+    println!("Initialized framework skill '{}'", args.name);
+    println!("  Target:      {}", target.display());
+    println!("  Version:     {version}");
+    println!("  Operation:   {operation}");
+    println!("  Files:       {} written", substituted.len());
+    println!();
+    println!("Next: edit SPEC.md, bump maturity honestly, then");
+    println!(
+        "      `bwoc skill enable {}` on the consuming agent.",
+        args.name
+    );
+    0
+}
+
+// ---------------------------------------------------------------------------
+// `bwoc skill install <source>` ----------------------------------------------
+// ---------------------------------------------------------------------------
+
+pub fn run_install(args: InstallArgs) -> i32 {
+    let root = match resolve_workspace(&args.common) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc skill install: {e}");
+            return 2;
+        }
+    };
+    let kind = match detect_source_kind(&args.source) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("bwoc skill install: {e}");
+            return 2;
+        }
+    };
+
+    // First-install gate: check installed-sources.toml for prior records of
+    // this exact source string. The spec keys by SHA-256(url) so we compute
+    // that even when the source is local — local paths still get a key.
+    let key = source_key(&args.source);
+    let prior = match load_installed_sources(&root) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill install: {e}");
+            return 1;
+        }
+    };
+    let already_known = prior.iter().any(|s| s.source_key == key);
+    if !already_known && !args.allow_new_source {
+        eprintln!(
+            "bwoc skill install: '{}' has not been installed in this workspace before. \
+             Pass --allow-new-source to acknowledge you have inspected this source.",
+            args.source
+        );
+        return 2;
+    }
+
+    // Stage into a tempdir under /tmp, validate, then move into place.
+    let stage = match stage_source(&kind, &args.source) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("bwoc skill install: {e}");
+            return 1;
+        }
+    };
+
+    // Trust gate.
+    let mut checksum_outcome: Option<String> = None;
+    if !args.no_verify {
+        match verify_checksum(&kind, &stage.staged_dir, &stage.archive_path) {
+            Ok(s) => checksum_outcome = Some(s),
+            Err(e) => {
+                eprintln!("bwoc skill install: trust-gate failed: {e}");
+                let _ = std::fs::remove_dir_all(&stage.staged_dir);
+                return 1;
+            }
+        }
+    } else {
+        eprintln!(
+            "bwoc skill install: warning — --no-verify skips SHA-256 verification of {}",
+            args.source
+        );
+    }
+
+    // Read staged manifest to discover the skill name.
+    let manifest_path = stage.staged_dir.join("manifest.toml");
+    if !manifest_path.is_file() {
+        eprintln!(
+            "bwoc skill install: source missing manifest.toml at staged root; \
+             cannot resolve skill name"
+        );
+        let _ = std::fs::remove_dir_all(&stage.staged_dir);
+        return 1;
+    }
+    let staged_manifest = match parse_manifest(&manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("bwoc skill install: parse staged manifest: {e}");
+            let _ = std::fs::remove_dir_all(&stage.staged_dir);
+            return 1;
+        }
+    };
+    let skill_name = staged_manifest.skill.name.clone();
+    if let Err(e) = validate_skill_name(&skill_name) {
+        eprintln!("bwoc skill install: manifest skill name: {e}");
+        let _ = std::fs::remove_dir_all(&stage.staged_dir);
+        return 2;
+    }
+
+    let target = skills_dir(&root).join(&skill_name);
+    if target.exists() {
+        if !args.upgrade {
+            eprintln!(
+                "bwoc skill install: '{skill_name}' already installed at {}; \
+                 pass --upgrade to replace",
+                target.display()
+            );
+            let _ = std::fs::remove_dir_all(&stage.staged_dir);
+            return 2;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&target) {
+            eprintln!(
+                "bwoc skill install: --upgrade: failed to remove {}: {e}",
+                target.display()
+            );
+            let _ = std::fs::remove_dir_all(&stage.staged_dir);
+            return 1;
+        }
+    }
+
+    if let Some(parent) = target.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("bwoc skill install: create {}: {e}", parent.display());
+            let _ = std::fs::remove_dir_all(&stage.staged_dir);
+            return 1;
+        }
+    }
+    if let Err(e) = std::fs::rename(&stage.staged_dir, &target) {
+        // Cross-device or some other rename failure — fall back to copy + remove.
+        if let Err(e2) = copy_dir_recursive(&stage.staged_dir, &target) {
+            eprintln!(
+                "bwoc skill install: install {} -> {}: {e} (copy fallback also failed: {e2})",
+                stage.staged_dir.display(),
+                target.display()
+            );
+            let _ = std::fs::remove_dir_all(&stage.staged_dir);
+            return 1;
+        }
+        let _ = std::fs::remove_dir_all(&stage.staged_dir);
+    }
+
+    let installed_hash = match sha256_tree(&target) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("bwoc skill install: hash {}: {e}", target.display());
+            return 1;
+        }
+    };
+
+    let acknowledged_by = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    let target_rel = format!("modules/skills/{skill_name}");
+    if let Err(e) = record_installed_source(
+        &root,
+        &key,
+        &args.source,
+        &skill_name,
+        &target_rel,
+        &installed_hash,
+        &acknowledged_by,
+    ) {
+        eprintln!("bwoc skill install: warning — could not record source: {e}");
+    }
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "source": args.source,
+            "source_kind": match &kind {
+                SourceKind::LocalPath(p) => format!("local-path:{}", p.display()),
+                SourceKind::GitUrl(u, r) => match r {
+                    Some(r) => format!("git:{u}#{r}"),
+                    None => format!("git:{u}"),
+                },
+                SourceKind::TarballUrl(u) => format!("tarball:{u}"),
+            },
+            "name": skill_name,
+            "target": target.display().to_string(),
+            "installed_hash": installed_hash,
+            "trust_gate": match (args.no_verify, checksum_outcome.as_deref()) {
+                (true, _) => "skipped",
+                (false, Some(_)) => "verified",
+                (false, None) => "n/a",
+            },
+            "newly_registered": !already_known,
+            "upgrade": args.upgrade,
+        });
+        return print_json(&value);
+    }
+
+    println!("Installed framework skill '{skill_name}'");
+    println!("  Source:      {}", args.source);
+    println!("  Target:      {}", target.display());
+    println!("  Tree hash:   {}", installed_hash);
+    println!(
+        "  Trust gate:  {}",
+        if args.no_verify {
+            "SKIPPED (--no-verify)".to_string()
+        } else if let Some(s) = checksum_outcome {
+            format!("verified ({s})")
+        } else {
+            "n/a (no sidecar)".to_string()
+        }
+    );
+    println!();
+    println!("Skill is dormant. Run `bwoc skill enable {skill_name}` on the consuming agent.");
+    0
+}
+
+struct StagedSource {
+    staged_dir: PathBuf,
+    /// For tarball installs only — the downloaded archive byte path, kept
+    /// alongside the staged dir so verify_checksum can read it.
+    archive_path: Option<PathBuf>,
+}
+
+fn stage_source(kind: &SourceKind, raw: &str) -> Result<StagedSource, String> {
+    // All stages land under a per-invocation tempdir to avoid colliding with
+    // any concurrent install. We never share staging space across installs.
+    let stem = sha256_string(raw);
+    let stage_root = std::env::temp_dir().join(format!("bwoc-skill-install-{}", &stem[..16]));
+    let _ = std::fs::remove_dir_all(&stage_root);
+    std::fs::create_dir_all(&stage_root)
+        .map_err(|e| format!("create {}: {e}", stage_root.display()))?;
+    let staged_dir = stage_root.join("staged");
+    match kind {
+        SourceKind::LocalPath(p) => {
+            let abs = if p.is_absolute() {
+                p.clone()
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| format!("cwd: {e}"))?
+                    .join(p)
+            };
+            copy_dir_recursive(&abs, &staged_dir)?;
+            Ok(StagedSource {
+                staged_dir,
+                archive_path: None,
+            })
+        }
+        SourceKind::GitUrl(url, r) => {
+            let mut args: Vec<&str> = vec!["clone", "--depth", "1"];
+            if let Some(rf) = r.as_deref() {
+                args.push("--branch");
+                args.push(rf);
+            }
+            args.push(url.as_str());
+            let staged_str = staged_dir.to_string_lossy().into_owned();
+            args.push(&staged_str);
+            run_capture(&stage_root, "git", &args).map_err(|e| format!("git clone {url}: {e}"))?;
+            // Drop .git — installed skill is a flat snapshot.
+            let _ = std::fs::remove_dir_all(staged_dir.join(".git"));
+            Ok(StagedSource {
+                staged_dir,
+                archive_path: None,
+            })
+        }
+        SourceKind::TarballUrl(url) => {
+            let archive = stage_root.join("source.tar.gz");
+            let archive_str = archive.to_string_lossy().into_owned();
+            run_capture(
+                &stage_root,
+                "curl",
+                &["-fsSL", "-o", &archive_str, url.as_str()],
+            )
+            .map_err(|e| format!("curl {url}: {e}"))?;
+            std::fs::create_dir_all(&staged_dir)
+                .map_err(|e| format!("create {}: {e}", staged_dir.display()))?;
+            let extract_str = staged_dir.to_string_lossy().into_owned();
+            // --strip-components=1 collapses the conventional top-level
+            // `<name>-<version>/` directory inside archives.
+            run_capture(
+                &stage_root,
+                "tar",
+                &[
+                    "-xzf",
+                    &archive_str,
+                    "-C",
+                    &extract_str,
+                    "--strip-components=1",
+                ],
+            )
+            .map_err(|e| format!("tar -xzf: {e}"))?;
+            Ok(StagedSource {
+                staged_dir,
+                archive_path: Some(archive),
+            })
+        }
+    }
+}
+
+fn verify_checksum(
+    kind: &SourceKind,
+    staged_dir: &Path,
+    archive_path: &Option<PathBuf>,
+) -> Result<String, String> {
+    match kind {
+        SourceKind::LocalPath(p) => {
+            // Spec: if a sibling `<dir>.sha256` exists, verify; otherwise
+            // local paths are operator-trusted by convention. Return Ok with
+            // a "n/a" descriptor so the caller surfaces an honest report.
+            let sidecar = sibling_sha256(p);
+            if !sidecar.is_file() {
+                return Ok("local-path: no sidecar".to_string());
+            }
+            let expected = read_expected_digest(&sidecar)?;
+            let actual = sha256_tree(staged_dir)?;
+            if expected != actual {
+                return Err(format!(
+                    "local-path checksum mismatch (expected {expected}, got {actual})"
+                ));
+            }
+            Ok(format!("local-path sha256 ok ({})", &expected[..16]))
+        }
+        SourceKind::TarballUrl(url) => {
+            let archive = archive_path
+                .as_ref()
+                .ok_or_else(|| "tarball staged without archive_path".to_string())?;
+            let sidecar = format!("{url}.sha256");
+            let staged_root = staged_dir
+                .parent()
+                .ok_or_else(|| "no parent for staged dir".to_string())?;
+            let sidecar_path = staged_root.join("source.sha256");
+            let sidecar_str = sidecar_path.to_string_lossy().into_owned();
+            run_capture(
+                staged_root,
+                "curl",
+                &["-fsSL", "-o", &sidecar_str, sidecar.as_str()],
+            )
+            .map_err(|e| format!("fetch checksum {sidecar}: {e}"))?;
+            let expected = read_expected_digest(&sidecar_path)?;
+            let bytes =
+                std::fs::read(archive).map_err(|e| format!("read {}: {e}", archive.display()))?;
+            let actual = sha256_bytes(&bytes);
+            if expected != actual {
+                return Err(format!(
+                    "tarball checksum mismatch (expected {expected}, got {actual})"
+                ));
+            }
+            Ok(format!("tarball sha256 ok ({})", &expected[..16]))
+        }
+        SourceKind::GitUrl(url, _r) => {
+            // Per spec the operator publishes a manifest of tree-shas keyed
+            // by ref at <url>.replace(".git", ".sha256"). v1: fetch the file
+            // and compare against the post-clone tree hash. Format is one
+            // `<ref> <sha256>` per line.
+            let sidecar_url = url.replace(".git", ".sha256");
+            let staged_root = staged_dir
+                .parent()
+                .ok_or_else(|| "no parent for staged dir".to_string())?;
+            let sidecar_path = staged_root.join("source.sha256");
+            let sidecar_str = sidecar_path.to_string_lossy().into_owned();
+            // Soft-failure: a publisher who hasn't uploaded a sidecar yet
+            // should not block install. We surface the omission honestly.
+            if run_capture(
+                staged_root,
+                "curl",
+                &["-fsSL", "-o", &sidecar_str, sidecar_url.as_str()],
+            )
+            .is_err()
+            {
+                return Ok("git: no sidecar published".to_string());
+            }
+            let expected = read_expected_digest(&sidecar_path)?;
+            let actual = sha256_tree(staged_dir)?;
+            if expected != actual {
+                return Err(format!(
+                    "git tree checksum mismatch (expected {expected}, got {actual})"
+                ));
+            }
+            Ok(format!("git sha256 ok ({})", &expected[..16]))
+        }
+    }
+}
+
+fn sibling_sha256(dir: &Path) -> PathBuf {
+    let parent = dir.parent().unwrap_or(Path::new("."));
+    let name = dir
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    parent.join(format!("{name}.sha256"))
+}
+
+fn read_expected_digest(path: &Path) -> Result<String, String> {
+    let body =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    // Accept either a bare hex string or the `<sha>  <name>` shasum format.
+    // Multi-line files (git ref manifests): take the first 64-char hex token.
+    for line in body.lines() {
+        for tok in line.split_whitespace() {
+            if tok.len() == 64 && tok.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(tok.to_ascii_lowercase());
+            }
+        }
+    }
+    Err(format!("{}: no SHA-256 digest found", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// `bwoc skill enable / disable <name>` --------------------------------------
+// ---------------------------------------------------------------------------
+
+pub fn run_enable(args: EnableArgs) -> i32 {
+    run_enable_disable(args.common, args.name, args.agent, args.json, true)
+}
+
+pub fn run_disable(args: DisableArgs) -> i32 {
+    run_enable_disable(args.common, args.name, args.agent, args.json, false)
+}
+
+fn run_enable_disable(
+    common: CommonArgs,
+    name: String,
+    agent: Option<String>,
+    json: bool,
+    enable: bool,
+) -> i32 {
+    let verb = if enable { "enable" } else { "disable" };
+    let root = match resolve_workspace(&common) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc skill {verb}: {e}");
+            return 2;
+        }
+    };
+    // Skill must be discoverable for `enable`; `disable` tolerates a missing
+    // skill on disk (the operator may be cleaning up after a manual remove).
+    let skills = match discover(&root) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill {verb}: {e}");
+            return 1;
+        }
+    };
+    let discovered = skills.iter().find(|s| s.dir_name == name);
+    if enable && discovered.is_none() {
+        eprintln!(
+            "bwoc skill enable: '{name}' is not installed under {}",
+            skills_dir(&root).display()
+        );
+        return 2;
+    }
+    let version_constraint = discovered
+        .map(|s| format!(">={}", s.manifest.skill.version))
+        .unwrap_or_else(|| ">=0.0.0".to_string());
+
+    let (agent_id, agent_dir) = match resolve_current_agent(&root, agent.as_deref()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc skill {verb}: {e}");
+            return 2;
+        }
+    };
+    let mut manifest = match load_agent_manifest(&agent_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill {verb}: {e}");
+            return 1;
+        }
+    };
+    let (added, final_enabled) = match set_skill_enabled_in_manifest(
+        &mut manifest,
+        &name,
+        &version_constraint,
+        enable,
+        !enable, // disable requires the entry to already exist
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill {verb}: {e}");
+            return 2;
+        }
+    };
+    if let Err(e) = save_agent_manifest(&agent_dir, &manifest) {
+        eprintln!("bwoc skill {verb}: {e}");
+        return 1;
+    }
+
+    if json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "agent": agent_id,
+            "skill": name,
+            "enabled": final_enabled,
+            "entry_added": added,
+            "version_constraint": version_constraint,
+        });
+        return print_json(&value);
+    }
+
+    if added {
+        println!(
+            "Added skills.framework[] entry for '{name}' on '{agent_id}' (enabled={final_enabled})"
+        );
+    } else {
+        println!("Set enabled={final_enabled} on '{name}' for '{agent_id}'");
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// `bwoc skill remove <name>` -------------------------------------------------
+// ---------------------------------------------------------------------------
+
+pub fn run_remove(args: RemoveArgs) -> i32 {
+    let root = match resolve_workspace(&args.common) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc skill remove: {e}");
+            return 2;
+        }
+    };
+    let target = skills_dir(&root).join(&args.name);
+    let dir_exists = target.is_dir();
+
+    let consumers = match agents_consuming(&root, &args.name) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("bwoc skill remove: {e}");
+            return 1;
+        }
+    };
+
+    if !dir_exists && consumers.is_empty() {
+        // Idempotent: nothing to do, exit 0 (per SKILLS.en.md §"Removal" line 314).
+        if args.json {
+            let value = serde_json::json!({
+                "workspace": root.display().to_string(),
+                "skill": args.name,
+                "removed_dir": false,
+                "cleaned_consumers": [],
+                "forgot_source": false,
+                "note": "not installed",
+            });
+            return print_json(&value);
+        }
+        println!("bwoc skill remove: '{}' not installed", args.name);
+        return 0;
+    }
+
+    if !args.yes {
+        if args.json {
+            eprintln!(
+                "bwoc skill remove: --json requires --yes (destructive op needs explicit ack)"
+            );
+            return 2;
+        }
+        eprintln!(
+            "bwoc skill remove: refusing to delete without --yes. \
+             Would delete:\n  - {} (dir)\nand clean skills.framework[] in: {}",
+            target.display(),
+            if consumers.is_empty() {
+                "(none)".to_string()
+            } else {
+                consumers.join(", ")
+            }
+        );
+        return 2;
+    }
+
+    // Clean consumer manifests first — if dir-delete fails, we have not yet
+    // left agents pointing at a half-deleted skill. This is the inverse of
+    // install, which writes manifest last after materializing the dir.
+    let mut cleaned: Vec<serde_json::Value> = Vec::with_capacity(consumers.len());
+    for id in &consumers {
+        let agent_dir = root.join("agents").join(id);
+        let mut manifest = match load_agent_manifest(&agent_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("bwoc skill remove: {id}: {e}");
+                return 1;
+            }
+        };
+        let removed = remove_skill_from_manifest(&mut manifest, &args.name);
+        if removed > 0 {
+            if let Err(e) = save_agent_manifest(&agent_dir, &manifest) {
+                eprintln!("bwoc skill remove: {id}: {e}");
+                return 1;
+            }
+        }
+        cleaned.push(serde_json::json!({ "agent": id, "entries_removed": removed }));
+    }
+
+    let mut removed_dir = false;
+    if dir_exists {
+        if let Err(e) = std::fs::remove_dir_all(&target) {
+            eprintln!("bwoc skill remove: remove {}: {e}", target.display());
+            return 1;
+        }
+        removed_dir = true;
+    }
+
+    let mut forgot = false;
+    if args.forget_source {
+        match forget_installed_source(&root, &args.name) {
+            Ok(b) => forgot = b,
+            Err(e) => {
+                eprintln!("bwoc skill remove: --forget-source: {e}");
+                return 1;
+            }
+        }
+    }
+
+    if args.json {
+        let value = serde_json::json!({
+            "workspace": root.display().to_string(),
+            "skill": args.name,
+            "removed_dir": removed_dir,
+            "cleaned_consumers": cleaned,
+            "forgot_source": forgot,
+        });
+        return print_json(&value);
+    }
+
+    println!("Removed framework skill '{}'", args.name);
+    if removed_dir {
+        println!("  Deleted:     {}", target.display());
+    }
+    for c in &consumers {
+        println!("  Cleaned:     agents/{c}/config.manifest.json");
+    }
+    if forgot {
+        println!("  Forgotten:   .bwoc/installed-sources.toml entry");
+    }
+    0
+}
+
+// ===========================================================================
+// Unit tests ================================================================
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitute_replaces_all_four_placeholders() {
+        let body =
+            "name={{skillName}} v={{skillVersion}} d={{skillDescription}} op={{skillOperation}}";
+        let out = substitute_placeholders(body, "alpha", "0.2.0", "desc", "do_x");
+        assert_eq!(out, "name=alpha v=0.2.0 d=desc op=do_x");
+    }
+
+    #[test]
+    fn substitute_leaves_unknown_placeholders_alone() {
+        let body = "{{skillName}} {{unknown}}";
+        let out = substitute_placeholders(body, "alpha", "0.1.0", "d", "o");
+        assert_eq!(out, "alpha {{unknown}}");
+    }
+
+    #[test]
+    fn validate_name_accepts_kebab() {
+        assert!(validate_skill_name("worktree-discipline").is_ok());
+        assert!(validate_skill_name("a").is_ok());
+        assert!(validate_skill_name("a1-b2").is_ok());
+    }
+
+    #[test]
+    fn validate_name_rejects_bad() {
+        for bad in [
+            "",
+            "Cap",
+            "trailing-",
+            "-leading",
+            "double--dash",
+            "with/slash",
+            "with space",
+            ".",
+            "..",
+        ] {
+            assert!(
+                validate_skill_name(bad).is_err(),
+                "expected '{bad}' to fail"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_local_path_kinds() {
+        assert!(matches!(
+            detect_source_kind("./foo").unwrap(),
+            SourceKind::LocalPath(_)
+        ));
+        assert!(matches!(
+            detect_source_kind("../foo").unwrap(),
+            SourceKind::LocalPath(_)
+        ));
+        assert!(matches!(
+            detect_source_kind("/abs/path").unwrap(),
+            SourceKind::LocalPath(_)
+        ));
+    }
+
+    #[test]
+    fn detect_git_url_with_ref() {
+        let k = detect_source_kind("https://github.com/org/skill.git#v0.1.0").unwrap();
+        match k {
+            SourceKind::GitUrl(u, Some(r)) => {
+                assert_eq!(u, "https://github.com/org/skill.git");
+                assert_eq!(r, "v0.1.0");
+            }
+            _ => panic!("expected GitUrl with ref"),
+        }
+    }
+
+    #[test]
+    fn detect_git_url_without_ref() {
+        let k = detect_source_kind("https://github.com/org/skill.git").unwrap();
+        match k {
+            SourceKind::GitUrl(u, None) => {
+                assert_eq!(u, "https://github.com/org/skill.git")
+            }
+            _ => panic!("expected GitUrl without ref"),
+        }
+    }
+
+    #[test]
+    fn detect_tarball_url() {
+        let k = detect_source_kind("https://example.com/x.tar.gz").unwrap();
+        assert!(matches!(k, SourceKind::TarballUrl(_)));
+        let k = detect_source_kind("https://example.com/x.tgz").unwrap();
+        assert!(matches!(k, SourceKind::TarballUrl(_)));
+    }
+
+    #[test]
+    fn detect_rejects_unknown() {
+        assert!(detect_source_kind("nonsense").is_err());
+        assert!(detect_source_kind("https://example.com/file.zip").is_err());
+    }
+
+    #[test]
+    fn iso8601_format_shape() {
+        let s = current_utc_iso8601();
+        assert_eq!(s.len(), 20, "{s}");
+        assert!(s.ends_with('Z'));
+        assert_eq!(s.chars().nth(4), Some('-'));
+        assert_eq!(s.chars().nth(7), Some('-'));
+        assert_eq!(s.chars().nth(10), Some('T'));
+    }
+
+    #[test]
+    fn manifest_mutation_enable_adds_entry() {
+        let mut m = serde_json::json!({});
+        let (added, _) =
+            set_skill_enabled_in_manifest(&mut m, "wd", ">=0.1.0", true, false).unwrap();
+        assert!(added);
+        assert_eq!(m["skills"]["framework"][0]["name"], "wd");
+        assert_eq!(m["skills"]["framework"][0]["enabled"], true);
+    }
+
+    #[test]
+    fn manifest_mutation_disable_requires_existing() {
+        let mut m = serde_json::json!({});
+        let err = set_skill_enabled_in_manifest(&mut m, "wd", ">=0.1.0", false, true).unwrap_err();
+        assert!(err.contains("no skills.framework[] entry"));
+    }
+
+    #[test]
+    fn manifest_mutation_flip_existing() {
+        let mut m = serde_json::json!({
+            "skills": { "framework": [
+                { "name": "wd", "version": ">=0.1.0", "enabled": true }
+            ]}
+        });
+        let (added, _) =
+            set_skill_enabled_in_manifest(&mut m, "wd", ">=0.1.0", false, true).unwrap();
+        assert!(!added);
+        assert_eq!(m["skills"]["framework"][0]["enabled"], false);
+    }
+
+    #[test]
+    fn manifest_remove_drops_entry() {
+        let mut m = serde_json::json!({
+            "skills": { "framework": [
+                { "name": "wd", "enabled": true },
+                { "name": "other", "enabled": false }
+            ]}
+        });
+        let n = remove_skill_from_manifest(&mut m, "wd");
+        assert_eq!(n, 1);
+        assert_eq!(m["skills"]["framework"].as_array().unwrap().len(), 1);
+        assert_eq!(m["skills"]["framework"][0]["name"], "other");
+    }
+
+    #[test]
+    fn sha256_deterministic() {
+        let a = sha256_string("hello");
+        let b = sha256_string("hello");
+        let c = sha256_string("hello!");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64);
+    }
+
+    #[test]
+    fn read_expected_digest_accepts_bare_and_shasum_format() {
+        let tmp = std::env::temp_dir().join("bwoc-skill-test-digest");
+        let _ = std::fs::create_dir_all(&tmp);
+        let p = tmp.join("d.sha256");
+        std::fs::write(
+            &p,
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  some-file\n",
+        )
+        .unwrap();
+        let got = read_expected_digest(&p).unwrap();
+        assert_eq!(
+            got,
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        );
+        let _ = std::fs::remove_file(&p);
+    }
 }

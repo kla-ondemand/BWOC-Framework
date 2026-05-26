@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod audit;
 mod banner;
 mod chat;
 mod check;
@@ -176,16 +177,49 @@ enum Commands {
     #[command(name = "fleet", subcommand)]
     Fleet(FleetCommand),
     /// Framework skills under `modules/skills/<name>/` — list, show, verify
-    /// (read-side only; lifecycle writers land in later stories).
+    /// (read), plus init, install, enable, disable, remove (write).
     /// See `docs/en/SKILLS.en.md`.
     #[command(name = "skill", subcommand)]
     Skill(SkillCommand),
     /// Framework plugins under `modules/plugins/<name>/` — list, show
-    /// (read-side only; lifecycle writers land in later stories;
-    /// no `verify` in v1 per PLUGINS.en.md §"CLI Surface").
+    /// (read), plus init, install, enable, disable, remove (write).
+    /// No `verify` in v1 (PLUGINS.en.md §"CLI Surface" line 314).
     /// See `docs/en/PLUGINS.en.md`.
     #[command(name = "plugin", subcommand)]
     Plugin(PluginCommand),
+    /// Run audit-kind framework plugins and emit a canonical findings report.
+    /// Discovers `modules/plugins/<name>/manifest.toml` with `kind = "audit"`;
+    /// invokes each enabled plugin's `[plugin].entry`; validates findings
+    /// against the BWOC-11 normative schema (PLUGINS.en.md §"Audit Findings
+    /// Schema"). Exit code = `fail` finding count (clamped to 254); `255`
+    /// signals a framework/plugin error.
+    #[command(name = "audit", subcommand)]
+    Audit(AuditCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum AuditCommand {
+    /// Run audit-kind plugins. Default scope: every plugin enabled in
+    /// `workspace.toml [plugins.<name>]` with `kind = "audit"`.
+    Run(AuditRunArgs),
+}
+
+#[derive(Args, Debug)]
+struct AuditRunArgs {
+    /// Scope to one audit plugin (must match a directory name under
+    /// `modules/plugins/` whose manifest has `kind = "audit"`). Overrides
+    /// the default "all enabled" set; runs regardless of `enabled` flag.
+    #[arg(long)]
+    plugin: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope
+    /// `{ workspace, runs: [{ plugin, version, started_at, finished_at, findings: [...] }], summary }`
+    /// instead of the human-readable table. Findings serialize in plugin-emit
+    /// order (criterion-declaration order per BWOC-11 line 84).
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -194,6 +228,16 @@ enum PluginCommand {
     List(PluginListArgs),
     /// Show one plugin's manifest + SPEC location + workspace registration.
     Show(PluginShowArgs),
+    /// Scaffold a new framework plugin from `modules/plugin-template/`.
+    Init(PluginInitArgs),
+    /// Install a plugin from local path / git URL / tarball URL (SHA-256 trust gate).
+    Install(PluginInstallArgs),
+    /// Enable a plugin in workspace.toml (sets `[plugins.<name>] enabled = true`).
+    Enable(PluginEnableArgs),
+    /// Disable a plugin in workspace.toml (keeps the entry; sets `enabled = false`).
+    Disable(PluginDisableArgs),
+    /// Delete `modules/plugins/<name>/` and remove the `[plugins.<name>]` table.
+    Remove(PluginRemoveArgs),
 }
 
 #[derive(Args, Debug)]
@@ -225,6 +269,87 @@ struct PluginShowArgs {
     json: bool,
 }
 
+#[derive(Args, Debug)]
+struct PluginInitArgs {
+    /// Plugin name — kebab-case; becomes the directory name under `modules/plugins/`.
+    name: String,
+    /// Plugin kind — one of: `memory-backend`, `llm-backend`, `workflow`, `audit`.
+    /// Required; no default (PLUGINS.en.md §"Scaffolding from template" line 398).
+    #[arg(long)]
+    kind: String,
+    /// Override `{{pluginVersion}}`. Default `0.1.0`.
+    #[arg(long)]
+    version: Option<String>,
+    /// Override `{{pluginDescription}}`. Default a hint placeholder.
+    #[arg(long)]
+    description: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PluginInstallArgs {
+    /// Source — local path (`./`, `../`, `/`), git URL (`*.git[#ref]`), or tarball URL (`*.tar.gz` / `*.tgz`).
+    source: String,
+    /// Skip the SHA-256 trust gate. Emits a stderr warning.
+    #[arg(long = "no-verify")]
+    no_verify: bool,
+    /// Required the first time a given source URL is installed in this workspace.
+    #[arg(long = "allow-new-source")]
+    allow_new_source: bool,
+    /// Replace an existing install in place.
+    #[arg(long)]
+    upgrade: bool,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PluginEnableArgs {
+    /// Plugin name (must be installed under `modules/plugins/`).
+    name: String,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PluginDisableArgs {
+    /// Plugin name (must already have a `[plugins.<name>]` entry in workspace.toml).
+    name: String,
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct PluginRemoveArgs {
+    /// Plugin name to remove (deletes `modules/plugins/<name>/`).
+    name: String,
+    /// Skip the confirmation prompt. Required with `--json`.
+    #[arg(long)]
+    yes: bool,
+    /// Also drop the matching entry in `.bwoc/installed-sources.toml`.
+    #[arg(long = "forget-source")]
+    forget_source: bool,
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(clap::Subcommand, Debug)]
 enum SkillCommand {
     /// List installed framework skills (`modules/skills/<name>/manifest.toml`).
@@ -233,6 +358,101 @@ enum SkillCommand {
     Show(SkillShowArgs),
     /// Run a skill's `[gates].verify` command. Exits non-zero on any failure.
     Verify(SkillVerifyArgs),
+    /// Scaffold a new framework skill from `modules/skill-template/`.
+    Init(SkillInitArgs),
+    /// Install a skill from local path / git URL / tarball URL (SHA-256 trust gate).
+    Install(SkillInstallArgs),
+    /// Enable a skill on the current agent (sets `enabled = true`).
+    Enable(SkillEnableArgs),
+    /// Disable a skill on the current agent (keeps the entry; sets `enabled = false`).
+    Disable(SkillDisableArgs),
+    /// Delete `modules/skills/<name>/` and clean every consuming agent's manifest.
+    Remove(SkillRemoveArgs),
+}
+
+#[derive(Args, Debug)]
+struct SkillInitArgs {
+    /// Skill name — kebab-case; becomes the directory name under `modules/skills/`.
+    name: String,
+    /// Override `{{skillVersion}}`. Default `0.1.0`.
+    #[arg(long)]
+    version: Option<String>,
+    /// Override `{{skillDescription}}`. Default a hint placeholder.
+    #[arg(long)]
+    description: Option<String>,
+    /// Override `{{skillOperation}}`. Default `<name>_op` (snake-cased).
+    #[arg(long)]
+    operation: Option<String>,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct SkillInstallArgs {
+    /// Source — local path (`./`, `../`, `/`), git URL (`*.git[#ref]`), or tarball URL (`*.tar.gz` / `*.tgz`).
+    source: String,
+    /// Skip the SHA-256 trust gate. Emits a stderr warning.
+    #[arg(long = "no-verify")]
+    no_verify: bool,
+    /// Required the first time a given source URL is installed in this workspace.
+    #[arg(long = "allow-new-source")]
+    allow_new_source: bool,
+    /// Replace an existing install in place.
+    #[arg(long)]
+    upgrade: bool,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct SkillEnableArgs {
+    /// Skill name (must be installed under `modules/skills/`).
+    name: String,
+    /// Override the current-agent resolution (default: cwd descent / BWOC_AGENT).
+    #[arg(long)]
+    agent: Option<String>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct SkillDisableArgs {
+    /// Skill name (must already have a `skills.framework[]` entry on this agent).
+    name: String,
+    #[arg(long)]
+    agent: Option<String>,
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+struct SkillRemoveArgs {
+    /// Skill name to remove (deletes `modules/skills/<name>/`).
+    name: String,
+    /// Skip the confirmation prompt. Required with `--json`.
+    #[arg(long)]
+    yes: bool,
+    /// Also drop the matching entry in `.bwoc/installed-sources.toml`.
+    #[arg(long = "forget-source")]
+    forget_source: bool,
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1870,6 +2090,51 @@ fn main() -> ExitCode {
                     all: args.all,
                     json: args.json,
                 }),
+                SkillCommand::Init(args) => skill::run_init(skill::InitArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    version: args.version,
+                    description: args.description,
+                    operation: args.operation,
+                    json: args.json,
+                }),
+                SkillCommand::Install(args) => skill::run_install(skill::InstallArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    source: args.source,
+                    no_verify: args.no_verify,
+                    allow_new_source: args.allow_new_source,
+                    upgrade: args.upgrade,
+                    json: args.json,
+                }),
+                SkillCommand::Enable(args) => skill::run_enable(skill::EnableArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    agent: args.agent,
+                    json: args.json,
+                }),
+                SkillCommand::Disable(args) => skill::run_disable(skill::DisableArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    agent: args.agent,
+                    json: args.json,
+                }),
+                SkillCommand::Remove(args) => skill::run_remove(skill::RemoveArgs {
+                    common: skill::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    yes: args.yes,
+                    forget_source: args.forget_source,
+                    json: args.json,
+                }),
             };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
@@ -1890,7 +2155,65 @@ fn main() -> ExitCode {
                     name: args.name,
                     json: args.json,
                 }),
+                PluginCommand::Init(args) => plugin::run_init(plugin::InitArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    kind: args.kind,
+                    version: args.version,
+                    description: args.description,
+                    json: args.json,
+                }),
+                PluginCommand::Install(args) => plugin::run_install(plugin::InstallArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    source: args.source,
+                    no_verify: args.no_verify,
+                    allow_new_source: args.allow_new_source,
+                    upgrade: args.upgrade,
+                    json: args.json,
+                }),
+                PluginCommand::Enable(args) => plugin::run_enable(plugin::EnableArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    json: args.json,
+                }),
+                PluginCommand::Disable(args) => plugin::run_disable(plugin::DisableArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    json: args.json,
+                }),
+                PluginCommand::Remove(args) => plugin::run_remove(plugin::RemoveArgs {
+                    common: plugin::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    name: args.name,
+                    yes: args.yes,
+                    forget_source: args.forget_source,
+                    json: args.json,
+                }),
             };
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Audit(sub)) => {
+            let code = match sub {
+                AuditCommand::Run(args) => audit::run(audit::RunArgs {
+                    common: audit::CommonArgs {
+                        workspace: args.workspace,
+                    },
+                    plugin: args.plugin,
+                    json: args.json,
+                }),
+            };
+            // audit::run uses 255 for framework error; clap's ExitCode is u8,
+            // so any code we hand out fits — `as u8` would also be fine but
+            // u8::try_from + unwrap_or(1) matches sibling dispatch arms.
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

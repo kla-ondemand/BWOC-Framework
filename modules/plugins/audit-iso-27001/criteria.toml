@@ -1,0 +1,71 @@
+# ISO/IEC 27001:2022 — declared criteria (stub).
+#
+# Source: ISO/IEC 27001:2022 — Information security, cybersecurity and
+# privacy protection — Information security management systems —
+# Requirements. See SPEC.md for the full citation set. Clause numbers
+# refer to the published standard's main-body sections (clauses 4 through
+# 10); `A.x.y` references are Annex A controls.
+#
+# Each `[criterion.<id>]` table documents one ISMS practice the future
+# EPIC-3 runtime will check. `id` is kebab-case and plugin-scoped (BWOC-11).
+# Declaration order is the report order — do not reorder casually; renames
+# are a major version bump (PLUGINS.en.md §Stability).
+#
+# Fields:
+#   severity     — closed enum {info, low, medium, high, critical}.
+#   reference    — ISO/IEC 27001:2022 clause or Annex A control reference.
+#   title        — short ISO clause/control title.
+#   description  — one-line operator-facing summary of what EPIC-3 will check.
+#
+# The stub's audit.sh ignores everything except `id` and `severity`: every
+# criterion reports `status = "not_implemented"` with the uniform remedy
+# "Runtime deferred to BWOC-EPIC-3." Authoring the full table now means the
+# runtime can land in EPIC-3 without renaming criteria (stability contract).
+
+[criterion.27001-isms-scope]
+severity    = "high"
+reference   = "4.3"
+title       = "Scope of the information security management system"
+description = "Organization has determined and documented the scope of its ISMS, including interfaces and dependencies."
+
+[criterion.27001-information-security-policy]
+severity    = "high"
+reference   = "5.2"
+title       = "Information security policy"
+description = "Top management has established a documented information security policy aligned with the organization's purpose and strategic direction."
+
+[criterion.27001-risk-assessment]
+severity    = "critical"
+reference   = "6.1.2"
+title       = "Information security risk assessment"
+description = "A documented information security risk assessment process is defined and applied, producing comparable, valid, and reproducible results."
+
+[criterion.27001-statement-of-applicability]
+severity    = "critical"
+reference   = "6.1.3"
+title       = "Statement of Applicability"
+description = "A Statement of Applicability declares which Annex A controls are applicable, justifies inclusions and exclusions, and records implementation status."
+
+[criterion.27001-access-control]
+severity    = "high"
+reference   = "A.5.15"
+title       = "Access control"
+description = "Rules controlling physical and logical access to information and other associated assets are established, documented, and reviewed."
+
+[criterion.27001-incident-management]
+severity    = "high"
+reference   = "A.5.24"
+title       = "Information security incident management planning and preparation"
+description = "Information security incident management processes, including roles and responsibilities, are planned, documented, and tested."
+
+[criterion.27001-business-continuity]
+severity    = "medium"
+reference   = "A.5.29"
+title       = "Information security during disruption"
+description = "Procedures to maintain information security during disruption are documented, exercised, and reviewed for effectiveness."
+
+[criterion.27001-internal-audit]
+severity    = "high"
+reference   = "9.2"
+title       = "Internal audit"
+description = "Internal audits of the ISMS are conducted at planned intervals to verify conformance and effectiveness."

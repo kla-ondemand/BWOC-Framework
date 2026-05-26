@@ -1,0 +1,70 @@
+# ISO/IEC 20000-1:2018 — declared criteria (stub).
+#
+# Source: ISO/IEC 20000-1:2018 — Information technology — Service management
+# — Part 1: Service management system requirements. See SPEC.md for the
+# full citation set. Clause numbers refer to the published standard's
+# main-body sections (clauses 4 through 10).
+#
+# Each `[criterion.<id>]` table documents one ITSM practice the future
+# EPIC-3 runtime will check. `id` is kebab-case and plugin-scoped (BWOC-11).
+# Declaration order is the report order — do not reorder casually; renames
+# are a major version bump (PLUGINS.en.md §Stability).
+#
+# Fields:
+#   severity     — closed enum {info, low, medium, high, critical}.
+#   clause       — ISO/IEC 20000-1:2018 clause reference (e.g. "8.3.3").
+#   title        — short ISO clause title.
+#   description  — one-line operator-facing summary of what EPIC-3 will check.
+#
+# The stub's audit.sh ignores everything except `id` and `severity`: every
+# criterion reports `status = "not_implemented"` with the uniform remedy
+# "Runtime deferred to BWOC-EPIC-3." Authoring the full table now means the
+# runtime can land in EPIC-3 without renaming criteria (stability contract).
+
+[criterion.20000-1-service-management-system-scope]
+severity    = "high"
+clause      = "4.3"
+title       = "Scope of the service management system"
+description = "Organization has determined and documented the scope of its SMS, including services and parties involved."
+
+[criterion.20000-1-service-policy-and-objectives]
+severity    = "high"
+clause      = "5.2"
+title       = "Service management policy and objectives"
+description = "Top management has established a service management policy and measurable service objectives aligned with organizational strategy."
+
+[criterion.20000-1-service-catalogue]
+severity    = "medium"
+clause      = "8.3.1"
+title       = "Service catalogue"
+description = "A service catalogue listing each service and its key attributes is maintained and accessible to relevant interested parties."
+
+[criterion.20000-1-service-level-management]
+severity    = "high"
+clause      = "8.3.3"
+title       = "Service level management"
+description = "Service level agreements (SLAs) are documented, agreed with customers, and reviewed against actual service performance."
+
+[criterion.20000-1-change-management]
+severity    = "high"
+clause      = "8.5.1"
+title       = "Change management"
+description = "Changes to services and to the SMS are recorded, classified, assessed, approved, and reviewed post-implementation."
+
+[criterion.20000-1-incident-management]
+severity    = "high"
+clause      = "8.6.1"
+title       = "Incident management"
+description = "Incidents are recorded, classified, prioritized, resolved, and reviewed against documented procedures."
+
+[criterion.20000-1-problem-management]
+severity    = "medium"
+clause      = "8.6.3"
+title       = "Problem management"
+description = "Problems (root causes of one or more incidents) are identified, analyzed, and resolved or workarounds documented."
+
+[criterion.20000-1-continual-improvement]
+severity    = "medium"
+clause      = "10.2"
+title       = "Continual improvement"
+description = "Opportunities for improvement of services and the SMS are identified, evaluated, prioritized, and implemented."

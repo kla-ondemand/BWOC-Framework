@@ -984,6 +984,13 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// the EPIC-2 ISO compliance plugins land without a v2 audit bump.
 const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "audit"];
 
+/// Closed severity enum for declared criteria. Source of truth:
+/// PLUGINS.en.md §"Audit Findings Schema" — five-level scale matching
+/// the published ISO/NIST risk vocabulary. Diverges from the looser
+/// `{error, warn, info}` triplet some operator-facing tooling uses;
+/// `bwoc check` honors the spec, not the surface vocabulary.
+const AUDIT_SEVERITY_LEVELS: &[&str] = &["info", "low", "medium", "high", "critical"];
+
 /// Maturity values accepted in a skill manifest (Ariya-dhana 7 scale).
 const MATURITY_LEVELS: &[&str] = &["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
 
@@ -1224,7 +1231,145 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     // Neutrality — vendor names tolerated in description only.
     check_manifest_neutrality_plugin(&raw, &mut report);
 
+    // Criteria audit (BWOC-17). Audit-kind plugins declare their criteria
+    // in a sibling `criteria.toml`; validate the static shape so the report
+    // surfaces malformed declarations before any audit run.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("audit") {
+        audit_audit_criteria(plugin_dir, &mut report);
+    }
+
     report
+}
+
+/// Validate the `criteria.toml` declaration that ships next to an
+/// audit-kind plugin's manifest. Source of truth: PLUGINS.en.md
+/// §"Audit Findings Schema" — `criterion_id` is kebab-case and
+/// plugin-scoped, `severity` is the closed `{info, low, medium,
+/// high, critical}` enum. Per-criterion findings are appended to the
+/// plugin's existing report so each audit-kind plugin still produces
+/// exactly one row in the fleet output (consistent with BWOC-8).
+fn audit_audit_criteria(plugin_dir: &Path, report: &mut AuditReport) {
+    let criteria_path = plugin_dir.join("criteria.toml");
+    let body = match fs::read_to_string(&criteria_path) {
+        Ok(s) => {
+            report.passes.push("criteria.toml present".to_string());
+            s
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("criteria.toml missing or unreadable: {e}"));
+            return;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("criteria.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("criteria.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    let criterion_table = match raw.get("criterion").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => {
+            report.violations.push(
+                "criteria.toml declares no [criterion.*] entries — audit-kind plugins must declare at least one"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+    if criterion_table.is_empty() {
+        report.violations.push(
+            "criteria.toml [criterion] table is empty — at least one [criterion.<id>] required"
+                .to_string(),
+        );
+        return;
+    }
+    report.passes.push(format!(
+        "criteria.toml declares {} criterion entries",
+        criterion_table.len()
+    ));
+
+    for (id, entry) in criterion_table.iter() {
+        // criterion_id is the table key; check kebab-case shape.
+        if is_kebab_case(id) {
+            report
+                .passes
+                .push(format!("criterion '{id}' id is kebab-case"));
+        } else {
+            report.violations.push(format!(
+                "criterion '{id}' id is not kebab-case (lowercase ASCII letters/digits separated by single '-')"
+            ));
+        }
+
+        // severity field — required, closed enum.
+        let table = match entry.as_table() {
+            Some(t) => t,
+            None => {
+                report.violations.push(format!(
+                    "criterion '{id}' is not a table — expected [criterion.{id}] = {{ severity = ..., ... }}"
+                ));
+                continue;
+            }
+        };
+        match table.get("severity") {
+            Some(toml::Value::String(s)) => {
+                if AUDIT_SEVERITY_LEVELS.contains(&s.as_str()) {
+                    report
+                        .passes
+                        .push(format!("criterion '{id}' severity '{s}' in supported set"));
+                } else {
+                    report.violations.push(format!(
+                        "criterion '{id}' severity '{s}' not in {{info, low, medium, high, critical}}"
+                    ));
+                }
+            }
+            Some(_) => report.violations.push(format!(
+                "criterion '{id}' severity has wrong type — expected string"
+            )),
+            None => report.violations.push(format!(
+                "criterion '{id}' missing required 'severity' field"
+            )),
+        }
+    }
+}
+
+/// Kebab-case predicate: lowercase ASCII letters/digits separated by
+/// single '-'. Must start and end with an alphanumeric character; no
+/// consecutive hyphens. Empty strings are rejected. Mirrors the
+/// PLUGINS.en.md and SKILLS.en.md grammar for plugin/skill/criterion ids.
+fn is_kebab_case(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    let valid_char = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+    if !valid_char(bytes[0]) || !valid_char(bytes[bytes.len() - 1]) {
+        return false;
+    }
+    let mut prev_hyphen = false;
+    for &b in bytes {
+        if b == b'-' {
+            if prev_hyphen {
+                return false;
+            }
+            prev_hyphen = true;
+        } else if valid_char(b) {
+            prev_hyphen = false;
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// Recursively scan every string value in `raw`, refusing any that name a
@@ -1794,6 +1939,8 @@ entry       = "bin"
     #[test]
     fn audit_plugin_manifest_audit_kind_accepted() {
         // EPIC-2 forward-compat: 'audit' kind must be accepted today.
+        // Per BWOC-17, audit-kind plugins also need a sibling criteria.toml,
+        // so this fixture provides a minimal valid one.
         let dir = write_plugin_manifest(
             "audit-kind",
             "iso-29110",
@@ -1806,6 +1953,14 @@ compat      = ">=2.5.0"
 entry       = "bwoc-plugin-iso-29110"
 "#,
         );
+        fs::write(
+            dir.join("criteria.toml"),
+            r#"[criterion.iso-29110-smoke]
+severity    = "info"
+description = "Minimal smoke criterion for the test fixture."
+"#,
+        )
+        .unwrap();
         let report = audit_plugin_manifest(&dir);
         assert!(
             report.violations.is_empty(),
@@ -1891,6 +2046,251 @@ entry       = "bin"
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- Audit-kind criteria.toml validation (BWOC-17) ---------------------
+
+    fn write_audit_plugin(
+        label: &str,
+        name: &str,
+        manifest_body: &str,
+        criteria_body: Option<&str>,
+    ) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bwoc-audit-{label}-{}-{}",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let dir = root.join("modules/plugins").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("manifest.toml"), manifest_body).unwrap();
+        if let Some(c) = criteria_body {
+            fs::write(dir.join("criteria.toml"), c).unwrap();
+        }
+        dir
+    }
+
+    const AUDIT_MANIFEST_REF: &str = r#"[plugin]
+name        = "audit-iso-ref"
+kind        = "audit"
+version     = "0.1.0"
+description = "Reference audit plugin used in tests."
+compat      = ">=2.5.0"
+entry       = "audit.sh"
+"#;
+
+    #[test]
+    fn audit_criteria_reference_passes() {
+        let dir = write_audit_plugin(
+            "ref",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-good-criterion]
+severity    = "high"
+description = "A valid criterion."
+
+[criterion.ref-another-one]
+severity    = "low"
+description = "Second valid criterion."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected reference audit plugin to pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("declares 2 criterion entries"))
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_missing_file_fails() {
+        let dir = write_audit_plugin("no-file", "audit-iso-ref", AUDIT_MANIFEST_REF, None);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("criteria.toml missing")),
+            "expected missing-criteria violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_invalid_toml_fails() {
+        let dir = write_audit_plugin(
+            "bad-toml",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some("this is not = valid [toml\n"),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("criteria.toml is not valid TOML")),
+            "expected invalid-TOML violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_empty_table_fails() {
+        let dir = write_audit_plugin(
+            "no-entries",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some("# criteria file with no [criterion.*] entries\n"),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("declares no [criterion.*] entries")),
+            "expected no-criteria violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_bad_severity_fails() {
+        let dir = write_audit_plugin(
+            "bad-severity",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-bad]
+severity    = "warn"
+description = "Severity outside the closed enum."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("severity 'warn' not in {info, low, medium, high, critical}")),
+            "expected bad-severity violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_missing_severity_fails() {
+        let dir = write_audit_plugin(
+            "no-severity",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            Some(
+                r#"[criterion.ref-no-sev]
+description = "Severity field omitted."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("missing required 'severity' field")),
+            "expected missing-severity violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_non_kebab_id_fails() {
+        let dir = write_audit_plugin(
+            "non-kebab",
+            "audit-iso-ref",
+            AUDIT_MANIFEST_REF,
+            // Bare key cannot contain underscores per the standard;
+            // use a quoted key for the non-kebab form.
+            Some(
+                r#"["criterion"."Ref_NonKebab"]
+severity    = "high"
+description = "criterion_id is not kebab-case."
+"#,
+            ),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'Ref_NonKebab' id is not kebab-case")),
+            "expected non-kebab violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_criteria_skipped_for_non_audit_kind() {
+        // Plugin with kind != "audit" should NOT trigger the criteria check
+        // — criteria.toml is an audit-kind-only contract.
+        let dir = write_plugin_manifest(
+            "non-audit",
+            "memory-tier2-noop",
+            r#"[plugin]
+name        = "memory-tier2-noop"
+kind        = "memory-backend"
+version     = "0.1.0"
+description = "Non-audit kind."
+compat      = ">=2.5.0"
+entry       = "bin"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            !report.passes.iter().any(|p| p.contains("criteria.toml")),
+            "non-audit kind should not emit criteria.toml checks, got: {:?}",
+            report.passes
+        );
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.contains("criteria.toml")),
+            "non-audit kind should not emit criteria.toml violations, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn is_kebab_case_rules() {
+        assert!(is_kebab_case("foo"));
+        assert!(is_kebab_case("foo-bar"));
+        assert!(is_kebab_case("foo-bar-baz"));
+        assert!(is_kebab_case("iso-29110-bp-project-plan"));
+        assert!(is_kebab_case("a1"));
+        assert!(!is_kebab_case(""));
+        assert!(!is_kebab_case("Foo")); // uppercase
+        assert!(!is_kebab_case("foo_bar")); // underscore
+        assert!(!is_kebab_case("-foo")); // leading hyphen
+        assert!(!is_kebab_case("foo-")); // trailing hyphen
+        assert!(!is_kebab_case("foo--bar")); // double hyphen
+        assert!(!is_kebab_case("foo bar")); // space
+        assert!(!is_kebab_case("foo.bar")); // dot
     }
 
     #[test]

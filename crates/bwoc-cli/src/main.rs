@@ -246,7 +246,7 @@ struct PluginListArgs {
     #[arg(long)]
     enabled: bool,
     /// Filter to one plugin kind. Valid values today:
-    /// `memory-backend`, `llm-backend`, `workflow`.
+    /// `audit`, `memory-backend`, `llm-backend`, `workflow`.
     #[arg(long)]
     kind: Option<String>,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.

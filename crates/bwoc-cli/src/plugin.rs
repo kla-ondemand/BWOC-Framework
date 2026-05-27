@@ -1457,7 +1457,14 @@ fn verify_checksum(
             )
             .is_err()
             {
-                return Ok("git: no sidecar published".to_string());
+                // BWOC-38: a missing sidecar is NOT a pass — silently returning
+                // "ok" here would bypass the SHA-256 gate for git sources.
+                // Refuse so the operator chooses explicitly: publish a sidecar,
+                // or pass --no-verify to install unverified.
+                return Err(format!(
+                    "no SHA-256 sidecar published at {sidecar_url} — publish a \
+                     `.sha256`, or pass --no-verify to install this git source unverified"
+                ));
             }
             let expected = read_expected_digest(&sidecar_path)?;
             let actual = sha256_tree(staged_dir)?;

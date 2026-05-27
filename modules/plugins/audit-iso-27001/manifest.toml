@@ -3,7 +3,7 @@ name        = "audit-iso-27001"
 kind        = "audit"
 version     = "0.1.0"
 description = "ISO/IEC 27001 Information Security Management System audit — stub. Runtime deferred to BWOC-EPIC-3."
-compat      = ">=2.5.0"
+compat      = ">=2.7.0"
 entry       = "audit.sh"
 
 # [config.schema] intentionally omitted. The stub reports every criterion as

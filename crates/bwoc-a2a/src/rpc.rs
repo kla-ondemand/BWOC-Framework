@@ -10,6 +10,7 @@ use std::path::Path;
 use crate::types::{JsonRpcRequest, JsonRpcResponse, Message, method};
 
 /// JSON-RPC standard error codes used here.
+const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
@@ -33,6 +34,17 @@ pub fn dispatch(req: &JsonRpcRequest, ctx: &ServeContext) -> Option<JsonRpcRespo
 }
 
 fn handle(req: &JsonRpcRequest, ctx: &ServeContext) -> JsonRpcResponse {
+    // JSON-RPC 2.0 requires `jsonrpc` to be exactly "2.0".
+    if req.jsonrpc != "2.0" {
+        return JsonRpcResponse::err(
+            resolved_id(req),
+            INVALID_REQUEST,
+            format!(
+                "unsupported jsonrpc version `{}` (must be \"2.0\")",
+                req.jsonrpc
+            ),
+        );
+    }
     match req.method.as_str() {
         method::SEND_MESSAGE => handle_send_message(req, ctx),
         method::GET_TASK
@@ -114,13 +126,33 @@ fn handle_send_message(req: &JsonRpcRequest, ctx: &ServeContext) -> JsonRpcRespo
     JsonRpcResponse::ok(resolved_id(req), ack)
 }
 
-// NOTE (track for the network-exposed phase, P1-serve/P4): this append is
-// uncapped. Once an HTTP listener accepts remote A2A peers, add a per-peer
-// rate/size limit so an unauthenticated peer can't grow `inbox.jsonl`
-// unboundedly. No listener is wired in P1, so it isn't reachable yet.
+/// Cap on total `inbox.jsonl` size. Now that the P1-serve listener can accept
+/// inbound A2A messages, an append is refused once the inbox reaches this size
+/// so a peer cannot grow it without bound. Generous — a runaway guard, not a
+/// quota. (Per-peer *rate* limiting waits for the auth phase: P1 has no peer
+/// identity, so every inbound message is `from:"a2a"` and can't be attributed.)
+const MAX_INBOX_BYTES: u64 = 64 << 20; // 64 MiB
+
 fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
+    append_line_capped(path, line, MAX_INBOX_BYTES)
+}
+
+fn append_line_capped(path: &Path, line: &str, cap: u64) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
+    }
+    if let Ok(meta) = std::fs::metadata(path) {
+        // Reject when the *projected* post-append size (line + newline) would
+        // exceed the cap, so the cap is a real ceiling rather than one that can
+        // be overshot by an admitted final write.
+        let projected = meta.len().saturating_add(line.len() as u64 + 1);
+        if projected > cap {
+            return Err(std::io::Error::other(format!(
+                "inbox full: {} + {} bytes would exceed {cap} byte cap",
+                meta.len(),
+                line.len() + 1
+            )));
+        }
     }
     let mut f = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(f, "{line}")
@@ -246,5 +278,31 @@ mod tests {
         )
         .expect("a request with an id gets a response");
         assert_eq!(r.error.as_ref().unwrap().code, INVALID_PARAMS);
+    }
+
+    #[test]
+    fn wrong_jsonrpc_version_is_invalid_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ServeContext {
+            agent_id: "a",
+            inbox_path: &dir.path().join("i.jsonl"),
+        };
+        let bad: JsonRpcRequest = serde_json::from_value(serde_json::json!({
+            "jsonrpc": "1.0", "method": method::SEND_MESSAGE, "params": {}, "id": 1
+        }))
+        .unwrap();
+        let r = dispatch(&bad, &ctx).expect("a request with an id gets a response");
+        assert_eq!(r.error.as_ref().unwrap().code, INVALID_REQUEST);
+    }
+
+    #[test]
+    fn inbox_cap_refuses_append_once_full() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("inbox.jsonl");
+        std::fs::write(&p, "12345678").unwrap(); // 8 bytes, over the tiny cap
+        let err = append_line_capped(&p, "more", 4).unwrap_err();
+        assert!(err.to_string().contains("inbox full"));
+        // Under-cap append still works.
+        append_line_capped(&dir.path().join("fresh.jsonl"), "ok", 4).unwrap();
     }
 }

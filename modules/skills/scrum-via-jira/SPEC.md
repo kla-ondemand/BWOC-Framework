@@ -75,11 +75,11 @@ requires_plugins = ["jira"]    # plugin KINDS this skill needs enabled (new)
 - **Resolved at agent spawn.** If `scrum-via-jira` is enabled on an agent but no `jira`-kind plugin is enabled in the workspace, spawn fails fast with a clear diagnostic naming the missing kind — the agent is never half-wired.
 - **Caught earlier by `bwoc skill verify scrum-via-jira`**, which checks the same dependency before spawn time.
 
-The full dependency model — why a dedicated field beats overloading `requires`, and how spawn-time resolution works — is specified in [[../../docs/en/SKILLS.en#skill-on-plugin-dependency|SKILLS.en.md §Skill-on-plugin dependency]].
+The full dependency model — why a dedicated field beats overloading `requires`, and how spawn-time resolution works — is specified in [[../../docs/en/SKILLS.en#Skill-on-plugin dependency|SKILLS.en.md §Skill-on-plugin dependency]].
 
 ## Lifecycle Mapping
 
-Per [[../../docs/en/SKILLS.en#lifecycle|SKILLS.en.md §Lifecycle]]:
+Per [[../../docs/en/SKILLS.en#Lifecycle|SKILLS.en.md §Lifecycle]]:
 
 ```
 init       → resolve the jira-kind plugin dependency; cache the bwoc jira dispatch handle.

@@ -1,4 +1,4 @@
-# ISO/IEC 27001:2022 — declared criteria (stub).
+# ISO/IEC 27001:2022 — declared criteria (v0.2.0 ISMS runtime).
 #
 # Source: ISO/IEC 27001:2022 — Information security, cybersecurity and
 # privacy protection — Information security management systems —
@@ -6,66 +6,116 @@
 # refer to the published standard's main-body sections (clauses 4 through
 # 10); `A.x.y` references are Annex A controls.
 #
-# Each `[criterion.<id>]` table documents one ISMS practice the future
-# EPIC-3 runtime will check. `id` is kebab-case and plugin-scoped (BWOC-11).
-# Declaration order is the report order — do not reorder casually; renames
-# are a major version bump (PLUGINS.en.md §Stability).
+# Each `[criterion.<id>]` table documents one ISMS practice the runtime
+# checks. `id` is kebab-case and plugin-scoped (BWOC-11). Declaration order
+# is the report order — do not reorder casually; renames are a major version
+# bump (PLUGINS.en.md §Stability). The eight ids are unchanged from the
+# v0.1.0 stub.
 #
 # Fields:
-#   severity     — closed enum {info, low, medium, high, critical}.
-#   reference    — ISO/IEC 27001:2022 clause or Annex A control reference.
-#   title        — short ISO clause/control title.
-#   description  — one-line operator-facing summary of what EPIC-3 will check.
+#   severity               — closed enum {info, low, medium, high, critical}.
+#   reference              — ISO/IEC 27001:2022 clause or Annex A control reference.
+#   title                  — short ISO clause/control title.
+#   description            — one-line operator-facing summary of what the runtime checks.
+#   expected_evidence_kind — the evidence kind the runtime emits for this criterion
+#                            (BWOC-26 / BWOC-29). 27001 mixes two: `attestation` for the
+#                            main-body management-system clauses (4–10: scope, policy, risk
+#                            assessment, SoA, internal audit) and `sample` for the Annex A
+#                            controls. See the per-kind `[criterion.<id>.<kind>]` subtable
+#                            for the required sub-fields.
+#   annex_control          — (Annex A criteria only) the Annex A control reference the
+#                            runtime looks up in the workspace Statement of Applicability
+#                            (`[[plugins.audit-iso-27001.soa]]`) to decide scope. The SoA's
+#                            in-scope set is the sampling population — see
+#                            notes/2026-05-27_27001-soa-sampling.md for the SoA-driven model.
 #
-# The stub's audit.sh ignores everything except `id` and `severity`: every
-# criterion reports `status = "not_implemented"` with the uniform remedy
-# "Runtime deferred to BWOC-EPIC-3." Authoring the full table now means the
-# runtime can land in EPIC-3 without renaming criteria (stability contract).
+# The runtime (audit.sh) reads `expected_evidence_kind` per criterion and
+# routes to the matching `.bwoc/workspace.toml` array:
+#   attestation → [[plugins.audit-iso-27001.attestations]]
+#   sample      → [[plugins.audit-iso-27001.soa]] (scope) + [[plugins.audit-iso-27001.samples]] (record)
+# An in-scope, sampled Annex A control emits `status = "pass"`; a justifiably
+# excluded one emits `status = "not_applicable"`; one absent from the SoA or
+# lacking a sample emits `status = "fail"` pointing the operator at workspace.toml.
 
 [criterion.27001-isms-scope]
-severity    = "high"
-reference   = "4.3"
-title       = "Scope of the information security management system"
-description = "Organization has determined and documented the scope of its ISMS, including interfaces and dependencies."
+severity               = "high"
+reference              = "4.3"
+title                  = "Scope of the information security management system"
+description            = "Organization has determined and documented the scope of its ISMS, including interfaces and dependencies."
+expected_evidence_kind = "attestation"
+
+[criterion.27001-isms-scope.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.27001-information-security-policy]
-severity    = "high"
-reference   = "5.2"
-title       = "Information security policy"
-description = "Top management has established a documented information security policy aligned with the organization's purpose and strategic direction."
+severity               = "high"
+reference              = "5.2"
+title                  = "Information security policy"
+description            = "Top management has established a documented information security policy aligned with the organization's purpose and strategic direction."
+expected_evidence_kind = "attestation"
+
+[criterion.27001-information-security-policy.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.27001-risk-assessment]
-severity    = "critical"
-reference   = "6.1.2"
-title       = "Information security risk assessment"
-description = "A documented information security risk assessment process is defined and applied, producing comparable, valid, and reproducible results."
+severity               = "critical"
+reference              = "6.1.2"
+title                  = "Information security risk assessment"
+description            = "A documented information security risk assessment process is defined and applied, producing comparable, valid, and reproducible results."
+expected_evidence_kind = "attestation"
+
+[criterion.27001-risk-assessment.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.27001-statement-of-applicability]
-severity    = "critical"
-reference   = "6.1.3"
-title       = "Statement of Applicability"
-description = "A Statement of Applicability declares which Annex A controls are applicable, justifies inclusions and exclusions, and records implementation status."
+severity               = "critical"
+reference              = "6.1.3"
+title                  = "Statement of Applicability"
+description            = "A Statement of Applicability declares which Annex A controls are applicable, justifies inclusions and exclusions, and records implementation status."
+expected_evidence_kind = "attestation"
+
+[criterion.27001-statement-of-applicability.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.27001-access-control]
-severity    = "high"
-reference   = "A.5.15"
-title       = "Access control"
-description = "Rules controlling physical and logical access to information and other associated assets are established, documented, and reviewed."
+severity               = "high"
+reference              = "A.5.15"
+title                  = "Access control"
+description            = "Rules controlling physical and logical access to information and other associated assets are established, documented, and reviewed."
+expected_evidence_kind = "sample"
+annex_control          = "A.5.15"
+
+[criterion.27001-access-control.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.27001-incident-management]
-severity    = "high"
-reference   = "A.5.24"
-title       = "Information security incident management planning and preparation"
-description = "Information security incident management processes, including roles and responsibilities, are planned, documented, and tested."
+severity               = "high"
+reference              = "A.5.24"
+title                  = "Information security incident management planning and preparation"
+description            = "Information security incident management processes, including roles and responsibilities, are planned, documented, and tested."
+expected_evidence_kind = "sample"
+annex_control          = "A.5.24"
+
+[criterion.27001-incident-management.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.27001-business-continuity]
-severity    = "medium"
-reference   = "A.5.29"
-title       = "Information security during disruption"
-description = "Procedures to maintain information security during disruption are documented, exercised, and reviewed for effectiveness."
+severity               = "medium"
+reference              = "A.5.29"
+title                  = "Information security during disruption"
+description            = "Procedures to maintain information security during disruption are documented, exercised, and reviewed for effectiveness."
+expected_evidence_kind = "sample"
+annex_control          = "A.5.29"
+
+[criterion.27001-business-continuity.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.27001-internal-audit]
-severity    = "high"
-reference   = "9.2"
-title       = "Internal audit"
-description = "Internal audits of the ISMS are conducted at planned intervals to verify conformance and effectiveness."
+severity               = "high"
+reference              = "9.2"
+title                  = "Internal audit"
+description            = "Internal audits of the ISMS are conducted at planned intervals to verify conformance and effectiveness."
+expected_evidence_kind = "attestation"
+
+[criterion.27001-internal-audit.attestation]
+required = ["signer", "signed_at"]

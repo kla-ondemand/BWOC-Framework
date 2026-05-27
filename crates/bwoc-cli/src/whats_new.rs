@@ -5,14 +5,23 @@
 //!      bumps and never pollutes piped/`--json` stdout.
 //!
 //! Highlights live here as the single source — the banner imports them.
-//! Update `HEADLINE` + `HIGHLIGHTS` on each release that's worth shouting.
+//! The `HEADLINE` version is derived from Cargo at compile time; update only
+//! its prose tagline + `HIGHLIGHTS` on each release that's worth shouting.
 
 use std::io::IsTerminal;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// One-line headline for the current release.
-pub const HEADLINE: &str = "BWOC 2.5 — live fleet ops + self-updating";
+/// One-line headline for the current release. The `MAJOR.MINOR` is built from
+/// Cargo's version at compile time (`concat!` + `env!`) so the auto-version
+/// hook can never desync the headline from the binary it ships in.
+pub const HEADLINE: &str = concat!(
+    "BWOC ",
+    env!("CARGO_PKG_VERSION_MAJOR"),
+    ".",
+    env!("CARGO_PKG_VERSION_MINOR"),
+    " — live fleet ops + self-updating"
+);
 
 /// Short highlight bullets for the current MAJOR.MINOR. Keep ≤6, each a
 /// single line — they render in the banner and inform the upgrade notice.

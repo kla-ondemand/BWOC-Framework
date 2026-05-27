@@ -30,9 +30,58 @@ use bwoc_harness::{
 #[derive(Parser, Debug)]
 #[command(name = "bwoc-harness", version, about, long_about = None)]
 struct Args {
-    /// Initial task / prompt for the agent.
+    /// Initial task / prompt for the agent.  Required for a new run; ignored
+    /// (and may be omitted) when `--resume` is given.
     #[arg(long, short = 't')]
-    task: String,
+    task: Option<String>,
+
+    /// Resume a previously-checkpointed run by id.  Reloads its history,
+    /// counters, and active model and continues against the existing worktree
+    /// (no replay).  Mutually exclusive with a fresh `--task`.
+    #[arg(long, conflicts_with = "task")]
+    resume: Option<String>,
+
+    /// Run as a Saṅgha lead (HV2-1): drain claimable tasks from `--tasks`,
+    /// spawning a `bwoc-harness` worker subprocess per task in its own git
+    /// worktree off `--workdir`.  Mutually exclusive with `--task`/`--resume`.
+    #[arg(long, conflicts_with_all = ["task", "resume"])]
+    lead: bool,
+
+    /// Path to the Saṅgha `tasks.jsonl` (required with `--lead`).
+    #[arg(long, requires = "lead")]
+    tasks: Option<PathBuf>,
+
+    /// Agent id the lead claims tasks as (lead mode).
+    #[arg(long, default_value = "agent-lead")]
+    agent: String,
+
+    /// Max tasks to process this lead invocation; `0` = drain all.
+    #[arg(long, default_value_t = 0)]
+    max_tasks: usize,
+
+    /// Worker concurrency for lead mode (collection is currently sequential).
+    #[arg(long, default_value_t = 1)]
+    concurrency: usize,
+
+    /// Per-run hard token budget (prompt + completion). The run aborts with
+    /// `BudgetExceeded` once cumulative usage crosses it.  Unset = no limit.
+    #[arg(long)]
+    token_budget: Option<u64>,
+
+    /// Per-run hard cost budget (e.g. USD).  Only enforced together with
+    /// `--cost-per-1m`.  Unset = no limit.
+    #[arg(long)]
+    cost_limit: Option<f64>,
+
+    /// Price per 1,000,000 tokens, used to derive cost for `--cost-limit`.
+    #[arg(long)]
+    cost_per_1m: Option<f64>,
+
+    /// Launch an external MCP tool server and register its tools (HV2-5).
+    /// Value is the server command line, e.g. `--mcp "my-mcp-server --flag"`.
+    /// Repeatable.  Tools are exposed as `mcp__<server>__<tool>`.
+    #[arg(long)]
+    mcp: Vec<String>,
 
     /// Working directory (worktree root).  All file operations are confined
     /// to this directory.  Defaults to the current directory.
@@ -96,6 +145,13 @@ async fn run() -> HarnessResult<()> {
     println!("  endpoint : {}", args.endpoint);
     println!("  stream   : {}", args.stream);
 
+    // ── Saṅgha lead mode (HV2-1) ──────────────────────────────────────────
+    // Drains tasks and spawns worker subprocesses; the parent never runs task
+    // code or calls a provider — each worker does, as its own sandboxed process.
+    if args.lead {
+        return run_lead_mode(&args, &workdir).await;
+    }
+
     // ── Provider ──────────────────────────────────────────────────────────
     let provider: Arc<dyn ProviderClient> = Arc::new(OllamaClient::new(args.endpoint.clone()));
 
@@ -115,7 +171,30 @@ async fn run() -> HarnessResult<()> {
     }
 
     // ── Tool registry ─────────────────────────────────────────────────────
-    let registry = Arc::new(default_registry());
+    let mut registry = default_registry();
+    // ── MCP tool servers (HV2-5) ──────────────────────────────────────────
+    // Each --mcp launches an external MCP server and registers its tools.
+    // Failures are warned, not fatal — the run proceeds with the built-in set.
+    for spec in &args.mcp {
+        let parts: Vec<String> = spec.split_whitespace().map(String::from).collect();
+        let Some((program, prog_args)) = parts.split_first() else {
+            continue;
+        };
+        let label = std::path::Path::new(program)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(program);
+        match bwoc_harness::mcp::McpClient::connect_stdio(program, prog_args).await {
+            Ok(client) => match client.register_tools(&mut registry, label).await {
+                Ok(n) => println!("  mcp      : {n} tool(s) from `{program}`"),
+                Err(e) => {
+                    eprintln!("[bwoc-harness] warning: MCP `tools/list` from `{program}`: {e}")
+                }
+            },
+            Err(e) => eprintln!("[bwoc-harness] warning: MCP connect `{program}`: {e}"),
+        }
+    }
+    let registry = Arc::new(registry);
 
     // ── Context ───────────────────────────────────────────────────────────
     let ctx = ToolContext::new(&workdir);
@@ -142,6 +221,36 @@ async fn run() -> HarnessResult<()> {
         VettedMode::Warn
     });
 
+    // ── Durable run (HV2-2) ───────────────────────────────────────────────
+    // Either resume a checkpointed run or start a fresh one.  The harness
+    // binary always checkpoints; `LoopConfig::checkpoint = None` is reserved
+    // for embedders/tests.
+    let (checkpoint, initial_messages) = match &args.resume {
+        Some(run_id) => {
+            let cfg =
+                bwoc_harness::checkpoint::CheckpointConfig::resume(run_id).unwrap_or_else(|e| {
+                    eprintln!("[bwoc-harness] error: cannot resume run `{run_id}`: {e}");
+                    std::process::exit(1);
+                });
+            let prior_turns = cfg.resume.as_ref().map(|s| s.turns).unwrap_or(0);
+            println!("  resuming : {run_id} ({prior_turns} prior turn(s))");
+            // Resumed history seeds the loop; no fresh task message.
+            (Some(cfg), Vec::new())
+        }
+        None => {
+            let task = args.task.clone().unwrap_or_else(|| {
+                eprintln!("[bwoc-harness] error: --task is required (or use --resume <run-id>)");
+                std::process::exit(1);
+            });
+            let run_id = bwoc_harness::checkpoint::new_run_id();
+            println!("  run id   : {run_id}");
+            (
+                Some(bwoc_harness::checkpoint::CheckpointConfig::new(run_id)),
+                vec![ChatMessage::user(&task)],
+            )
+        }
+    };
+
     // ── Loop config ───────────────────────────────────────────────────────
     let config = LoopConfig {
         model: args.model.clone(),
@@ -155,6 +264,12 @@ async fn run() -> HarnessResult<()> {
         context_limit: 0, // no compaction by default; operator sets via config
         model_context_limits: std::collections::HashMap::new(),
         token_pressure_models: Vec::new(),
+        checkpoint,
+        budget: bwoc_harness::budget::BudgetConfig {
+            max_tokens: args.token_budget,
+            max_cost: args.cost_limit,
+            cost_per_1m_tokens: args.cost_per_1m,
+        },
     };
 
     // ── Telemetry ─────────────────────────────────────────────────────────
@@ -168,19 +283,32 @@ async fn run() -> HarnessResult<()> {
     let mut telemetry = bwoc_harness::telemetry::Telemetry::new(session_id, "bwoc-harness");
 
     // ── Run ───────────────────────────────────────────────────────────────
-    println!("\ntask: {}", args.task);
+    println!(
+        "\ntask: {}",
+        args.task.as_deref().unwrap_or("(resumed run)")
+    );
     println!("─────────────────────────────────────────────");
 
-    let result = run_loop(
+    let outcome = run_loop(
         provider,
         registry,
         ctx,
         config,
         system_prompt,
-        vec![ChatMessage::user(&args.task)],
+        initial_messages,
         &mut telemetry,
     )
-    .await?;
+    .await;
+
+    // Record the run for the §8b retrospective regardless of how it ended.
+    // One attempted task always; one completed only on success — an aborted
+    // run (budget / max-iterations / models-exhausted) must surface as a
+    // sub-100% completion rate, not be skipped.  Those are exactly the runs
+    // §8b is meant to learn from.
+    telemetry.agent.tasks_attempted += 1;
+    if outcome.is_ok() {
+        telemetry.agent.tasks_completed += 1;
+    }
 
     // Persist session metrics (best-effort; non-fatal if it fails).
     let metrics_path = args.workdir.join("session-metrics.jsonl");
@@ -188,10 +316,68 @@ async fn run() -> HarnessResult<()> {
         eprintln!("[bwoc-harness] warning: could not write session metrics: {e}");
     }
 
+    // ── Run-end retrospective (HV2-3) ─────────────────────────────────────
+    // Surface any §8b self-improvement triggers.  Runs on success AND failure.
+    // Observe-don't-drive: printed, never applied.
+    let retro = bwoc_harness::retrospective::Retrospective::analyze(
+        &telemetry.build_record(),
+        &bwoc_harness::retrospective::RetroThresholds::default(),
+    );
+    eprint!("{}", retro.render());
+
+    // Propagate an aborted run as an error — after the retrospective has been
+    // recorded and printed.
+    let result = outcome?;
+
     println!("─────────────────────────────────────────────");
     println!("done in {} turn(s).\n", result.turns);
     println!("{}", result.final_response);
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Saṅgha lead mode (HV2-1)
+// ---------------------------------------------------------------------------
+
+/// Run the lead loop: drain `--tasks` and spawn a worker subprocess per task.
+async fn run_lead_mode(args: &Args, workdir: &std::path::Path) -> HarnessResult<()> {
+    use bwoc_harness::lead::{JsonlTaskSource, LeadConfig, run_lead};
+    use bwoc_harness::worker::{SubprocessRunner, WorkerConfig};
+
+    let tasks_path = args.tasks.as_ref().ok_or_else(|| {
+        bwoc_harness::error::HarnessError::Other("--lead requires --tasks <path>".to_string())
+    })?;
+
+    let source = JsonlTaskSource::new(tasks_path);
+    let runner = std::sync::Arc::new(SubprocessRunner::new()?);
+    let cfg = LeadConfig {
+        agent_id: args.agent.clone(),
+        repo_root: workdir.to_path_buf(),
+        worktree_base: workdir.join(".bwoc").join("worktrees"),
+        worker: WorkerConfig {
+            model: args.model.clone(),
+            endpoint: args.endpoint.clone(),
+            skip_model_check: args.skip_model_check,
+        },
+        capacity: args.concurrency,
+        max_tasks: args.max_tasks,
+    };
+
+    println!(
+        "  mode     : Saṅgha lead (agent={}, tasks={})",
+        cfg.agent_id,
+        tasks_path.display()
+    );
+    println!("─────────────────────────────────────────────");
+
+    let summary = run_lead(&source, runner, &cfg).await?;
+
+    println!("─────────────────────────────────────────────");
+    println!(
+        "lead done: {} claimed, {} completed, {} failed.",
+        summary.claimed, summary.completed, summary.failed
+    );
     Ok(())
 }
 

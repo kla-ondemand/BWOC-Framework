@@ -982,7 +982,11 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// Plugin kinds accepted by the framework. The task brief enumerates
 /// `audit (future)` as a forward-compatible value — accept it now so
 /// the EPIC-2 ISO compliance plugins land without a v2 audit bump.
-const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "audit"];
+/// `jira` (BWOC-43) is the first write-capable integration kind; it is
+/// already declared in the PLUGINS.en.md enum (BWOC-41), so the validator
+/// recognizes it here too — otherwise the reference jira plugin would fail
+/// its own `bwoc check`.
+const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "audit", "jira"];
 
 /// Closed severity enum for declared criteria. Source of truth:
 /// PLUGINS.en.md §"Audit Findings Schema" — five-level scale matching
@@ -1261,7 +1265,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1269,7 +1273,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira}}"
             ));
         }
     }
@@ -2157,6 +2161,51 @@ description = "Minimal smoke criterion for the test fixture."
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_jira_kind_accepted() {
+        // BWOC-43: the 'jira' kind is declared in the PLUGINS.en.md enum
+        // (BWOC-41); the validator must accept it so the reference jira plugin
+        // passes its own `bwoc check`. 'jira' takes no criteria.toml (that is
+        // audit-kind-specific), so the bare manifest must pass clean.
+        let dir = write_plugin_manifest(
+            "jira-kind",
+            "jira-cloud-rest",
+            r#"[plugin]
+name        = "jira-cloud-rest"
+kind        = "jira"
+version     = "0.1.0"
+description = "Jira Cloud REST v3 integration adapter."
+compat      = ">=2.7.0"
+entry       = "jira.sh"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected 'jira' kind to be accepted, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_jira_reference_passes() {
+        // End-to-end: audit the actual shipped reference plugin
+        // (modules/plugins/jira-cloud-rest/), not a fixture — this is the file
+        // `bwoc check --all` will validate in an operator workspace.
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/plugins/jira-cloud-rest");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real jira-cloud-rest manifest must pass bwoc check, got: {:?}",
+            report.violations
+        );
     }
 
     #[test]

@@ -1232,6 +1232,18 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
+    // BWOC-36: entry must be well-formed, not just present. A traversal or
+    // absolute entry would let `bwoc audit run` execute an arbitrary host
+    // binary, so reject it statically here too (same rule as the runtime guard).
+    if let Some(entry) = plugin_table.get("entry").and_then(|v| v.as_str()) {
+        match crate::util::validate_plugin_entry(entry) {
+            Ok(()) => report
+                .passes
+                .push("[plugin].entry is a contained path (no traversal)".to_string()),
+            Err(e) => report.violations.push(e),
+        }
+    }
+
     // Name matches directory basename.
     let dir_name = plugin_dir
         .file_name()
@@ -2220,6 +2232,99 @@ entry       = "bin"
                 .iter()
                 .any(|v| v.contains("[plugin].compat missing")),
             "expected missing-compat violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- Entry path-traversal guard (BWOC-36) ------------------------------
+
+    // Build a fully-valid workflow manifest whose only variable is `entry`, so
+    // a non-empty `violations` isolates the entry-guard verdict.
+    fn write_entry_manifest(label: &str, name: &str, entry: &str) -> std::path::PathBuf {
+        write_plugin_manifest(
+            label,
+            name,
+            &format!(
+                r#"[plugin]
+name        = "{name}"
+kind        = "workflow"
+version     = "0.1.0"
+description = "Path-traversal guard test."
+compat      = ">=2.5.0"
+entry       = "{entry}"
+"#
+            ),
+        )
+    }
+
+    #[test]
+    fn plugin_entry_bare_name_ok() {
+        let dir = write_entry_manifest("entry-bare", "trav-bare", "audit.sh");
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected clean manifest, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("[plugin].entry is a contained path"))
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn plugin_entry_contained_relative_ok() {
+        let dir = write_entry_manifest("entry-rel", "trav-rel", "bin/audit.sh");
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected clean manifest, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn plugin_entry_parent_escape_rejected() {
+        let dir = write_entry_manifest("entry-esc", "trav-esc", "../escape");
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("../escape") && v.contains("..")),
+            "expected traversal violation naming the entry, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn plugin_entry_absolute_rejected() {
+        let dir = write_entry_manifest("entry-abs", "trav-abs", "/tmp/evil");
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("/tmp/evil") && v.contains("absolute")),
+            "expected absolute-path violation naming the entry, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn plugin_entry_parent_anywhere_rejected() {
+        let dir = write_entry_manifest("entry-mid", "trav-mid", "nested/../evil");
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.iter().any(|v| v.contains("'..'")),
+            "expected '..'-component violation, got: {:?}",
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());

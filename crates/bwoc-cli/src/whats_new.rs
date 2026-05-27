@@ -20,17 +20,16 @@ pub const HEADLINE: &str = concat!(
     env!("CARGO_PKG_VERSION_MAJOR"),
     ".",
     env!("CARGO_PKG_VERSION_MINOR"),
-    " — signed messages + durable Saṅgha harness"
+    " — cross-workspace peer feedback"
 );
 
 /// Short highlight bullets for the current MAJOR.MINOR. Keep ≤6, each a
 /// single line — they render in the banner and inform the upgrade notice.
 pub const HIGHLIGHTS: &[&str] = &[
-    "Signed messages — ed25519 envelopes; `bwoc trust --keygen` (HV2-4)",
-    "Durable runs — per-turn checkpoint + `--resume` (HV2-2)",
-    "Saṅgha runtime — a lead spawns sandboxed subprocess workers (HV2-1)",
-    "Run-end retrospective + per-run budget gate + MCP client (HV2-3/5/6)",
-    "Streaming usage + concurrent tool execution (HV2-7)",
+    "`bwoc peer feedback <agent> \"…\" --from <local-agent>` — signed cross-workspace review (#20)",
+    "Trust gate verifies a cross-workspace sender via routes.toml + published key",
+    "Read-vs-write split: peer writes require a provable signature",
+    "Prior 2.7.0: installable plugins & skills + ISO-compliance audits",
 ];
 
 /// `MAJOR.MINOR` of the current build (the patch component churns on every

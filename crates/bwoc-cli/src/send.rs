@@ -41,6 +41,19 @@ pub struct SendArgs {
     /// so non-interactive callers don't side-effect into a TUI session.
     pub no_wakeup: bool,
     pub workspace: Option<PathBuf>,
+    /// Optional envelope `kind` (e.g. `"feedback"` from `bwoc peer feedback`).
+    /// Plain metadata — not part of the signed canonical bytes. `None` writes
+    /// no `kind` field (an ordinary message).
+    pub kind: Option<String>,
+    /// Skip the local-registry fast path and resolve the recipient ONLY via
+    /// `routes.toml` (cross-workspace). `bwoc peer feedback` sets this so a
+    /// local agent that happens to share the peer's id isn't delivered to
+    /// instead of the peer.
+    pub force_peer_route: bool,
+    /// Refuse to deliver unless the message is signed — error if the `--from`
+    /// agent has no signing key, rather than sending an envelope the recipient
+    /// will reject. `bwoc peer feedback` sets this (feedback must be signed).
+    pub require_signed: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -58,6 +71,11 @@ pub enum SendError {
     SenderNotFound { name: String, workspace: PathBuf },
     #[error("empty message — pass non-empty text after the agent name")]
     EmptyMessage,
+    #[error(
+        "agent '{agent}' has no signing key — run `bwoc trust --keygen {agent}` first \
+         (this channel requires a signed message)"
+    )]
+    SignatureRequired { agent: String },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("workspace error: {0}")]
@@ -77,6 +95,7 @@ pub fn run(args: SendArgs) -> i32 {
                 SendError::NoWorkspace
                 | SendError::NotFound { .. }
                 | SendError::SenderNotFound { .. }
+                | SendError::SignatureRequired { .. }
                 | SendError::EmptyMessage => 2,
                 _ => 1,
             }
@@ -98,10 +117,16 @@ fn send(args: SendArgs) -> Result<(), SendError> {
     // The result is a (resolved_workspace, entry) pair; everything below
     // is identical for both local and peer hits. Only the recipient gains
     // a peer workspace path — the sender stays anchored to the local registry.
+    // `force_peer_route` (set by `bwoc peer feedback`) skips the local fast
+    // path so a recipient id that also exists locally still routes to the peer.
+    let local_hit = if args.force_peer_route {
+        None
+    } else {
+        registry.agents.iter().find(|a| a.id == lookup_id).cloned()
+    };
     let (resolved_workspace, entry): (PathBuf, AgentEntry) = {
-        // Try local registry first.
-        if let Some(local_entry) = registry.agents.iter().find(|a| a.id == lookup_id) {
-            (workspace.clone(), local_entry.clone())
+        if let Some(local_entry) = local_hit {
+            (workspace.clone(), local_entry)
         } else {
             // Local miss → consult routes.toml.
             let routes = Routes::load(&workspace)?;
@@ -177,12 +202,15 @@ fn send(args: SendArgs) -> Result<(), SendError> {
     if let Some(rt) = args.reply_to.as_deref() {
         envelope.insert("replyTo".into(), rt.into());
     }
+    if let Some(k) = args.kind.as_deref() {
+        envelope.insert("kind".into(), k.into());
+    }
 
     // HV2-4: sign the envelope when the sender is an agent with a key.  The
     // signature covers the canonical form of {from,to,ts,messageId,message,
     // nonce}; `nonce` + `sig` are added to the wire envelope.  A sender with no
     // key sends unsigned (a warning) — recipients in enforce mode will refuse
-    // it, which is the operator's cue to run `bwoc trust keygen`.
+    // it, which is the operator's cue to run `bwoc trust --keygen`.
     if let Some(dir) = &sender_bwoc_dir {
         match bwoc_signing::load_signing_key(dir) {
             Ok(Some(key)) => {
@@ -200,13 +228,21 @@ fn send(args: SendArgs) -> Result<(), SendError> {
                 envelope.insert("sig".into(), sig.into());
             }
             Ok(None) => {
+                // `require_signed` (peer feedback) refuses to deliver an
+                // envelope the recipient would only reject — fail at the source.
+                if args.require_signed {
+                    return Err(SendError::SignatureRequired { agent: from });
+                }
                 eprintln!(
                     "[bwoc send] warning: agent `{from}` has no signing key — sending \
-                     UNSIGNED. Run `bwoc trust keygen {from}`; enforce-mode recipients \
+                     UNSIGNED. Run `bwoc trust --keygen {from}`; enforce-mode recipients \
                      will refuse unsigned messages."
                 );
             }
             Err(e) => {
+                if args.require_signed {
+                    return Err(SendError::SignatureRequired { agent: from });
+                }
                 eprintln!(
                     "[bwoc send] warning: could not load signing key for `{from}`: {e} \
                      — sending unsigned."
@@ -373,6 +409,55 @@ mod tests {
     }
 
     #[test]
+    fn feedback_kind_is_stamped_in_envelope() {
+        // `bwoc peer feedback` sets kind=Some("feedback"); it must appear on the
+        // wire envelope (plain metadata, not part of the signed canonical bytes).
+        let root = setup("kind");
+        send(SendArgs {
+            to: "alpha".into(),
+            message: "review: solid".into(),
+            from: None,
+            reply_to: None,
+            no_wakeup: true,
+            kind: Some("feedback".into()),
+            force_peer_route: false,
+            require_signed: false,
+            workspace: Some(root.clone()),
+        })
+        .unwrap();
+        let line =
+            std::fs::read_to_string(root.join("agents/agent-alpha/.bwoc/inbox.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["kind"], "feedback");
+        assert_eq!(v["message"], "review: solid");
+    }
+
+    #[test]
+    fn require_signed_refuses_when_sender_has_no_key() {
+        // `bwoc peer feedback` sets require_signed; a sender with no signing key
+        // must fail at the source, not deliver an envelope the peer will reject.
+        let root = setup("reqsig");
+        let err = send(SendArgs {
+            to: "alpha".into(),
+            message: "review".into(),
+            from: Some("alpha".into()), // agent-alpha exists but has no key
+            reply_to: None,
+            no_wakeup: true,
+            kind: Some("feedback".into()),
+            force_peer_route: false,
+            require_signed: true,
+            workspace: Some(root.clone()),
+        })
+        .unwrap_err();
+        assert!(
+            matches!(err, SendError::SignatureRequired { .. }),
+            "got: {err:?}"
+        );
+        // And nothing was written to the inbox.
+        assert!(!root.join("agents/agent-alpha/.bwoc/inbox.jsonl").exists());
+    }
+
+    #[test]
     fn send_appends_a_jsonl_envelope() {
         let root = setup("ok");
         send(SendArgs {
@@ -381,6 +466,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -404,6 +492,9 @@ mod tests {
                 from: None,
                 reply_to: None,
                 no_wakeup: true,
+                kind: None,
+                force_peer_route: false,
+                require_signed: false,
                 workspace: Some(root.clone()),
             })
             .unwrap();
@@ -423,6 +514,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         });
         assert!(matches!(err, Err(SendError::EmptyMessage)));
@@ -438,6 +532,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         });
         assert!(matches!(err, Err(SendError::NotFound { .. })));
@@ -485,6 +582,9 @@ mod tests {
             from: Some("beta".into()),
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -506,6 +606,9 @@ mod tests {
             from: Some("agent-beta".into()),
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -525,6 +628,9 @@ mod tests {
             from: Some("ghost".into()),
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         });
         assert!(
@@ -543,6 +649,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -572,6 +681,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -598,6 +710,9 @@ mod tests {
             from: None,
             reply_to: Some("msg-20260523T000000Z-deadb".into()),
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap();
@@ -713,6 +828,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap();
@@ -756,6 +874,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap();
@@ -794,6 +915,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap();
@@ -838,6 +962,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap_err();
@@ -878,6 +1005,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap_err();
@@ -899,6 +1029,9 @@ mod tests {
             from: None,
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(root.clone()),
         })
         .unwrap_err();
@@ -940,6 +1073,9 @@ mod tests {
             from: Some("alpha".into()), // local sender
             reply_to: None,
             no_wakeup: true,
+            kind: None,
+            force_peer_route: false,
+            require_signed: false,
             workspace: Some(local.clone()),
         })
         .unwrap();

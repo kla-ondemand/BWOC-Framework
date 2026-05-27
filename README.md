@@ -431,20 +431,16 @@ The CLI has zero runtime dependencies beyond `libc` / `Win32`. No JVM, no Node, 
 
 ## Status
 
-**Current phase:** Phase 3 DoD met and the **plugin-system cycle is complete** (v2.3.0) — the pluggable edges are all filled in. Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — _ṭhiti operations_ — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
+**Current phase:** Phase 3 DoD met; the interconnect mesh now spans workspaces — **2.8.0** adds the cross-workspace **give-feedback** write path, completing the view · learn · give-feedback trio (view + learn shipped 2.3.0). Phase 1 v2.0 DoD met (end-to-end **uppāda** for one backend). Phase 2 — _ṭhiti operations_ — DoD met (lifecycle verbs, `--serve` daemon, Unix-socket IPC, inbox messaging, doctor sweeps, TUI dashboard).
 
-**Latest release:** [`v2026.5.24-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.24-1) (2.3.0) shipped 2026-05-24 — the plugin-system cycle. Cross-platform binaries (`aarch64` / `x86_64` macOS & Linux, `x86_64` Windows) with SHA-256 checksums; CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`. First public release was [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) (2026-05-23).
+**Latest release:** [`v2026.5.27-2`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.27-2) (2.8.0) shipped 2026-05-27 — cross-workspace give-feedback. Cross-platform binaries (`aarch64` / `x86_64` macOS & Linux, `x86_64` Windows) with SHA-256 checksums; CalVer tag scheme `v<YYYY>.<M>.<D>-<patch>`. First public release was [`v2026.5.23-1`](https://github.com/bemindlabs/BWOC-Framework/releases/tag/v2026.5.23-1) (2026-05-23).
 
-**Shipped in v2.3.0 — the plugin-system cycle:**
+**Shipped in v2.8.0 — cross-workspace give-feedback (#20):**
 
-- **Real OS-level sandbox** — `bwoc-harness` replaces the stub with **landlock** (Linux) + **sandbox-exec** (macOS), confining tool writes to the worktree; graceful-degrade where unsupported. Defence-in-depth over the existing path-allowlist.
-- **Windows support for `bwoc-harness`** — cross-platform shell-out (`cmd /C`), re-enabled in Windows CI (workspace tested on macOS · Linux · Windows).
-- **OpenAI-compatible provider + vetted-model mode** — `bwoc spawn --backend openai-compatible` runs any OpenAI-compatible endpoint (vLLM / LM Studio / llama.cpp / remote) via a `baseUrl`; `--vetted-mode off|warn|enforce` gates unvetted models.
-- **Cross-workspace `bwoc peer`** — read-only `view` (peer agents + Saṅgha tasks) and allowlist-gated `learn` (shared docs), local-FS, no central broker.
-- **`bwoc sessions`** — discover + monitor running agent sessions across backends (spawn-dropped markers + process/tmux scan; observe-only).
-- **Trust v2 warn-mode** — `off` / `warn` / `refuse` trust gate (`trust.md` §Refusal modes); cryptographic signed envelopes deferred by decision.
-- **Document-kind mechanism** — `bwoc notes | retro | research` (+ workspace-declared custom kinds via `.bwoc/doc-kinds.toml`).
-- **Headless + self-update + token-switch** — `bwoc run <agent> --task` (headless), `bwoc update --check` (release-drift), per-model token-limit auto-switch in the harness.
+- **`bwoc peer feedback <agent> "<review>" --from <local-agent>`** — deliver a signed `kind: feedback` envelope into a peer agent's inbox (local-FS mesh). Peer-routed, **signature-required**, no spurious local wakeup. Completes the three peer verbs (view + learn shipped in 2.3.0).
+- **Cross-workspace identity in the trust gate** — on a local-registry miss, the daemon resolves the sender via `routes.toml` + the peer's published `signingPublicKey` and verifies the signature, instead of refusing every peer as `unknown_sender`. Read-vs-write split: a cross-workspace write requires a provable signature. See [`SIGNING.en.md`](docs/en/SIGNING.en.md).
+
+**Recent — v2.7.0:** installable plugins & skills (`bwoc plugin/skill install`) + ISO-compliance audit plugins (`bwoc audit`). **v2.6.0:** harness-v2 (durable runs, Saṅgha workers, MCP, budget, streaming) + ed25519 signed messages. **v2.5.0:** live fleet ops + startup update-check.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the full list and [GitHub Releases](https://github.com/bemindlabs/BWOC-Framework/releases/latest) for binaries.
 

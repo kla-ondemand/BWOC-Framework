@@ -1,70 +1,112 @@
-# ISO/IEC 20000-1:2018 — declared criteria (stub).
+# ISO/IEC 20000-1:2018 — declared criteria (v0.2.0 ITSM runtime).
 #
 # Source: ISO/IEC 20000-1:2018 — Information technology — Service management
 # — Part 1: Service management system requirements. See SPEC.md for the
 # full citation set. Clause numbers refer to the published standard's
 # main-body sections (clauses 4 through 10).
 #
-# Each `[criterion.<id>]` table documents one ITSM practice the future
-# EPIC-3 runtime will check. `id` is kebab-case and plugin-scoped (BWOC-11).
-# Declaration order is the report order — do not reorder casually; renames
-# are a major version bump (PLUGINS.en.md §Stability).
+# Each `[criterion.<id>]` table documents one ITSM practice the runtime
+# checks. `id` is kebab-case and plugin-scoped (BWOC-11). Declaration order
+# is the report order — do not reorder casually; renames are a major version
+# bump (PLUGINS.en.md §Stability). The eight ids are unchanged from the
+# v0.1.0 stub.
 #
 # Fields:
-#   severity     — closed enum {info, low, medium, high, critical}.
-#   clause       — ISO/IEC 20000-1:2018 clause reference (e.g. "8.3.3").
-#   title        — short ISO clause title.
-#   description  — one-line operator-facing summary of what EPIC-3 will check.
+#   severity               — closed enum {info, low, medium, high, critical}.
+#   clause                 — ISO/IEC 20000-1:2018 clause reference (e.g. "8.3.3").
+#   title                  — short ISO clause title.
+#   description            — one-line operator-facing summary of what the runtime checks.
+#   expected_evidence_kind — the evidence kind the runtime emits for this criterion
+#                            (BWOC-26 / BWOC-29). 20000-1 mixes two: `attestation` for
+#                            documented-artifact criteria (scope, policy, catalogue) and
+#                            `sample` for operational-rate criteria (SLAs, changes,
+#                            incidents, problems, improvement). See the per-kind
+#                            `[criterion.<id>.<kind>]` subtable for the required sub-fields
+#                            and notes/2026-05-27_20000-1-sample-source.md for the rationale.
 #
-# The stub's audit.sh ignores everything except `id` and `severity`: every
-# criterion reports `status = "not_implemented"` with the uniform remedy
-# "Runtime deferred to BWOC-EPIC-3." Authoring the full table now means the
-# runtime can land in EPIC-3 without renaming criteria (stability contract).
+# The runtime (audit.sh) reads `expected_evidence_kind` per criterion and
+# routes to the matching `.bwoc/workspace.toml` array:
+#   attestation → [[plugins.audit-iso-20000-1.attestations]]
+#   sample      → [[plugins.audit-iso-20000-1.samples]]
+# A criterion with operator-provided evidence emits `status = "pass"`; one
+# without emits `status = "fail"` pointing the operator at workspace.toml.
 
 [criterion.20000-1-service-management-system-scope]
-severity    = "high"
-clause      = "4.3"
-title       = "Scope of the service management system"
-description = "Organization has determined and documented the scope of its SMS, including services and parties involved."
+severity               = "high"
+clause                 = "4.3"
+title                  = "Scope of the service management system"
+description            = "Organization has determined and documented the scope of its SMS, including services and parties involved."
+expected_evidence_kind = "attestation"
+
+[criterion.20000-1-service-management-system-scope.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.20000-1-service-policy-and-objectives]
-severity    = "high"
-clause      = "5.2"
-title       = "Service management policy and objectives"
-description = "Top management has established a service management policy and measurable service objectives aligned with organizational strategy."
+severity               = "high"
+clause                 = "5.2"
+title                  = "Service management policy and objectives"
+description            = "Top management has established a service management policy and measurable service objectives aligned with organizational strategy."
+expected_evidence_kind = "attestation"
+
+[criterion.20000-1-service-policy-and-objectives.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.20000-1-service-catalogue]
-severity    = "medium"
-clause      = "8.3.1"
-title       = "Service catalogue"
-description = "A service catalogue listing each service and its key attributes is maintained and accessible to relevant interested parties."
+severity               = "medium"
+clause                 = "8.3.1"
+title                  = "Service catalogue"
+description            = "A service catalogue listing each service and its key attributes is maintained and accessible to relevant interested parties."
+expected_evidence_kind = "attestation"
+
+[criterion.20000-1-service-catalogue.attestation]
+required = ["signer", "signed_at"]
 
 [criterion.20000-1-service-level-management]
-severity    = "high"
-clause      = "8.3.3"
-title       = "Service level management"
-description = "Service level agreements (SLAs) are documented, agreed with customers, and reviewed against actual service performance."
+severity               = "high"
+clause                 = "8.3.3"
+title                  = "Service level management"
+description            = "Service level agreements (SLAs) are documented, agreed with customers, and reviewed against actual service performance."
+expected_evidence_kind = "sample"
+
+[criterion.20000-1-service-level-management.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.20000-1-change-management]
-severity    = "high"
-clause      = "8.5.1"
-title       = "Change management"
-description = "Changes to services and to the SMS are recorded, classified, assessed, approved, and reviewed post-implementation."
+severity               = "high"
+clause                 = "8.5.1"
+title                  = "Change management"
+description            = "Changes to services and to the SMS are recorded, classified, assessed, approved, and reviewed post-implementation."
+expected_evidence_kind = "sample"
+
+[criterion.20000-1-change-management.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.20000-1-incident-management]
-severity    = "high"
-clause      = "8.6.1"
-title       = "Incident management"
-description = "Incidents are recorded, classified, prioritized, resolved, and reviewed against documented procedures."
+severity               = "high"
+clause                 = "8.6.1"
+title                  = "Incident management"
+description            = "Incidents are recorded, classified, prioritized, resolved, and reviewed against documented procedures."
+expected_evidence_kind = "sample"
+
+[criterion.20000-1-incident-management.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.20000-1-problem-management]
-severity    = "medium"
-clause      = "8.6.3"
-title       = "Problem management"
-description = "Problems (root causes of one or more incidents) are identified, analyzed, and resolved or workarounds documented."
+severity               = "medium"
+clause                 = "8.6.3"
+title                  = "Problem management"
+description            = "Problems (root causes of one or more incidents) are identified, analyzed, and resolved or workarounds documented."
+expected_evidence_kind = "sample"
+
+[criterion.20000-1-problem-management.sample]
+required = ["sampled_count", "sampled_of"]
 
 [criterion.20000-1-continual-improvement]
-severity    = "medium"
-clause      = "10.2"
-title       = "Continual improvement"
-description = "Opportunities for improvement of services and the SMS are identified, evaluated, prioritized, and implemented."
+severity               = "medium"
+clause                 = "10.2"
+title                  = "Continual improvement"
+description            = "Opportunities for improvement of services and the SMS are identified, evaluated, prioritized, and implemented."
+expected_evidence_kind = "sample"
+
+[criterion.20000-1-continual-improvement.sample]
+required = ["sampled_count", "sampled_of"]

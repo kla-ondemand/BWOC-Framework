@@ -67,6 +67,17 @@ These live at `modules/agent-template/scripts/`. They run from inside the templa
 
 Lightweight Conventional Commits: `type(scope): subject`. Example: `docs(philosophy): clarify Yoniso Manasikāra`. See `CONTRIBUTING.md` for the full PR checklist.
 
+## Merging & Pull Requests (HARD RULE)
+
+`main` is a **protected branch** in every BWOC repo (the fork included). Changes land **only** through a pull request that auto-merges once its gates are green — **never a direct push to `main`**, not even for automation or a one-line sync. Full rules: [`CONTRIBUTING.md` §Merging & External PRs](CONTRIBUTING.md#merging--external-prs). The load-bearing points:
+
+- **A PR is mergeable only when all hold:** the four required CI checks pass (**fmt + clippy** and **build + test** on macOS, Linux, Windows); the branch is **up to date with `main`** (`gh pr update-branch <pr>` if stale — strict protection rejects a stale branch even when conflict-free); and **every review conversation is resolved**.
+- **Use native auto-merge** — `gh pr merge <pr> --squash --auto` — and let GitHub merge the moment gates clear. Do **not** hand-merge (`--merge`/`--squash` immediately) to skip the CI gate.
+- **Cross-repo (fork → upstream) PRs get a full review before merge — never a blind merge.** They carry external code into a security framework, so each is scrutinized for injection / path-traversal / RCE, dep-quarantine (`bwoc-core` stays lean), backend neutrality, and EN/TH parity. Security or correctness blockers → **request changes** (the conversation-resolution gate keeps it blocked) rather than "merge to fix later."
+- **One concern per PR.** Keep diffs focused. A sprint's worth of unrelated stories must not ride in a single mega-PR — split per feature.
+
+When working the **fork** (`kla-ondemand/BWOC-Framework`) as a staging ground, hold the same discipline: branch → PR → let CI gate → auto-merge. Do not direct-push to fork `main`.
+
 ## Philosophy Grounding
 
 Every structural decision in this repo maps to one of the 22 Buddhist frameworks in `@modules/agent-template/docs/en/PHILOSOPHY.en.md`. On conflict, the philosophy document wins on the principle. The five most-applied:

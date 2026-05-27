@@ -807,6 +807,16 @@ fn detect_source_kind(src: &str) -> Result<SourceKind, String> {
             let r = if frag.is_empty() {
                 None
             } else {
+                // SECURITY (BWOC-39): the ref is passed to `git clone --branch
+                // <ref>`. A ref beginning with '-' (e.g. `--upload-pack=evil`)
+                // would be parsed by git as a flag, not a ref — argument
+                // injection. Reject it before it reaches the git invocation.
+                if frag.starts_with('-') {
+                    return Err(format!(
+                        "invalid git ref '{frag}': a ref must not begin with '-' \
+                         (it would be parsed as a git flag)"
+                    ));
+                }
                 Some(frag.to_string())
             };
             return Ok(SourceKind::GitUrl(url.to_string(), r));
@@ -1359,6 +1369,12 @@ fn stage_source(kind: &SourceKind, raw: &str) -> Result<StagedSource, String> {
             .map_err(|e| format!("curl {url}: {e}"))?;
             std::fs::create_dir_all(&staged_dir)
                 .map_err(|e| format!("create {}: {e}", staged_dir.display()))?;
+            // SECURITY (BWOC-38): validate every member BEFORE extracting so a
+            // crafted archive cannot escape `staged_dir` via `..` or an
+            // absolute path. List first, reject on any unsafe member.
+            let listing = run_capture(&stage_root, "tar", &["-tzf", &archive_str])
+                .map_err(|e| format!("tar -tzf: {e}"))?;
+            crate::util::assert_safe_tar_listing(&listing)?;
             let extract_str = staged_dir.to_string_lossy().into_owned();
             run_capture(
                 &stage_root,
@@ -1441,7 +1457,14 @@ fn verify_checksum(
             )
             .is_err()
             {
-                return Ok("git: no sidecar published".to_string());
+                // BWOC-38: a missing sidecar is NOT a pass — silently returning
+                // "ok" here would bypass the SHA-256 gate for git sources.
+                // Refuse so the operator chooses explicitly: publish a sidecar,
+                // or pass --no-verify to install unverified.
+                return Err(format!(
+                    "no SHA-256 sidecar published at {sidecar_url} — publish a \
+                     `.sha256`, or pass --no-verify to install this git source unverified"
+                ));
             }
             let expected = read_expected_digest(&sidecar_path)?;
             let actual = sha256_tree(staged_dir)?;
@@ -1794,6 +1817,15 @@ mod tests {
     fn detect_rejects_unknown() {
         assert!(detect_source_kind("nonsense").is_err());
         assert!(detect_source_kind("https://example.com/file.zip").is_err());
+    }
+
+    // BWOC-39: argument-injection defense for git refs.
+    #[test]
+    fn detect_rejects_dash_leading_git_ref() {
+        let err =
+            detect_source_kind("https://github.com/org/plugin.git#--upload-pack=evil").unwrap_err();
+        assert!(err.contains("must not begin with '-'"), "{err}");
+        assert!(detect_source_kind("https://github.com/org/plugin.git#-x").is_err());
     }
 
     #[test]

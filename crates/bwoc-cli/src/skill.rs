@@ -53,6 +53,11 @@ pub struct VerifyArgs {
     pub name: Option<String>,
     pub all: bool,
     pub json: bool,
+    /// Execute each `[gates].verify` command via `sh -c`. Off by default:
+    /// gate commands come from the skill manifest, which is UNTRUSTED input,
+    /// so without this flag verify performs static checks only and prints the
+    /// commands it would run instead of executing them.
+    pub run_gates: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -571,17 +576,31 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
 
     let mut results: Vec<serde_json::Value> = Vec::with_capacity(targets.len());
     let mut overall_ok = true;
+    // Tracks whether any skill declared a gate that was printed but not run, so
+    // the human report can surface the trust-boundary footer once at the end.
+    let mut any_gate_not_run = false;
 
     for s in &targets {
         let started = std::time::Instant::now();
-        let (exit_code, ok, command_present) = match &s.manifest.gates.verify {
+        // `executed` distinguishes "gate ran" from "gate declared but not run"
+        // (the safe default) and "no gate at all" (`command_present == false`).
+        let (exit_code, ok, command_present, executed) = match &s.manifest.gates.verify {
             None => {
                 // Per SKILLS.en.md line 74, [gates].verify is optional.
                 // No gate → no claim of passing, no claim of failing. Report
                 // as "skipped" via a null exit_code in JSON, and "ok = true"
                 // so --all does not fail solely because gates were declared
                 // absent.
-                (None, true, false)
+                (None, true, false, false)
+            }
+            Some(_cmd) if !args.run_gates => {
+                // SECURITY (BWOC-37): [gates].verify is arbitrary shell pulled
+                // from an untrusted manifest. The default path NEVER executes
+                // it — static checks only (the manifest parsed and declares a
+                // gate). The command is printed below so the operator can audit
+                // it before opting in via --run-gates.
+                any_gate_not_run = true;
+                (None, true, true, false)
             }
             Some(cmd) => {
                 let status = std::process::Command::new("sh")
@@ -593,14 +612,14 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
                 match status {
                     Ok(st) => {
                         let code = st.code().unwrap_or(-1);
-                        (Some(code), code == 0, true)
+                        (Some(code), code == 0, true, true)
                     }
                     Err(e) => {
                         eprintln!(
                             "bwoc skill verify: '{}': spawn failed: {e}",
                             s.manifest.skill.name
                         );
-                        (Some(-1), false, true)
+                        (Some(-1), false, true, true)
                     }
                 }
             }
@@ -615,21 +634,40 @@ pub fn run_verify(args: VerifyArgs) -> i32 {
                 "verify_command": s.manifest.gates.verify,
                 "exit_code": exit_code,
                 "ok": ok,
+                "executed": executed,
                 "skipped": !command_present,
                 "duration_ms": elapsed_ms,
             }));
         } else if !command_present {
             println!("- {}  (skipped — no [gates].verify)", s.manifest.skill.name);
+        } else if !executed {
+            println!(
+                "- {}  (gate not run — pass --run-gates)",
+                s.manifest.skill.name
+            );
+            if let Some(cmd) = &s.manifest.gates.verify {
+                println!("      would run (sh -c): {cmd}");
+            }
         } else {
             let tag = if ok { "OK" } else { "FAIL" };
             println!("{tag:<5} {}  ({elapsed_ms} ms)", s.manifest.skill.name);
         }
     }
 
+    if !args.json && any_gate_not_run {
+        println!();
+        println!(
+            "Gates were NOT executed. [gates].verify commands come from the skill\n\
+             manifest — UNTRUSTED input — so they are printed, not run. Review the\n\
+             commands above, then re-run with --run-gates to execute them (sh -c)."
+        );
+    }
+
     if args.json {
         let value = serde_json::json!({
             "workspace": root.display().to_string(),
             "ok": overall_ok,
+            "gates_executed": args.run_gates,
             "results": results,
         });
         return print_json(&value).max(if overall_ok { 0 } else { 1 });
@@ -891,6 +929,16 @@ fn detect_source_kind(src: &str) -> Result<SourceKind, String> {
             let r = if frag.is_empty() {
                 None
             } else {
+                // SECURITY (BWOC-39): the ref is passed to `git clone --branch
+                // <ref>`. A ref beginning with '-' (e.g. `--upload-pack=evil`)
+                // would be parsed by git as a flag, not a ref — argument
+                // injection. Reject it before it reaches the git invocation.
+                if frag.starts_with('-') {
+                    return Err(format!(
+                        "invalid git ref '{frag}': a ref must not begin with '-' \
+                         (it would be parsed as a git flag)"
+                    ));
+                }
                 Some(frag.to_string())
             };
             return Ok(SourceKind::GitUrl(url.to_string(), r));
@@ -1569,6 +1617,12 @@ fn stage_source(kind: &SourceKind, raw: &str) -> Result<StagedSource, String> {
             .map_err(|e| format!("curl {url}: {e}"))?;
             std::fs::create_dir_all(&staged_dir)
                 .map_err(|e| format!("create {}: {e}", staged_dir.display()))?;
+            // SECURITY (BWOC-38): validate every member BEFORE extracting so a
+            // crafted archive cannot escape `staged_dir` via `..` or an
+            // absolute path. List first, reject on any unsafe member.
+            let listing = run_capture(&stage_root, "tar", &["-tzf", &archive_str])
+                .map_err(|e| format!("tar -tzf: {e}"))?;
+            crate::util::assert_safe_tar_listing(&listing)?;
             let extract_str = staged_dir.to_string_lossy().into_owned();
             // --strip-components=1 collapses the conventional top-level
             // `<name>-<version>/` directory inside archives.
@@ -1653,8 +1707,6 @@ fn verify_checksum(
                 .ok_or_else(|| "no parent for staged dir".to_string())?;
             let sidecar_path = staged_root.join("source.sha256");
             let sidecar_str = sidecar_path.to_string_lossy().into_owned();
-            // Soft-failure: a publisher who hasn't uploaded a sidecar yet
-            // should not block install. We surface the omission honestly.
             if run_capture(
                 staged_root,
                 "curl",
@@ -1662,7 +1714,14 @@ fn verify_checksum(
             )
             .is_err()
             {
-                return Ok("git: no sidecar published".to_string());
+                // BWOC-38: a missing sidecar is NOT a pass — silently returning
+                // "ok" here would bypass the SHA-256 gate for git sources.
+                // Refuse so the operator chooses explicitly: publish a sidecar,
+                // or pass --no-verify to install unverified.
+                return Err(format!(
+                    "no SHA-256 sidecar published at {sidecar_url} — publish a \
+                     `.sha256`, or pass --no-verify to install this git source unverified"
+                ));
             }
             let expected = read_expected_digest(&sidecar_path)?;
             let actual = sha256_tree(staged_dir)?;
@@ -2112,5 +2171,90 @@ mod tests {
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
         );
         let _ = std::fs::remove_file(&p);
+    }
+
+    // BWOC-39: argument-injection defense for git refs.
+    #[test]
+    fn detect_rejects_dash_leading_git_ref() {
+        let err =
+            detect_source_kind("https://github.com/org/skill.git#--upload-pack=evil").unwrap_err();
+        assert!(err.contains("must not begin with '-'"), "{err}");
+        // A bare '-' ref is rejected too.
+        assert!(detect_source_kind("https://github.com/org/skill.git#-x").is_err());
+    }
+
+    #[test]
+    fn detect_accepts_normal_git_ref() {
+        // Regression guard: ordinary refs still parse after the BWOC-39 guard.
+        let k = detect_source_kind("https://github.com/org/skill.git#v1.2.3").unwrap();
+        assert!(matches!(k, SourceKind::GitUrl(_, Some(r)) if r == "v1.2.3"));
+    }
+
+    // BWOC-37: `[gates].verify` comes from an untrusted manifest. Default path
+    // must NOT execute it; --run-gates opts in.
+    fn write_probe_skill_with_gate(root: &Path, gate: &str) {
+        let dir = root.join("modules/skills/probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = format!(
+            "[skill]\nname = \"probe\"\nversion = \"0.1.0\"\n\
+             description = \"probe\"\nmaturity = \"stable\"\n\n\
+             [gates]\nverify = \"{gate}\"\n"
+        );
+        std::fs::write(dir.join("manifest.toml"), manifest).unwrap();
+    }
+
+    fn verify_args(root: &Path, run_gates: bool) -> VerifyArgs {
+        VerifyArgs {
+            common: CommonArgs {
+                workspace: Some(root.to_path_buf()),
+            },
+            name: Some("probe".to_string()),
+            all: false,
+            run_gates,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn verify_does_not_exec_gate_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Gate writes a sentinel iff it runs. Command runs with cwd == root.
+        write_probe_skill_with_gate(root, "touch GATE_RAN");
+
+        let code = run_verify(verify_args(root, false));
+        assert_eq!(
+            code, 0,
+            "default verify should succeed without running gate"
+        );
+        assert!(
+            !root.join("GATE_RAN").exists(),
+            "gate executed despite --run-gates being off"
+        );
+    }
+
+    #[test]
+    fn verify_execs_gate_with_run_gates_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_probe_skill_with_gate(root, "touch GATE_RAN");
+
+        let code = run_verify(verify_args(root, true));
+        assert_eq!(code, 0, "gate `touch` exits 0");
+        assert!(
+            root.join("GATE_RAN").exists(),
+            "gate did not execute with --run-gates"
+        );
+    }
+
+    #[test]
+    fn verify_run_gates_propagates_gate_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_probe_skill_with_gate(root, "exit 7");
+        // With the flag, a failing gate makes verify non-zero.
+        assert_ne!(run_verify(verify_args(root, true)), 0);
+        // Without the flag, the failing gate never runs → success.
+        assert_eq!(run_verify(verify_args(root, false)), 0);
     }
 }

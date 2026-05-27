@@ -15,10 +15,12 @@
 #   title        — short ISO clause title.
 #   description  — one-line operator-facing summary of what EPIC-3 will check.
 #
-# The stub's audit.sh ignores everything except `id` and `severity`: every
-# criterion reports `status = "not_implemented"` with the uniform remedy
-# "Runtime deferred to BWOC-EPIC-3." Authoring the full table now means the
-# runtime can land in EPIC-3 without renaming criteria (stability contract).
+# audit.sh now backs these criteria with the v0.2.0 attestation runtime: each
+# criterion resolves to `pass`/`fail` from signed attestation evidence in
+# `.bwoc/workspace.toml` (missing or incomplete attestation → `fail`), not the
+# former `not_implemented` stub. The full table is authored up front so the
+# remaining clauses can gain runtime checks without renaming criteria
+# (stability contract).
 
 [criterion.9001-context-of-organization]
 severity    = "high"

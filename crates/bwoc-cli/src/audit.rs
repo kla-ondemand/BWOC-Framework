@@ -671,6 +671,9 @@ struct InvokeOutcome {
 }
 
 fn invoke_plugin(plugin: &DiscoveredAudit, workspace: &Path) -> Result<InvokeOutcome, String> {
+    // BWOC-36: guard against path-traversal RCE before resolving/spawning the
+    // entry. A malicious manifest could otherwise escape the plugin dir.
+    crate::util::validate_plugin_entry(&plugin.manifest.plugin.entry)?;
     let program = resolve_entry_program(&plugin.path, &plugin.manifest.plugin.entry);
     let started_at = current_utc_iso8601();
     let start = Instant::now();
@@ -1054,6 +1057,40 @@ mod tests {
 
     fn ev(kind: &str, value: &str) -> serde_json::Value {
         json!({ "kind": kind, "value": value })
+    }
+
+    // BWOC-36 — the path-traversal guard applied before `invoke_plugin` spawns
+    // the entry. Uses the shared validator that `invoke_plugin` calls.
+    use crate::util::validate_plugin_entry;
+
+    #[test]
+    fn entry_guard_accepts_bare_name() {
+        assert!(validate_plugin_entry("audit.sh").is_ok());
+    }
+
+    #[test]
+    fn entry_guard_accepts_contained_relative() {
+        assert!(validate_plugin_entry("bin/audit.sh").is_ok());
+    }
+
+    #[test]
+    fn entry_guard_rejects_parent_escape() {
+        let e = validate_plugin_entry("../escape").unwrap_err();
+        assert!(e.contains("../escape"), "error must name the entry: {e}");
+        assert!(e.contains(".."), "error must name the rule: {e}");
+    }
+
+    #[test]
+    fn entry_guard_rejects_absolute() {
+        let e = validate_plugin_entry("/tmp/evil").unwrap_err();
+        assert!(e.contains("/tmp/evil"), "error must name the entry: {e}");
+        assert!(e.contains("absolute"), "error must name the rule: {e}");
+    }
+
+    #[test]
+    fn entry_guard_rejects_parent_anywhere() {
+        // `..` is rejected even mid-path, where it does not visibly escape.
+        assert!(validate_plugin_entry("nested/../evil").is_err());
     }
 
     #[test]

@@ -356,7 +356,9 @@ enum SkillCommand {
     List(SkillListArgs),
     /// Show one skill's manifest + SPEC location (full detail).
     Show(SkillShowArgs),
-    /// Run a skill's `[gates].verify` command. Exits non-zero on any failure.
+    /// Statically check skills and print each `[gates].verify` command without
+    /// running it. Pass --run-gates to execute them — they come from an
+    /// UNTRUSTED manifest. Exits non-zero on any failure.
     Verify(SkillVerifyArgs),
     /// Scaffold a new framework skill from `modules/skill-template/`.
     Init(SkillInitArgs),
@@ -493,10 +495,15 @@ struct SkillVerifyArgs {
     /// Verify every installed skill. Mutually exclusive with `name`.
     #[arg(long)]
     all: bool,
+    /// Execute each `[gates].verify` command via `sh -c`. SECURITY: these
+    /// commands come from the skill manifest (UNTRUSTED input) — off by
+    /// default. Without this flag, verify only prints the commands it would run.
+    #[arg(long = "run-gates")]
+    run_gates: bool,
     /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk > cwd.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
-    /// Emit JSON `{ workspace, ok, results: [...] }` instead of the human report.
+    /// Emit JSON `{ workspace, ok, gates_executed, results: [...] }` instead of the human report.
     #[arg(long)]
     json: bool,
 }
@@ -2108,6 +2115,7 @@ fn main() -> ExitCode {
                     },
                     name: args.name,
                     all: args.all,
+                    run_gates: args.run_gates,
                     json: args.json,
                 }),
                 SkillCommand::Init(args) => skill::run_init(skill::InitArgs {

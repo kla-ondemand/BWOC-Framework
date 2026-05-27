@@ -1,12 +1,15 @@
 [plugin]
 name        = "audit-iso-20000-1"
 kind        = "audit"
-version     = "0.1.0"
-description = "ISO/IEC 20000-1 IT Service Management System audit — stub. Runtime deferred to BWOC-EPIC-3."
+version     = "0.2.0"
+description = "ISO/IEC 20000-1 IT Service Management System audit — attestation + sample runtime (BWOC-33)."
 compat      = ">=2.5.0"
 entry       = "audit.sh"
 
-# [config.schema] intentionally omitted. The stub reports every criterion as
-# `not_implemented`; there is nothing to configure until the EPIC-3 runtime
-# lands. The only workspace-level surface is the universal `enabled` key
-# on `[plugins.audit-iso-20000-1]`.
+# [config.schema] intentionally omitted. v0.2.0 adopts two per-criterion
+# array-of-tables on the workspace's [plugins.audit-iso-20000-1] block —
+# .attestations (criterion_id + statement + signer + signed_at + optional
+# valid_through) and .samples (criterion_id + summary + sampled_count +
+# sampled_of + optional window). Those shapes are not a key/value config and
+# are documented in SPEC.md §Configuration, not as a manifest schema. The
+# universal `enabled` key is the only manifest-declared surface.

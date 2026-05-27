@@ -48,6 +48,38 @@ fn assert_safe_tar_member(member: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject a plugin `[plugin].entry` value that could escape the plugin
+/// directory and execute an arbitrary host binary (path-traversal RCE).
+///
+/// `bwoc audit run` spawns the entry via `Command::new(plugin_dir.join(entry))`.
+/// `Path::join` makes an absolute `entry` (`/tmp/evil`) discard `plugin_dir`
+/// entirely, and a `..` component (`../../../../tmp/evil`) climbs out of it —
+/// either way an attacker-authored manifest runs an arbitrary program. A safe
+/// entry is EITHER a bare program name resolved on `PATH`, OR a relative path
+/// that stays contained within the plugin directory. This is the single source
+/// of truth shared by the runtime guard (`audit.rs`) and the static manifest
+/// check (`check.rs`) so the two cannot drift.
+pub fn validate_plugin_entry(entry: &str) -> Result<(), String> {
+    for component in Path::new(entry).components() {
+        match component {
+            Component::ParentDir => {
+                return Err(format!(
+                    "[plugin].entry '{entry}' contains a '..' component — \
+                     entry must stay within the plugin directory"
+                ));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "[plugin].entry '{entry}' is an absolute path — entry must be a \
+                     bare program name or a relative path contained in the plugin directory"
+                ));
+            }
+            Component::CurDir | Component::Normal(_) => {}
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +122,27 @@ mod tests {
     fn one_bad_member_among_good_fails() {
         let listing = "pkg/ok\npkg/also-ok\npkg/../../escape\npkg/more";
         assert!(assert_safe_tar_listing(listing).is_err());
+    }
+
+    #[test]
+    fn entry_accepts_bare_name() {
+        assert!(validate_plugin_entry("audit.sh").is_ok());
+    }
+
+    #[test]
+    fn entry_accepts_contained_relative() {
+        assert!(validate_plugin_entry("bin/audit.sh").is_ok());
+    }
+
+    #[test]
+    fn entry_rejects_parent_traversal() {
+        let err = validate_plugin_entry("../../../../tmp/evil").unwrap_err();
+        assert!(err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn entry_rejects_absolute() {
+        let err = validate_plugin_entry("/tmp/evil").unwrap_err();
+        assert!(err.contains("absolute"), "{err}");
     }
 }

@@ -1,0 +1,13 @@
+[plugin]
+name        = "audit-iso-29110"
+kind        = "audit"
+version     = "0.1.0"
+description = "ISO/IEC 29110 Basic profile audit — file-existence checks for the Very Small Entity (VSE) work products."
+compat      = ">=2.7.0"
+entry       = "audit.sh"
+
+# [config.schema] intentionally omitted. v1 reads every criterion from the
+# sibling `criteria.toml` (declaration order = report order, per BWOC-11
+# line 84). The only workspace-level surface is the universal `enabled` key
+# on `[plugins.audit-iso-29110]`. Future versions may add a `profile` key
+# (Entry vs Basic vs Intermediate) — when they do, declare it here.

@@ -1,0 +1,71 @@
+# ISO 9001:2015 — declared criteria (stub).
+#
+# Source: ISO 9001:2015 — Quality management systems — Requirements. See
+# SPEC.md for the full citation set. Clause numbers refer to the published
+# standard's main-body sections (clauses 4 through 10).
+#
+# Each `[criterion.<id>]` table documents one QMS practice the future
+# EPIC-3 runtime will check. `id` is kebab-case and plugin-scoped (BWOC-11).
+# Declaration order is the report order — do not reorder casually; renames
+# are a major version bump (PLUGINS.en.md §Stability).
+#
+# Fields:
+#   severity     — closed enum {info, low, medium, high, critical}.
+#   clause       — ISO 9001:2015 clause reference (e.g. "4.1", "9.2").
+#   title        — short ISO clause title.
+#   description  — one-line operator-facing summary of what EPIC-3 will check.
+#
+# audit.sh now backs these criteria with the v0.2.0 attestation runtime: each
+# criterion resolves to `pass`/`fail` from signed attestation evidence in
+# `.bwoc/workspace.toml` (missing or incomplete attestation → `fail`), not the
+# former `not_implemented` stub. The full table is authored up front so the
+# remaining clauses can gain runtime checks without renaming criteria
+# (stability contract).
+
+[criterion.9001-context-of-organization]
+severity    = "high"
+clause      = "4"
+title       = "Context of the organization"
+description = "Organization has documented its context, interested parties, and the scope of its QMS (clauses 4.1–4.3)."
+
+[criterion.9001-leadership-and-policy]
+severity    = "high"
+clause      = "5.2"
+title       = "Leadership and quality policy"
+description = "Top management has established a quality policy aligned with the organization's purpose and strategic direction."
+
+[criterion.9001-risks-and-opportunities]
+severity    = "high"
+clause      = "6.1"
+title       = "Actions to address risks and opportunities"
+description = "Risks and opportunities relevant to the QMS are identified and addressed in planning."
+
+[criterion.9001-competence-and-awareness]
+severity    = "medium"
+clause      = "7.2"
+title       = "Competence and awareness"
+description = "Personnel whose work affects QMS performance are competent and aware of the quality policy and their contribution."
+
+[criterion.9001-documented-information]
+severity    = "medium"
+clause      = "7.5"
+title       = "Documented information"
+description = "Documented information required by the standard and by the QMS is created, controlled, and maintained."
+
+[criterion.9001-internal-audit]
+severity    = "high"
+clause      = "9.2"
+title       = "Internal audit"
+description = "Internal audits are conducted at planned intervals to verify QMS conformity and effectiveness."
+
+[criterion.9001-management-review]
+severity    = "high"
+clause      = "9.3"
+title       = "Management review"
+description = "Top management reviews the QMS at planned intervals to ensure its continuing suitability, adequacy, effectiveness, and alignment with strategy."
+
+[criterion.9001-corrective-action]
+severity    = "medium"
+clause      = "10.2"
+title       = "Nonconformity and corrective action"
+description = "Nonconformities are reacted to, their causes evaluated, and corrective actions implemented and reviewed for effectiveness."

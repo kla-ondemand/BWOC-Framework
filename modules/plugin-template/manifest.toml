@@ -1,0 +1,22 @@
+# Template manifest — copied + substituted by `bwoc plugin init <name> --kind <kind>`.
+# Placeholders use the `{{camelCase}}` convention shared with
+# `modules/agent-template/` and `modules/skill-template/`. See SPEC.md
+# in this directory for the substitution table.
+#
+# This is ONE template for every plugin kind (memory-backend, llm-backend,
+# workflow, …) — `--kind` substitutes `{{pluginKind}}` rather than selecting
+# a per-kind subdirectory. The flat layout was settled in the Sprint 1
+# path-reconcile (see notes/2026-05-26_iso-compliance-plugins.md §Rejected).
+
+[plugin]
+name        = "{{pluginName}}"
+kind        = "{{pluginKind}}"
+version     = "{{pluginVersion}}"
+description = "{{pluginDescription}}"
+compat      = ">=2.5.0"
+entry       = "bwoc-plugin-{{pluginName}}"
+
+# [config.schema] — author-defined. Omit the table entirely if the plugin
+# takes no config beyond the universal `enabled` key. When the plugin reads
+# settings from `workspace.toml [plugins.{{pluginName}}]`, declare each key's
+# type + default here; the framework refuses unknown keys at load time.

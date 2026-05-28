@@ -995,6 +995,11 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// `council/council-sangha-7` plugin (BWOC-59) passes basic well-formedness.
 /// The council-specific manifest (voting_model / quorum) + Decision Schema
 /// validation lands in BWOC-60 (`audit_council`).
+/// `figma` (BWOC-62) is the eighth kind — a read-mostly design→dev
+/// integration, declared in the PLUGINS.en.md enum; recognized here so the
+/// reference `figma/figma-rest` plugin (BWOC-64) passes basic well-formedness.
+/// The figma-specific manifest + Asset Mapping Schema validation lands in
+/// BWOC-65.
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -1003,6 +1008,7 @@ const PLUGIN_KINDS: &[&str] = &[
     "jira",
     "okr",
     "council",
+    "figma",
 ];
 
 /// Closed severity enum for declared criteria. Source of truth:
@@ -1219,7 +1225,7 @@ pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
                     } else {
                         report.violations.push(format!(
                             "[contract].requires_plugins '{kind}' is not a valid plugin kind \
-                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr, council}})"
+                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}})"
                         ));
                     }
                 }
@@ -1328,7 +1334,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1336,7 +1342,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}}"
             ));
         }
     }
@@ -3657,6 +3663,56 @@ quorum       = "2/3"
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_figma_kind_accepted() {
+        // BWOC-64: the 'figma' kind (the eighth) is declared in the
+        // PLUGINS.en.md enum (BWOC-62); the validator must accept it so the
+        // reference figma-rest plugin passes its own `bwoc check`. The
+        // figma-specific manifest + Asset Mapping Schema validation lands in
+        // BWOC-65, so the optional [config.schema] table the manifest carries
+        // must be ignored, not rejected — the manifest passes clean now.
+        let dir = write_plugin_manifest(
+            "figma-kind",
+            "figma-rest",
+            r#"[plugin]
+name        = "figma-rest"
+kind        = "figma"
+version     = "0.1.0"
+description = "Read-mostly Figma REST adapter."
+compat      = ">=2.10.0"
+entry       = "figma.sh"
+
+[config.schema]
+export_dir = { type = "string", required = false, default = "figma/exports" }
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected 'figma' kind to be accepted, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_figma_reference_passes() {
+        // End-to-end: audit the actual shipped reference plugin
+        // (modules/plugins/figma/figma-rest/), not a fixture — this is the file
+        // `bwoc check --all` will validate in an operator workspace.
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/plugins/figma/figma-rest");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real figma-rest manifest must pass bwoc check, got: {:?}",
+            report.violations
+        );
     }
 
     #[test]

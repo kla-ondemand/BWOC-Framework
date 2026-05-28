@@ -15,6 +15,7 @@ mod banner;
 mod chat;
 mod check;
 mod completion;
+mod council;
 mod dashboard;
 mod deep_memory_cmd;
 mod doc_cmd;
@@ -231,6 +232,21 @@ enum Commands {
     /// Schema + `notes/2026-05-28_okr-plugin-architecture.md`.
     #[command(name = "okr", subcommand)]
     Okr(okr::OkrCommand),
+
+    /// Operate the `council` plugin kind (BWOC-EPIC-5): the framework's first
+    /// *coordination* kind. `propose` opens a decision (question + options,
+    /// participants drawn from a `bwoc team`); `discuss` adds a round turn,
+    /// routing it through the inbox transport (`bwoc send`) and recording the
+    /// envelope ref; `vote` appends an (append-only) vote; `resolve` tallies per
+    /// the plugin's declared voting model, checks quorum, and records the
+    /// outcome + any dissent (or abandons on quorum failure); `list`/`show` read.
+    /// The voting model + quorum come from the named `council`-kind plugin's
+    /// `[council]` manifest table (e.g. `council-sangha-7`, BWOC-59); a missing
+    /// plugin exits 4. Every verb has a `--json` twin. See
+    /// `docs/en/PLUGINS.en.md` §Council Decision Schema +
+    /// `notes/2026-05-28_council-plugin-architecture.md`.
+    #[command(name = "council", subcommand)]
+    Council(council::CouncilCommand),
 
     /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
     /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
@@ -2408,6 +2424,12 @@ fn main() -> ExitCode {
             // okr mirrors gcloud's dispatch — own arg structs in okr.rs;
             // exit-code convention there (0/1/2/4/255).
             let code = okr::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Council(sub)) => {
+            // council owns its arg structs in council.rs; exit-code convention
+            // there (0/1/2/3/4/255 — 3 = resolve reached quorum but no outcome).
+            let code = council::run(sub);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::A2a(sub)) => {

@@ -1,0 +1,16 @@
+[plugin]
+name        = "gcloud-project"
+kind        = "workflow"
+version     = "0.1.0"
+description = "Google Cloud (gcloud) project-context adapter — list / show / set-default for the local gcloud config; sources credential helpers from the sibling gcloud-auth plugin."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+
+# [config.schema] intentionally omitted.
+#
+# Project context is read live from `gcloud` (`gcloud projects list/describe`)
+# and the local config DB (`gcloud config get-value project`). Credentials are
+# resolved by the sibling `workflow/gcloud-auth` plugin's helpers — see this
+# plugin's `auth.toml` for the shape (no values). The only workspace-level
+# surface is the universal `enabled` key on `[plugins.gcloud-project]`. See
+# notes/2026-05-28_gcloud-workflow-plugin-architecture.md §Decisions 2 + 3.

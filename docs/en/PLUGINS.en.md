@@ -33,7 +33,7 @@ Pick the layer that matches *who turns it on*. If an individual agent's logic ca
 
 ## Plugin Kinds
 
-Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Five kinds ship with this spec:
+Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Six kinds ship with this spec:
 
 | Kind | What it extends | Lifecycle owner |
 |---|---|---|
@@ -42,12 +42,15 @@ Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework w
 | `workflow` | External system integrations (issue trackers, code review, CI) | The agent calling out |
 | `audit` | Inspection of the workspace against external standards (ISO/IEC 29110, ISO 9001, ISO 20000-1, ISO 27001) or operator-authored audits (license headers, doc parity, secret scans) | `bwoc audit` CLI |
 | `jira` | Bidirectional sync with an external issue tracker (Jira Cloud) — reads issues via JQL and **writes** status transitions, field updates, and sprint assignment back to the tracker | `bwoc jira` CLI |
+| `okr` | Tracking of operator-authored Objectives + Key Results — reads `objectives.toml` / `key_results.toml`, records progress, and emits a normative progress report | `bwoc okr` CLI |
 
 A plugin sets `kind` once. Cross-kind plugins are not supported — split them.
 
 The `audit` kind was added in `BWOC-EPIC-2`; for the rationale (why `audit`, not `compliance` or `policy`) and the ISO standards roadmap that motivates it, see the [BWOC-19 design note](../../notes/2026-05-26_iso-compliance-plugins.md).
 
 The `jira` kind was added in `BWOC-EPIC-6` as the framework's **first write-capable plugin kind** — an *integration adapter*, not a reporting kind. Every kind above it (`audit`, plus the planned reporting kinds) only **reads** the workspace and emits a report; `jira` reads **and writes** an external system of record. That single property — durable, hard-to-reverse external side-effects on `invoke` — is what sets it apart: it persists a sync ledger (`.scrum/jira-sync.json`), gates its write verbs behind operator confirmation, and carries a normative [Jira Issue Mapping Schema](#jira-issue-mapping-schema). For why it is a distinct kind rather than a `workflow` plugin, the auth model, JQL and rate-limit bounds, and the bidirectional conflict policy, see the [BWOC-40 design note](../../notes/2026-05-27_jira-plugin-architecture.md) — this spec declares the kind and the mapping schema and does not duplicate that rationale.
+
+The `okr` kind was added in `BWOC-EPIC-4` as the framework's third **reporting** kind, alongside `audit`. Where `audit` checks the *workspace* against an external standard and emits findings, `okr` tracks *operator-authored* Objectives + Key Results (`objectives.toml` / `key_results.toml`) and emits progress. It is **not** a `workflow` kind: it reaches no external system, holds no credential, and its only write — `track`, which updates a key result's `current` value — touches the operator's own local TOML, not a system of record, so it carries **no** operator-confirmation gate. It carries a normative [OKR Progress Schema](#okr-progress-schema) and **reuses the audit [Evidence kinds](#evidence-kinds)** rather than inventing its own — one evidence vocabulary across the framework. For why `okr` is a distinct kind rather than an `audit` or `workflow` plugin, the data shape, the `track` / `check-progress` / `report` verb contracts, and the `confidence`-as-enum decision, see the [BWOC-46 design note](../../notes/2026-05-28_okr-plugin-architecture.md) — this spec declares the kind and the progress schema and does not duplicate that rationale.
 
 ### What plugins are NOT
 
@@ -234,6 +237,48 @@ An entry for an unassigned backlog issue omits the optional fields it has no val
   "summary":     "Draft scrum-via-jira skill",
   "status":      "To Do",
   "last_synced": "2026-05-27T10:00:00Z"
+}
+```
+
+---
+
+## OKR Progress Schema
+
+An `okr` plugin tracks operator-authored Objectives + Key Results and emits a **progress entry** per key result. The schema below is normative — the reference plugin's `report` verb (per `BWOC-49`) and the `bwoc okr report` output (per `BWOC-48`) alike MUST emit entries conforming to this shape, and `bwoc check` (per `BWOC-50`) validates it. This is the `okr` kind's contract, the goal-tracking analogue of the [Audit Findings Schema](#audit-findings-schema) the `audit` kind carries.
+
+The objectives and key results themselves are operator-authored in two local TOML files (`objectives.toml`, `key_results.toml`); their authoring shape and the `track` / `check-progress` / `report` verb contracts live in the [BWOC-46 design note](../../notes/2026-05-28_okr-plugin-architecture.md) and are not duplicated here.
+
+### Fields
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `objective_id` | string | yes | The parent objective. **Referential** — MUST resolve to an `objective_id` declared in `objectives.toml`; a dangling reference is a plugin bug that fails `bwoc check`, not operator state. |
+| `key_result_id` | string | yes | The stable key for this key result, unique within the plugin. The one field a consumer (a dashboard, diff tooling) may treat as a durable identifier. |
+| `target` | number | yes | The goal value the key result aims for. |
+| `current` | number | yes | The latest tracked value. Updated by the `track` verb; never exceeds nor is clamped to `target` — over-attainment (`current > target`) is meaningful and preserved. |
+| `unit` | enum | yes | One of `count` \| `percent` \| `currency` \| `ratio` \| `boolean`. How `target` / `current` are read. |
+| `confidence` | enum | yes | One of `high` \| `medium` \| `low` — the operator's qualitative read of whether the trajectory holds. An enum, not a numeric score, by deliberate choice (BWOC-46 §5): attainment carries the quantitative signal, `confidence` the qualitative one. |
+| `evidence` | object | yes | **Reuses the audit [Evidence kinds](#evidence-kinds)** — `{ kind, value, ...kind-specific fields }` where `kind ∈ { "file", "content", "command", "attestation", "sample", "none" }`. The Musāvāda guard applies: a tracked `current` value should carry a reproducible referent (or `kind = "none"` when none exists). No OKR-specific evidence kinds are introduced. |
+| `as_of` | string (ISO 8601 date) | no | When `current` was last tracked. Omitted when never tracked. |
+
+Optional fields are **omitted from the entry** when they have no value — a never-tracked key result carries no `as_of` key — never serialized as `null`, mirroring the Audit Findings and Jira Issue Mapping conventions.
+
+### Field stability
+
+`key_result_id` is the stable key — the mapping a consumer may key on durably. `objective_id` is a stable reference (it points at an objective by its declared id). The remaining fields (`target`, `current`, `unit`, `confidence`, `evidence`, `as_of`) are mutable projections of tracking state, refreshed as the operator authors targets and the `track` verb records progress; never key on them. `current` and `confidence` in particular change every check-in.
+
+### Example
+
+```json
+{
+  "objective_id":  "O1",
+  "key_result_id": "O1-KR1",
+  "target":        1,
+  "current":       1,
+  "unit":          "count",
+  "confidence":    "high",
+  "evidence":      { "kind": "file", "value": "docs/en/PLUGINS.en.md" },
+  "as_of":         "2026-05-28"
 }
 ```
 

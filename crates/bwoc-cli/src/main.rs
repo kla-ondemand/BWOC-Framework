@@ -20,6 +20,7 @@ mod deep_memory_cmd;
 mod doc_cmd;
 mod doctor;
 mod fleet;
+mod gcloud;
 mod git_worktree;
 mod help;
 mod i18n;
@@ -207,6 +208,17 @@ enum Commands {
     /// Every verb has a `--json` twin. See `docs/en/PLUGINS.en.md`.
     #[command(name = "jira", subcommand)]
     Jira(jira::JiraCommand),
+
+    /// Operate the `workflow/gcloud-*` plugins (BWOC-EPIC-8 foundation): show
+    /// active credential source + account email (`auth status`), list / show /
+    /// `set-default` projects (`project ...`), or get the combined view
+    /// (`status`). Read-mostly; `project set-default` is a gated write to the
+    /// local `gcloud` config. Live verbs dispatch to `workflow/gcloud-auth` and
+    /// `workflow/gcloud-project` plugins; without one, the live verb exits 4
+    /// (`status` keeps working offline). Every verb has a `--json` twin. See
+    /// `notes/2026-05-28_gcloud-workflow-plugin-architecture.md`.
+    #[command(name = "gcloud", subcommand)]
+    Gcloud(gcloud::GcloudCommand),
 
     /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
     /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
@@ -2366,6 +2378,12 @@ fn main() -> ExitCode {
             // unit-testable; dispatch is a thin hand-off. Exit-code convention
             // is documented in jira.rs (0/1/2/3/4/255).
             let code = jira::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Gcloud(sub)) => {
+            // gcloud mirrors jira's dispatch — own arg structs in gcloud.rs;
+            // exit-code convention there (0/1/2/4/255).
+            let code = gcloud::run(sub);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::A2a(sub)) => {

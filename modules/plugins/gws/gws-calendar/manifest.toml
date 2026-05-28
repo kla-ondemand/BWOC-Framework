@@ -1,0 +1,14 @@
+[plugin]
+name        = "gws-calendar"
+kind        = "gws"
+version     = "0.1.0"
+description = "Reference gws plugin — read-mostly Google Calendar adapter: lists the calendars a token can see (calendarList.list) and lists events on a calendar (events.list), each projected into the normative Calendar event shape. Never creates or modifies events. Sources the OAuth credential helpers from the sibling gws-auth foundation; requires the calendar.readonly scope."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+
+# [config.schema] intentionally omitted.
+#
+# This plugin holds no config of its own. Credentials resolve at runtime through
+# the sibling gws-auth foundation (BWOC_GWS_TOKEN env / .bwoc/secrets/gws-token.json),
+# never from workspace config. The only workspace-level surface is the universal
+# `enabled` key on [plugins.gws-calendar]. See SPEC.md §Configuration.

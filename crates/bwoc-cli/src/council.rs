@@ -420,6 +420,24 @@ impl Quorum {
     }
 }
 
+/// Validate a `[council].voting_model` value against the runtime tally's model
+/// set. The single source of truth shared by the runtime (`discover_plugin`,
+/// which routes through `VotingModel::parse` too) and the static manifest check
+/// (`check.rs`, BWOC-60), so the static audit and the runtime cannot drift on
+/// which models are recognized — the same contract `util::validate_plugin_entry`
+/// establishes for the plugin entry path.
+pub(crate) fn validate_voting_model(voting_model: &str) -> Result<(), String> {
+    VotingModel::parse(voting_model).map(|_| ())
+}
+
+/// Validate a `[council].quorum` declaration (a TOML integer count or an `"n/m"`
+/// fraction string) against the runtime parser. Shared single source of truth
+/// with `discover_plugin` (`quorum_to_string` + `Quorum::parse`) so a quorum the
+/// runtime would reject cannot pass `bwoc check`, and vice versa (BWOC-60).
+pub(crate) fn validate_quorum(quorum: &toml::Value) -> Result<(), String> {
+    Quorum::parse(&quorum_to_string(quorum)?).map(|_| ())
+}
+
 // ---------------------------------------------------------------------------
 // Tally — pure, unit-tested. Decides resolved / abandoned / inconclusive.
 // ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ mod livecheck;
 mod log;
 mod memory;
 mod new;
+mod okr;
 mod peer;
 mod ping;
 mod plugin;
@@ -219,6 +220,17 @@ enum Commands {
     /// `notes/2026-05-28_gcloud-workflow-plugin-architecture.md`.
     #[command(name = "gcloud", subcommand)]
     Gcloud(gcloud::GcloudCommand),
+
+    /// Operate the `okr` plugin kind (BWOC-EPIC-4): list installed okr plugins,
+    /// show a plugin's SPEC + objectives summary, `track` a key result's current
+    /// value (a local-file write to the operator's own `key_results.toml`, so
+    /// no confirmation gate), or `report` the OKR Progress Schema JSON for every
+    /// key result. Verbs dispatch to an installed `okr`-kind plugin (e.g.
+    /// `workspace-okrs`, BWOC-49); a missing plugin exits 4 with an install hint.
+    /// Every verb has a `--json` twin. See `docs/en/PLUGINS.en.md` §OKR Progress
+    /// Schema + `notes/2026-05-28_okr-plugin-architecture.md`.
+    #[command(name = "okr", subcommand)]
+    Okr(okr::OkrCommand),
 
     /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
     /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
@@ -2390,6 +2402,12 @@ fn main() -> ExitCode {
             // gcloud mirrors jira's dispatch — own arg structs in gcloud.rs;
             // exit-code convention there (0/1/2/4/255).
             let code = gcloud::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Okr(sub)) => {
+            // okr mirrors gcloud's dispatch — own arg structs in okr.rs;
+            // exit-code convention there (0/1/2/4/255).
+            let code = okr::run(sub);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::A2a(sub)) => {

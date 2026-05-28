@@ -985,8 +985,18 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// `jira` (BWOC-43) is the first write-capable integration kind; it is
 /// already declared in the PLUGINS.en.md enum (BWOC-41), so the validator
 /// recognizes it here too — otherwise the reference jira plugin would fail
-/// its own `bwoc check`.
-const PLUGIN_KINDS: &[&str] = &["memory-backend", "llm-backend", "workflow", "audit", "jira"];
+/// its own `bwoc check`. `okr` (BWOC-47) is the third reporting kind,
+/// declared in the PLUGINS.en.md enum; recognized here so the reference
+/// `okr/workspace-okrs` plugin (BWOC-49) passes basic well-formedness. The
+/// okr-specific manifest + Progress Schema validation lands in BWOC-50.
+const PLUGIN_KINDS: &[&str] = &[
+    "memory-backend",
+    "llm-backend",
+    "workflow",
+    "audit",
+    "jira",
+    "okr",
+];
 
 /// Closed severity enum for declared criteria. Source of truth:
 /// PLUGINS.en.md §"Audit Findings Schema" — five-level scale matching
@@ -1185,7 +1195,7 @@ pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
                     } else {
                         report.violations.push(format!(
                             "[contract].requires_plugins '{kind}' is not a valid plugin kind \
-                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira}})"
+                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr}})"
                         ));
                     }
                 }
@@ -1294,7 +1304,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1302,7 +1312,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr}}"
             ));
         }
     }

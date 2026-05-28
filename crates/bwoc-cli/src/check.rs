@@ -1370,8 +1370,16 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     // with the same fail-closed secret-leak guard jira uses, adapted to the
     // `[sources]` shape (notes/2026-05-28_gcloud-workflow-plugin-architecture.md
     // §Decision 3). Workflow plugins without an auth.toml are not audited.
+    //
+    // Write-verb gate metadata audit (BWOC-70). A write-capable workflow plugin
+    // (the EPIC-9 `gcloud-compute` lifecycle slice) declares one `[[verb]]` table
+    // per verb with its `write` classification + the operator-confirm gate, so
+    // the CLI gate (BWOC-68) and this audit can tell a remote-mutating verb from
+    // a free read. Validate the metadata is declared + well-formed. Read-only
+    // workflow plugins declare no `[[verb]]` array and are not audited here.
     if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("workflow") {
         audit_workflow_auth(plugin_dir, &mut report);
+        audit_workflow_verbs(&raw, &mut report);
     }
 
     // OKR data audit (BWOC-50). okr-kind plugins (the reference `workspace-okrs`)
@@ -2605,6 +2613,140 @@ fn audit_workflow_auth(plugin_dir: &Path, report: &mut AuditReport) {
                     "[sources].{src}.priority has wrong type — expected an integer precedence rank"
                 ));
             }
+        }
+    }
+}
+
+/// Validate the write-verb gate metadata declared in a `workflow`-kind plugin's
+/// manifest (BWOC-70). Source of truth: PLUGINS.en.md §"Write verbs — the
+/// operator-confirm gate" (BWOC-67) + the BWOC-66 gcloud-compute risk matrix
+/// (notes/2026-05-28_gcloud-compute-write-verbs.md).
+///
+/// A write-capable workflow plugin (the EPIC-9 `gcloud-compute` lifecycle slice)
+/// declares one `[[verb]]` table per verb so the `bwoc <cli>` gate (BWOC-68) and
+/// `bwoc check` (this audit) can see which verbs mutate external state. The
+/// metadata is the static contract; this audit confirms it is declared and
+/// well-formed before any `invoke`:
+///
+///   1. `name`  — non-empty string, unique across the verb set.
+///   2. `write` — boolean; the write classification itself. Its absence is the
+///      gap this audit closes — an undeclared classification means the CLI gate
+///      cannot tell a remote-mutating verb from a free read.
+///   3. `confirm` — required `"operator"` on every `write = true` verb (the
+///      normative operator-confirm gate). A write verb missing it would be
+///      reachable without the documented confirmation. Read verbs (`write =
+///      false`) carry no gate — a `confirm` on one is contradictory metadata
+///      (warned, not failed; read verbs are free).
+///
+/// Read-only workflow plugins (the EPIC-8 `gcloud-auth` / `gcloud-project`)
+/// declare no `[[verb]]` array; their absence is not audited (mirrors
+/// `audit_workflow_auth`'s treatment of a missing `auth.toml`).
+fn audit_workflow_verbs(raw: &toml::Value, report: &mut AuditReport) {
+    let verbs = match raw.get("verb") {
+        Some(toml::Value::Array(a)) => a,
+        // A workflow plugin may be read-only — no verb metadata to validate.
+        None => return,
+        Some(_) => {
+            report
+                .violations
+                .push("[[verb]] has wrong type — expected an array of verb tables".to_string());
+            return;
+        }
+    };
+    if verbs.is_empty() {
+        report.violations.push(
+            "[[verb]] declared but empty — verb metadata must name at least one verb".to_string(),
+        );
+        return;
+    }
+    report.passes.push(format!(
+        "[[verb]] write-gate metadata declared ({} verbs)",
+        verbs.len()
+    ));
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for (i, verb) in verbs.iter().enumerate() {
+        let table = match verb.as_table() {
+            Some(t) => t,
+            None => {
+                report
+                    .violations
+                    .push(format!("[[verb]] entry #{} is not a table", i + 1));
+                continue;
+            }
+        };
+
+        // name — non-empty string, unique across the verb set.
+        let name = match table.get("name") {
+            Some(toml::Value::String(s)) if !s.is_empty() => {
+                if !seen.insert(s.clone()) {
+                    report
+                        .violations
+                        .push(format!("[[verb]].name '{s}' is declared more than once"));
+                }
+                s.clone()
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "[[verb]] entry #{} has an empty or non-string 'name'",
+                    i + 1
+                ));
+                continue;
+            }
+            None => {
+                report
+                    .violations
+                    .push(format!("[[verb]] entry #{} missing required 'name'", i + 1));
+                continue;
+            }
+        };
+
+        // write — the classification boolean. Its presence is the whole point of
+        // the gate metadata; without it the CLI cannot gate the verb.
+        let is_write = match table.get("write") {
+            Some(toml::Value::Boolean(b)) => {
+                report
+                    .passes
+                    .push(format!("[[verb]] '{name}' declares write = {b}"));
+                *b
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "[[verb]] '{name}'.write has wrong type — expected a boolean write classification"
+                ));
+                continue;
+            }
+            None => {
+                report.violations.push(format!(
+                    "[[verb]] '{name}' missing 'write' — every workflow verb must declare its write \
+                     classification (PLUGINS.en.md §Write verbs)"
+                ));
+                continue;
+            }
+        };
+
+        // confirm — required "operator" on writes; forbidden (redundant) on reads.
+        match (is_write, table.get("confirm")) {
+            (true, Some(toml::Value::String(s))) if s == "operator" => report.passes.push(format!(
+                "[[verb]] '{name}' write carries the operator-confirm gate"
+            )),
+            (true, Some(toml::Value::String(s))) => report.violations.push(format!(
+                "[[verb]] '{name}'.confirm '{s}' is not 'operator' — a write verb's only gate mode \
+                 is operator-confirm (PLUGINS.en.md §Write verbs)"
+            )),
+            (true, Some(_)) => report.violations.push(format!(
+                "[[verb]] '{name}'.confirm has wrong type — expected the string \"operator\""
+            )),
+            (true, None) => report.violations.push(format!(
+                "[[verb]] '{name}' is a write but declares no confirm gate — write verbs MUST carry \
+                 confirm = \"operator\" (PLUGINS.en.md §Write verbs)"
+            )),
+            (false, Some(_)) => report.warnings.push(format!(
+                "[[verb]] '{name}' is a read (write = false) but declares a confirm gate — read \
+                 verbs are free; the gate is redundant"
+            )),
+            // Read verb, no gate — correct and frictionless.
+            (false, None) => {}
         }
     }
 }
@@ -5632,6 +5774,54 @@ entry       = "bin"
     }
 
     #[test]
+    fn audit_plugin_manifest_real_gcloud_compute_reference_passes() {
+        // End-to-end (BWOC-70): audit the actual shipped workflow/gcloud-compute
+        // reference plugin — the first write-capable gcloud slice (EPIC-9) —
+        // exactly as `bwoc check --all` does in an operator workspace.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../modules/plugins/workflow/gcloud-compute");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real gcloud-compute manifest must pass bwoc check, got: {:?}",
+            report.violations
+        );
+        // The write-verb gate metadata must have actually been exercised, not
+        // skipped: the verb array is declared and the two write verbs carry the
+        // operator-confirm gate.
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "expected the gcloud-compute verb metadata to be validated, got: {:?}",
+            report.passes
+        );
+        for verb in ["start", "stop"] {
+            assert!(
+                report
+                    .passes
+                    .iter()
+                    .any(|p| p
+                        == &format!("[[verb]] '{verb}' write carries the operator-confirm gate")),
+                "expected write verb '{verb}' to carry the operator-confirm gate, got: {:?}",
+                report.passes
+            );
+        }
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p == "[[verb]] 'list' declares write = false"),
+            "expected read verb 'list' to declare write = false, got: {:?}",
+            report.passes
+        );
+    }
+
+    #[test]
     fn audit_skill_manifest_real_gcloud_ops_reference_passes() {
         // The gcloud-ops skill is the framework's first skill-on-MULTIPLE-plugins
         // (requires_plugins = ["workflow"], kind-level). Its manifest must pass
@@ -5778,6 +5968,208 @@ service_account = { path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }
         assert!(
             !report.passes.iter().any(|p| p == "auth.toml present"),
             "absent auth.toml must not be reported as present"
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- BWOC-70: workflow write-verb gate metadata validation -------------
+
+    /// A write-capable workflow plugin manifest header (the gcloud-compute
+    /// shape), reused by the verb-metadata fixtures below. Tests append their
+    /// own `[[verb]]` tables.
+    const COMPUTE_MANIFEST_HEADER: &str = r#"[plugin]
+name        = "gcloud-compute"
+kind        = "workflow"
+version     = "0.1.0"
+description = "gcloud Compute Engine instance-lifecycle adapter."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+"#;
+
+    fn compute_manifest_with(verbs: &str) -> String {
+        format!("{COMPUTE_MANIFEST_HEADER}{verbs}")
+    }
+
+    #[test]
+    fn audit_workflow_verbs_well_formed_passes() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "list"
+write = false
+
+[[verb]]
+name    = "start"
+write   = true
+confirm = "operator"
+
+[[verb]]
+name    = "stop"
+write   = true
+confirm = "operator"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-ok", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "well-formed verb metadata must pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "expected the verb metadata to be reported as declared, got: {:?}",
+            report.passes
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_missing_write_classification_fails() {
+        // The whole point of the gate metadata: a verb that omits its write
+        // classification cannot be gated by the CLI — fail closed.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name = "start"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-no-write", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start' missing 'write'")),
+            "a verb without a write classification must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_write_without_confirm_gate_fails() {
+        // A write verb that declares no operator-confirm gate would be reachable
+        // without the documented confirmation — the core BWOC-67 violation.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "start"
+write = true
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-no-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start' is a write but declares no confirm gate")),
+            "a write verb without a confirm gate must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_non_operator_confirm_fails() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name    = "start"
+write   = true
+confirm = "auto"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-bad-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start'.confirm 'auto' is not 'operator'")),
+            "a non-operator confirm mode on a write verb must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_read_with_confirm_warns_not_fails() {
+        // Read verbs are free; a confirm gate on one is contradictory metadata
+        // but not a security risk — warn, do not fail.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name    = "list"
+write   = false
+confirm = "operator"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-read-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a read verb with a redundant gate must not fail, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("'list' is a read") && w.contains("redundant")),
+            "expected a redundant-gate warning on the read verb, got: {:?}",
+            report.warnings
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_duplicate_name_fails() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "list"
+write = false
+
+[[verb]]
+name  = "list"
+write = false
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-dup", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'list' is declared more than once")),
+            "a duplicate verb name must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_absent_array_not_audited() {
+        // A read-only workflow plugin (gcloud-auth / gcloud-project) declares no
+        // verb metadata — its absence is not a violation (mirrors absent auth.toml).
+        let dir = write_plugin_manifest("wf-verbs-none", "gcloud-auth", WORKFLOW_MANIFEST);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a workflow plugin without verb metadata must still pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            !report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "absent verb metadata must not be reported as declared"
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
     }

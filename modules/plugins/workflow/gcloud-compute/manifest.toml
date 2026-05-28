@@ -1,0 +1,39 @@
+[plugin]
+name        = "gcloud-compute"
+kind        = "workflow"
+version     = "0.1.0"
+description = "Google Cloud (gcloud) Compute Engine instance-lifecycle adapter — list / start / stop instances; sources credential helpers from the sibling gcloud-auth plugin. First write-capable gcloud slice (EPIC-9)."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+
+# Verb metadata (BWOC-66 risk matrix). Declares each verb's write
+# classification so the `bwoc gcloud compute` CLI gate (BWOC-68) and
+# `bwoc check` (BWOC-70) can see which verbs mutate remote infrastructure
+# state. A `write = true` verb carries the normative operator-confirm gate
+# (docs/en/PLUGINS.en.md §"Write verbs — the operator-confirm gate"): the gate
+# lives at the CLI boundary, and this plugin additionally refuses a write
+# unless the CLI-set confirmation marker `BWOC_GCLOUD_CONFIRM` is present
+# (design note §Decision 3 — no gate-bypass via direct plugin invoke). Read
+# verbs are free. `delete` is deliberately NOT shipped (deferred, §Decision 2).
+[[verb]]
+name  = "list"
+write = false
+
+[[verb]]
+name    = "start"
+write   = true
+confirm = "operator"
+
+[[verb]]
+name    = "stop"
+write   = true
+confirm = "operator"
+
+# [config.schema] intentionally omitted.
+#
+# Compute output is `gcloud`'s own JSON surfaced through — BWOC owns no Compute
+# Mapping schema (a `workflow` passthrough, design note §Decision 1/4).
+# Credentials are resolved by the sibling `workflow/gcloud-auth` plugin's
+# helpers; this plugin holds no auth of its own and ships no `auth.toml`
+# (§Decision 4). The only workspace-level surface is the universal `enabled`
+# key on `[plugins.gcloud-compute]`.

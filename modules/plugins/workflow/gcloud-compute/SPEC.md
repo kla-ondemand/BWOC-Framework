@@ -13,7 +13,7 @@ maturity: L1
 
 # gcloud-compute — Google Cloud Compute Engine Lifecycle
 
-> [!abstract] The first **write-capable** reference `workflow` plugin for the GCP family (`BWOC-EPIC-9`). It owns **Compute Engine instance lifecycle** — listing instances, starting one, stopping one. Verbs: `list` (read), `start` / `stop` (**write — operator-confirm gated in the CLI**, and additionally guarded here by the CLI-set confirmation marker `BWOC_GCLOUD_CONFIRM`). `delete` is deliberately **not** shipped (deferred — irreversible). Sources credential helpers from the sibling [[../gcloud-auth/SPEC|`gcloud-auth`]] plugin. Full framing: [[../../../notes/2026-05-28_gcloud-compute-write-verbs|BWOC-66 design note]].
+> [!abstract] The first **write-capable** reference `workflow` plugin for the GCP family (`BWOC-EPIC-9`). It owns **Compute Engine instance lifecycle** — listing instances, starting one, stopping one. Verbs: `list` (read), `start` / `stop` (**write — operator-confirm gated in the CLI**, and additionally guarded here by the CLI-set confirmation marker `confirmed: true` in the request). `delete` is deliberately **not** shipped (deferred — irreversible). Sources credential helpers from the sibling [[../gcloud-auth/SPEC|`gcloud-auth`]] plugin. Full framing: [[../../../notes/2026-05-28_gcloud-compute-write-verbs|BWOC-66 design note]].
 
 ## Why a write-capable `workflow` plugin
 
@@ -26,8 +26,8 @@ EPIC-8 shipped a read-mostly gcloud foundation (`gcloud-auth` + `gcloud-project`
 | Operation | Direction | Auth | `gcloud` shell-out | Gate |
 |---|---|---|---|---|
 | `list` | read | required | `gcloud compute instances list --format=json` (optional `--zones=` / `--project=` filters) | none |
-| `start` | **write** | required | `gcloud compute instances start --zone=<z> [--project=<p>] --format=json -- <name>` — boots a VM (incurs cost) | **operator-confirm** (in the `bwoc gcloud compute` CLI — BWOC-68) + confirmation-marker guard here |
-| `stop` | **write** | required | `gcloud compute instances stop --zone=<z> [--project=<p>] --format=json -- <name>` — halts a VM (interrupts workloads) | **operator-confirm** + confirmation-marker guard |
+| `start` | **write** | required | `gcloud compute instances start --zone=<z> [--project=<p>] --format=json -- <name>` — boots a VM (incurs cost) | **operator-confirm** (in the `bwoc gcloud compute` CLI — BWOC-68) + `confirmed: true` marker guard here |
+| `stop` | **write** | required | `gcloud compute instances stop --zone=<z> [--project=<p>] --format=json -- <name>` — halts a VM (interrupts workloads) | **operator-confirm** + `confirmed: true` marker guard |
 
 `start` / `stop` are reversible (each undoes the other). `delete` — irreversible (loses the instance + disks) — is **excluded** from EPIC-9 and deferred to a future slice with a stronger gate (design note §Decision 2). Read verbs carry **no** gate.
 
@@ -35,7 +35,7 @@ EPIC-8 shipped a read-mostly gcloud foundation (`gcloud-auth` + `gcloud-project`
 
 Per [[../../../docs/en/PLUGINS.en#Write verbs — the operator-confirm gate (normative)|PLUGINS.en.md §Write verbs]], the operator-confirm gate lives at the **CLI boundary** (`bwoc gcloud compute`, BWOC-68) — one confirmation point, shown before acting (target, zone, current state, the literal `gcloud` command), default **No**, `--yes` for non-interactive contexts. This plugin does **not** re-prompt.
 
-It **does** carry a defense-in-depth guard (design note §Decision 3): the write verbs refuse to execute unless the CLI-set confirmation marker `BWOC_GCLOUD_CONFIRM` is present (non-empty) in the environment. So a direct plugin invocation — bypassing the CLI gate — is refused with a structured "no change" envelope (`ok: false`, `changed: false`, `reason: "unconfirmed-write"`) rather than a silent write or a bare failure (Dhammānupassanā). The marker is the only coupling between the gate and the plugin; the manifest's `[[verb]]` table declares which verbs are writes so both `bwoc check` (BWOC-70) and the CLI gate can see the classification.
+It **does** carry a defense-in-depth guard (design note §Decision 3): the write verbs refuse to execute unless the CLI-set confirmation marker `confirmed: true` is present in the stdin request (the `bwoc gcloud compute` CLI adds it only after the operator-confirm gate passes — BWOC-68 `compute_write_request`). So a direct plugin invocation — bypassing the CLI gate — is refused with a structured "no change" envelope (`ok: false`, `changed: false`, `reason: "unconfirmed-write"`) rather than a silent write or a bare failure (Dhammānupassanā). The marker is the only coupling between the gate and the plugin; the manifest's `[[verb]]` table declares which verbs are writes so both `bwoc check` (BWOC-70) and the CLI gate can see the classification.
 
 ## How it runs
 
@@ -44,10 +44,10 @@ The `bwoc gcloud compute` CLI (`BWOC-68`) spawns `gcloud.sh` from this directory
 | Channel | What it carries |
 |---|---|
 | `BWOC_GCLOUD_OPERATION` (env) | `list` \| `start` \| `stop` — fallback for `.operation` when stdin is empty. |
-| `BWOC_GCLOUD_CONFIRM` (env) | Write-confirmation marker — set to a non-empty value by the CLI **after** the operator confirms a write. Read verbs ignore it; `start` / `stop` refuse without it. |
 | `BWOC_WORKSPACE` (env) | Absolute workspace root; the sibling SA JSON path resolves under it. |
 | `BWOC_PLUGIN_DIR` (env) | Absolute path to this plugin's directory; used to find the sibling helpers at `../gcloud-auth/gcloud.sh`. |
-| stdin | One-line JSON, e.g. `{"operation":"list"}`, `{"operation":"start","instance":"vm-1","zone":"us-central1-a"}`, `{"operation":"stop","instance":"vm-1","zone":"us-central1-a","project":"my-proj"}`. |
+| stdin | One-line JSON, e.g. `{"operation":"list"}`, `{"operation":"start","instance":"vm-1","zone":"us-central1-a","confirmed":true}`, `{"operation":"stop","instance":"vm-1","zone":"us-central1-a","project":"my-proj","confirmed":true}`. |
+| `.confirmed` (in the stdin JSON) | Write-confirmation marker — set to `true` by the CLI **after** the operator confirms a write. Read verbs ignore it; `start` / `stop` refuse without it. |
 
 On success: exit `0`, one JSON object on stdout. On error: human diagnostic on stderr + non-zero exit.
 
@@ -107,11 +107,11 @@ Unlike the sibling plugins, `gcloud-compute` ships **no** `auth.toml` — it hol
   "operation": "start",
   "changed": false,
   "reason": "unconfirmed-write",
-  "message": "write verb 'start' requires operator confirmation; the bwoc gcloud compute CLI sets BWOC_GCLOUD_CONFIRM after a y/N prompt. Direct plugin invocation of a write verb is refused — no instance was changed."
+  "message": "write verb 'start' requires operator confirmation; the bwoc gcloud compute CLI sets the confirmation marker (\"confirmed\": true) in the request after a y/N prompt. Direct plugin invocation of a write verb is refused — no instance was changed."
 }
 ```
 
-Emitted (exit `5`) when a write verb is invoked without `BWOC_GCLOUD_CONFIRM`. In the normal CLI path the marker is always set after the operator confirms, so this only fires on a direct-invoke bypass.
+Emitted (exit `5`) when a write verb is invoked without `confirmed: true` in the request. In the normal CLI path the marker is always set after the operator confirms, so this only fires on a direct-invoke bypass.
 
 ## Error classes
 
@@ -121,7 +121,7 @@ Emitted (exit `5`) when a write verb is invoked without `BWOC_GCLOUD_CONFIRM`. I
 | `1` | dependency | `jq` missing, or sibling `gcloud-auth/gcloud.sh` not installed alongside, or `gcloud` missing (per `gcloud_assert_cli`). |
 | `2` | usage | Unknown operation, or `start` / `stop` invoked without `.instance` or `.zone`. |
 | `3` | not-authenticated | No active `gcloud` credential (per `gcloud_assert_authenticated`). |
-| `5` | unconfirmed-write | A write verb (`start` / `stop`) invoked without the `BWOC_GCLOUD_CONFIRM` marker — refused, no change made. |
+| `5` | unconfirmed-write | A write verb (`start` / `stop`) invoked without the `confirmed: true` marker — refused, no change made. |
 | `6` | gcloud-error | The underlying `gcloud compute` command failed (e.g. instance not found, permission denied, 4xx); the truncated diagnostic is on stderr. |
 
 Missing `gcloud` CLI fails **gracefully**: a clear stderr message + non-zero exit; the plugin never panics.

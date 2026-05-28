@@ -58,6 +58,19 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 
 ประเภท `figma` เพิ่มเข้ามาใน `BWOC-EPIC-7` เป็น integration แบบ **อ่านเป็นหลัก (read-mostly)** กับ Figma REST API เช่นเดียวกับ `jira` (และต่างจาก `gcloud` ที่ reuse `workflow`) มันได้ kind ของตัวเองเพราะพก [สคีมา Figma Asset Mapping](#สคีมา-figma-asset-mapping) ที่เป็น normative — ความสัมพันธ์ที่ BWOC เป็นเจ้าของ ผูก Figma node กับ artifact ที่ export + design token; กฎคือ **ได้ kind ของตัวเองเมื่อ BWOC นิยาม normative schema เหนือ integration, reuse `workflow` เมื่อเป็น passthrough ที่ไม่มี shape ที่ BWOC เป็นเจ้าของ** ต่างจาก `jira`, `figma` ไม่เคยเขียนกลับไประบบภายนอก: ทุก verb อ่าน Figma (`fetch` / `tokens` / `status`) หรือเขียน **ในเครื่อง** (`export` วางรูป content-addressable ใต้ `figma/exports/`) จึงพกวินัย schema ของ jira แต่ไม่มี bidirectional-sync machinery — ไม่มี ledger, conflict policy, operator-confirm gate Auth เป็น personal access token ของ operator (`BWOC_FIGMA_TOKEN` env / `.bwoc/secrets.toml`, shape-only ใน `auth.toml`, ไม่เคย commit) auth model, ขอบเขต file-vs-team-library, การจัดการ REST rate-limit, และกลยุทธ์ export caching ดู [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) — spec นี้ประกาศ kind และ asset schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
 
+### Write verb — operator-confirm gate (normative)
+
+verb ส่วนใหญ่อ่าน **write verb** — verb ที่ `invoke` แล้วเกิด side-effect ที่ durable นอก address space ของ plugin เอง — พก **operator-confirm gate ที่เป็น normative** pattern นี้ใช้ร่วมกันทุก write-capable plugin ไม่ว่า kind ไหน: `jira` (`transition` / `sync`), `workflow/gcloud-project` (`set-default`, config ในเครื่อง), และ instance lifecycle ของ `workflow/gcloud-compute` (`start` / `stop`, เพิ่มใน `BWOC-EPIC-9`, ตาม [bemindlabs#96])
+
+สัญญาของ gate:
+
+1. **gate อยู่ที่ operator boundary — คำสั่ง `bwoc <cli>` ไม่ใช่ plugin** confirmation จุดเดียวต่อ write; plugin execute ตอนถูก invoke ไม่ re-implement (และไม่ bypass) gate
+2. **แสดง effect ที่แน่นอนก่อนทำ** — target, สถานะปัจจุบัน, และคำสั่งภายนอกตามจริงที่จะรัน (สำหรับ plugin ที่ shell-out ใช้ `--` separator เพื่อให้ค่าจาก user ไม่ถูกตีความเป็น flag)
+3. **default คือ No** operator แบบ interactive ตอบ prompt `y/N` context แบบ non-interactive (headless agent) ต้องส่ง `--yes` ชัดเจน ซึ่ง agent ตั้ง **เฉพาะ** เมื่อ operator authorize action นั้น — ไม่เคย auto-set
+4. **write ที่ถูกปฏิเสธ/ยังไม่ confirm รายงาน "no change" พร้อมเหตุผล** (Dhammānupassanā) ไม่ใช่ bare failure หรือ silent write
+
+read verb **ไม่มี** gate — ฟรี **verb ที่ destructive + irreversible** (เช่น `delete`) ถูกถือมาตรฐานสูงกว่า start/stop และ introduce แบบจงใจ per-slice พร้อม gate ที่แข็งแกร่งกว่า — ไม่ ship แค่เพราะอยู่ติดกับ reversible write ดู risk matrix ของ verb แต่ละชุดใน design note (เช่น [BWOC-66 gcloud-compute note](../../notes/2026-05-28_gcloud-compute-write-verbs.md))
+
 ### สิ่งที่ Plugin ไม่ใช่
 
 - **ไม่ใช่ช่องโหว่สำหรับ logic เฉพาะ vendor ใน framework** ห้า backend ที่ประกาศเป็น first-class อยู่ใน spec ไม่ใช่ plugin คำพูดเฉพาะ vendor ใน `AGENTS.md` ยังห้ามอยู่ (**Samānattatā**)

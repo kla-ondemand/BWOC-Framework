@@ -195,6 +195,18 @@ agents/*/.bwoc/inbox.cursor
 # default is to keep them tracked.
 # agents/*/.bwoc/inbox.jsonl
 
+# BWOC workspace — secret store (BWOC-53)
+#
+# Path convention for plugins that resolve credentials from disk —
+# e.g. workflow/gcloud-auth + workflow/gcloud-project read
+# `.bwoc/secrets/gcloud-sa.json`. Both the directory and the specific
+# file are listed so the intent is explicit at the exact path the
+# operator is told to drop credentials at. NEVER commit these files —
+# real values live only here; auth.toml in each plugin carries SHAPE
+# only (Sila — Adinnaadana).
+.bwoc/secrets/
+.bwoc/secrets/gcloud-sa.json
+
 # Generic local state — match the framework repo's own .gitignore.
 .DS_Store
 *.swp

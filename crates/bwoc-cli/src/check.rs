@@ -990,6 +990,11 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// declared in the PLUGINS.en.md enum; recognized here so the reference
 /// `okr/workspace-okrs` plugin (BWOC-49) passes basic well-formedness. The
 /// okr-specific manifest + Progress Schema validation lands in BWOC-50.
+/// `council` (BWOC-57) is the first coordination kind, declared in the
+/// PLUGINS.en.md enum; recognized here so the reference
+/// `council/council-sangha-7` plugin (BWOC-59) passes basic well-formedness.
+/// The council-specific manifest (voting_model / quorum) + Decision Schema
+/// validation lands in BWOC-60.
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -997,6 +1002,7 @@ const PLUGIN_KINDS: &[&str] = &[
     "audit",
     "jira",
     "okr",
+    "council",
 ];
 
 /// Closed severity enum for declared criteria. Source of truth:
@@ -1207,7 +1213,7 @@ pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
                     } else {
                         report.violations.push(format!(
                             "[contract].requires_plugins '{kind}' is not a valid plugin kind \
-                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr}})"
+                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr, council}})"
                         ));
                     }
                 }
@@ -1316,7 +1322,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1324,7 +1330,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council}}"
             ));
         }
     }
@@ -2945,6 +2951,39 @@ entry       = "jira.sh"
         assert!(
             report.violations.is_empty(),
             "expected 'jira' kind to be accepted, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_council_kind_accepted() {
+        // BWOC-59: the 'council' kind is declared in the PLUGINS.en.md enum
+        // (BWOC-57); the validator must accept it so the reference
+        // council-sangha-7 plugin passes its own `bwoc check`. The council
+        // manifest carries a [council] table (voting_model / quorum) the
+        // validator does not yet inspect (deep validation is BWOC-60), so the
+        // extra table must be ignored, not rejected — the manifest passes clean.
+        let dir = write_plugin_manifest(
+            "council-kind",
+            "council-sangha-7",
+            r#"[plugin]
+name        = "council-sangha-7"
+kind        = "council"
+version     = "0.1.0"
+description = "Aparihaniya-dhamma 7 consensus council."
+compat      = ">=2.9.0"
+entry       = "protocol.sh"
+
+[council]
+voting_model = "sangha"
+quorum       = "2/3"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected 'council' kind to be accepted, got: {:?}",
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());

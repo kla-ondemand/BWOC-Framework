@@ -195,6 +195,18 @@ The skill calls the plugin's verbs; the plugin has no knowledge of the skill and
 - **Earlier, via `bwoc skill verify <name>`** — runs the same check before spawn time so the gap surfaces in CI / pre-flight, not at runtime.
 - **Statically, via `bwoc check`** — validates that every `requires_plugins` value is a valid kind enum (see [Verification](#verification)). It does not require the plugin to be enabled at check time — enablement is a per-agent spawn concern, kind-validity is a manifest concern.
 
+### Skill-on-multiple-plugins
+
+A skill may compose **more than one plugin**. When those plugins share a kind, `requires_plugins` lists that kind **once** and the skill's SPEC enumerates the specific plugin instances it drives. The first such skill is [`gcloud-ops`](../../modules/skills/gcloud-ops/SPEC.md), which composes both `gcloud-auth` and `gcloud-project` — both `workflow`-kind — so its manifest declares `requires_plugins = ["workflow"]` (the kind, once), while its [Operations Contract](../../modules/skills/gcloud-ops/SPEC.md#operations-contract) names the two plugins it calls.
+
+This follows directly from the kind-based rule above: `requires_plugins` is a **kind** dependency, not a **name** dependency. The consequence for a multi-plugin skill is a deliberate L1 limitation — kind-level resolution confirms *a* `workflow` plugin is enabled, not that *every specific* plugin the skill composes is present:
+
+- **Kind-level (today).** Spawn / `bwoc skill verify` / `bwoc check` confirm the declared kind(s) resolve. A skill composing two `workflow` plugins is satisfied by any one enabled `workflow` plugin.
+- **Invoke-time fallback (today).** If a composed plugin is absent at invoke, the skill fails gracefully, surfacing which underlying verb could not dispatch (e.g. "`bwoc gcloud project show` — no enabled `gcloud-project` plugin"). The agent is never silently half-wired at runtime.
+- **Name-level enforcement (future extension).** Asserting that *all* named instances (`gcloud-auth` **and** `gcloud-project`) are enabled — not just *some* `workflow` plugin — is a documented future addition. It is intentionally not introduced as an unenforced manifest field; the SPEC's Operations Contract is the authoritative enumeration until the resolver supports name-level checks.
+
+The rule of thumb: **list kinds in the manifest, name instances in the SPEC.** This keeps the manifest neutral and swappable while making the concrete composition auditable in prose.
+
 ---
 
 ## CLI Surface

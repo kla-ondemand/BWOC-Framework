@@ -1,0 +1,40 @@
+# auth.toml — Google Cloud authentication CONTRACT. Declares the SHAPE only.
+#
+# ============================================================================
+#  NEVER COMMIT REAL CREDENTIAL VALUES TO THIS FILE.
+#
+#  This plugin reads NO credential value itself. It only:
+#    (a) checks whether the ADC file / service-account JSON file exists, and
+#    (b) hands paths / env-var-names to the local `gcloud` CLI.
+#  The actual secret never enters the plugin's address space, so a malformed
+#  auth.toml cannot leak a token (Sila — Adinnaadana).
+#
+#  Real credentials live in one of three sources, in PRECEDENCE ORDER (first
+#  source whose state resolves wins; reflected in `status.active_source`):
+#
+#    1. Application Default Credentials (ADC) — preferred for developers:
+#         ~/.config/gcloud/application_default_credentials.json
+#       Written by `gcloud auth application-default login`. Not tracked by
+#       BWOC. If $CLOUDSDK_CONFIG is set, that path is honored instead.
+#
+#    2. Service-account JSON — preferred for CI / headless agents:
+#         <workspace>/.bwoc/secrets/gcloud-sa.json   (chmod 600, gitignored)
+#       The path is the BWOC convention; the directory `.bwoc/secrets/` is
+#       gitignored at the workspace level (BWOC-53). Never commit this file.
+#
+#    3. Environment variables — preferred for transient overrides:
+#         BWOC_GCLOUD_ACCOUNT
+#         BWOC_GCLOUD_PROJECT
+#         BWOC_GCLOUD_IMPERSONATE_SERVICE_ACCOUNT   (optional)
+#
+#  Rotating a credential is config-only: replace the ADC file via
+#  `gcloud auth application-default login`, drop a new SA JSON, or flip the
+#  env vars. No code change. The plugin re-resolves on each `status` call.
+# ============================================================================
+
+[sources]
+# Each source declares only its SHAPE — path or env-var names + precedence.
+# `priority = 1` wins over `priority = 2` wins over `priority = 3`.
+adc             = { path = "~/.config/gcloud/application_default_credentials.json", priority = 1 }
+service_account = { path = ".bwoc/secrets/gcloud-sa.json",                          priority = 2 }
+env             = { vars = ["BWOC_GCLOUD_ACCOUNT", "BWOC_GCLOUD_PROJECT", "BWOC_GCLOUD_IMPERSONATE_SERVICE_ACCOUNT"], priority = 3 }

@@ -58,6 +58,19 @@ The `council` kind was added in `BWOC-EPIC-5` as the framework's first **coordin
 
 The `figma` kind was added in `BWOC-EPIC-7` as a **read-mostly** integration with Figma's REST API. Like `jira` (and unlike `gcloud`, which reused `workflow`), it earns its own kind because it carries a normative [Figma Asset Mapping Schema](#figma-asset-mapping-schema) — a durable BWOC-owned relationship tying a Figma node to an exported artifact + design tokens; the rule is **own-kind when BWOC defines a normative schema over the integration, `workflow`-reuse when it is a passthrough with no BWOC-owned shape**. Unlike `jira`, `figma` never writes back to the external system: every verb either reads Figma (`fetch` / `tokens` / `status`) or writes **locally** (`export` drops a content-addressable image under `figma/exports/`), so it carries jira's schema discipline but none of its bidirectional-sync machinery — no ledger, no conflict policy, no operator-confirm gates. Auth is an operator personal access token (`BWOC_FIGMA_TOKEN` env / `.bwoc/secrets.toml`, shape-only in `auth.toml`, never committed). For the auth model, file-vs-team-library scope, REST rate-limit handling, and the export-caching strategy, see the [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) — this spec declares the kind and the asset schema and does not duplicate that rationale.
 
+### Write verbs — the operator-confirm gate (normative)
+
+Most plugin verbs read. A **write verb** — one whose `invoke` produces a durable side-effect outside the plugin's own address space — carries a **normative operator-confirm gate**. This pattern is shared across every write-capable plugin regardless of kind: `jira` (`transition` / `sync`), `workflow/gcloud-project` (`set-default`, local config), and the `workflow/gcloud-compute` instance lifecycle (`start` / `stop`, added in `BWOC-EPIC-9`, tracking [bemindlabs#96]).
+
+The gate's contract:
+
+1. **The gate lives at the operator boundary — the `bwoc <cli>` command, not the plugin.** One confirmation point per write; the plugin executes when invoked and does not re-implement (nor bypass) the gate.
+2. **It shows the exact effect before acting** — the target, the current state, and the literal external command that will run (for shell-out plugins, with the `--` argument separator so user-supplied values can never be parsed as flags).
+3. **Default is No.** An interactive operator answers a `y/N` prompt. A non-interactive context (a headless agent) must pass an explicit `--yes`, which an agent sets **only** when the operator has authorized that specific action — never auto-set.
+4. **A refused or unconfirmed write reports "no change" with the reason** (Dhammānupassanā), never a bare failure or a silent write.
+
+Read verbs carry **no** gate — they are free. **Destructive, irreversible verbs** (e.g. `delete`) are held to a higher bar than start/stop and are introduced deliberately, per-slice, with their own stronger gate — they are not shipped just because they are adjacent to a reversible write. See the per-integration design notes for each verb set's risk matrix (e.g. the [BWOC-66 gcloud-compute note](../../notes/2026-05-28_gcloud-compute-write-verbs.md)).
+
 ### What plugins are NOT
 
 - **Not a loophole for vendor-specific framework logic.** The five declared backends are first-class and live in spec, not as plugins. Vendor phrasing in `AGENTS.md` is still forbidden (**Samānattatā**).

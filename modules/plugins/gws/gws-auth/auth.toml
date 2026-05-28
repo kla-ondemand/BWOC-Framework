@@ -1,0 +1,64 @@
+# auth.toml — Google Workspace OAuth2 authentication CONTRACT. Declares the SHAPE only.
+#
+# ============================================================================
+#  NEVER COMMIT A REAL TOKEN TO THIS FILE.
+#
+#  The `token` value below is an EMPTY placeholder that documents the contract.
+#  The real OAuth2 access token is resolved at runtime — it never lives in any
+#  tracked file:
+#
+#    1. Environment variable (preferred — nothing touches disk):
+#         BWOC_GWS_TOKEN     the OAuth2 access token (THE SECRET)
+#
+#    2. A gitignored, owner-only token file (chmod 600):
+#         .bwoc/secrets/gws-token.json
+#       A JSON object holding at least { "access_token": "…" } and optionally
+#       refresh_token / expiry / scopes / account / client_id / client_secret.
+#       When the access token is expired AND the refresh trio (refresh_token +
+#       client_id + client_secret) is present, gws-auth refreshes it in place.
+#
+#  Workspace REST authenticates each call with `Authorization: Bearer <token>`.
+#  gws.sh reads the token only to set that header on outbound requests; it is
+#  never echoed, never written to plugin output, and never serialized into any
+#  JSON envelope or Workspace resource entry (Sila — Adinnaadana). Rotating a
+#  revoked token is config-only: update the env var / token file — no code
+#  change. `bwoc check` (BWOC-77) fails closed on any value-looking field here,
+#  exactly as the jira (BWOC-45) / gcloud (BWOC-55) / figma (BWOC-65) guards do.
+# ============================================================================
+
+[gws.auth]
+# Placeholder ONLY — leave empty here; set the matching BWOC_GWS_TOKEN env var
+# (or the .bwoc/secrets/gws-token.json access_token field). A non-empty value
+# here is a committed-secret violation.
+token = ""   # ← never commit a value; set BWOC_GWS_TOKEN  (THE SECRET)
+
+# Declarative env-var binding (what gws.sh reads at runtime). This is the
+# authoritative resolution map; the empty key above only shows the shape.
+[gws.auth.env]
+token = { var = "BWOC_GWS_TOKEN", required = true, secret = true }
+
+# Gitignored, owner-only on-disk fallback (resolved relative to BWOC_WORKSPACE).
+# gws.sh reads .access_token from this file only when BWOC_GWS_TOKEN is unset,
+# and refuses it if the file is group/world-readable. The directory
+# `.bwoc/secrets/` is gitignored at the workspace level (BWOC-53). Never commit.
+[gws.auth.secrets_file]
+path = ".bwoc/secrets/gws-token.json"
+# Recognized fields (all but access_token optional):
+#   access_token   the Bearer token (THE SECRET)
+#   refresh_token  offline refresh grant      (enables refresh-if-expired)
+#   client_id      OAuth client id            (enables refresh-if-expired)
+#   client_secret  OAuth client secret        (enables refresh-if-expired)
+#   expiry         RFC3339 / epoch expiry     (drives refresh-if-expired)
+#   scopes         array of granted scope URLs (reported by `status`)
+#   account        account email               (reported by `status`)
+fields = ["access_token", "refresh_token", "client_id", "client_secret", "expiry", "scopes", "account"]
+
+# Required OAuth2 readonly scopes, per service (HTTP Bearer transport carries no
+# scope negotiation; these document which consented scope each service verb
+# needs). A 403 surfaces as "token lacks <scope> for <service>", never a bare
+# failure — see SPEC §Scopes. Scopes are per-service and consent-bound: a token
+# granted only drive.readonly cannot read Gmail or Calendar.
+[gws.auth.scopes]
+drive    = ["https://www.googleapis.com/auth/drive.readonly"]
+gmail    = ["https://www.googleapis.com/auth/gmail.readonly"]
+calendar = ["https://www.googleapis.com/auth/calendar.readonly"]

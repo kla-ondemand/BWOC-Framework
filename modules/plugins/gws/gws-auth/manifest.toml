@@ -1,0 +1,15 @@
+[plugin]
+name        = "gws-auth"
+kind        = "gws"
+version     = "0.1.0"
+description = "Google Workspace OAuth2 credential foundation — surfaces token presence, granted scopes, account, and expiry without ever reading or printing the token value, and exports the Bearer-auth + rate-limit + refresh helpers sibling gws-* plugins source."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+
+# [config.schema] intentionally omitted.
+#
+# Credential resolution is environment-driven (BWOC_GWS_TOKEN env ->
+# .bwoc/secrets/gws-token.json), not workspace-config-driven. The auth contract
+# lives in the sibling `auth.toml` (shape only — never values). The only
+# workspace-level surface is the universal `enabled` key on [plugins.gws-auth].
+# See notes/2026-05-28_google-workspace-plugin-architecture.md §Decision 3.

@@ -1000,6 +1000,11 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// reference `figma/figma-rest` plugin (BWOC-64) passes basic well-formedness.
 /// The figma `auth.toml` secret-leak guard + Asset Mapping Schema validation
 /// land in BWOC-65 (`audit_figma_auth` / `audit_figma_assets`).
+/// `gws` (BWOC-73) is the ninth kind — a read-mostly Google Workspace
+/// integration, declared in the PLUGINS.en.md enum; recognized here so the
+/// reference `gws/gws-auth` + `gws/gws-drive` plugins (BWOC-75) pass basic
+/// well-formedness. The gws `auth.toml` secret-leak guard + Workspace Resource
+/// Schema validation land in BWOC-77 (`audit_gws_auth`).
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -1009,6 +1014,7 @@ const PLUGIN_KINDS: &[&str] = &[
     "okr",
     "council",
     "figma",
+    "gws",
 ];
 
 /// Closed severity enum for declared criteria. Source of truth:
@@ -1334,7 +1340,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1342,7 +1348,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}}"
             ));
         }
     }

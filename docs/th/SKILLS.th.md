@@ -193,6 +193,18 @@ Skill เรียก verb ของ plugin; plugin ไม่รู้จัก 
 - **เร็วกว่านั้น ผ่าน `bwoc skill verify <name>`** — รันการตรวจเดียวกันก่อนถึงเวลา spawn เพื่อให้ช่องว่างปรากฏใน CI / pre-flight ไม่ใช่ตอน runtime
 - **แบบ static ผ่าน `bwoc check`** — validate ว่าทุกค่าใน `requires_plugins` เป็น kind enum ที่ valid (ดู [Verification](#verification)) ไม่ต้องการให้ plugin enable ตอน check — การ enable เป็นเรื่องของ spawn ต่อ agent, ความ valid ของ kind เป็นเรื่องของ manifest
 
+### Skill-on-multiple-plugins
+
+Skill อาจประกอบ plugin **มากกว่าหนึ่งตัว** เมื่อ plugin เหล่านั้นใช้ kind เดียวกัน `requires_plugins` ระบุ kind นั้น **ครั้งเดียว** และ SPEC ของ skill ระบุ instance ของ plugin เฉพาะที่มันขับ skill ตัวแรกแบบนี้คือ [`gcloud-ops`](../../modules/skills/gcloud-ops/SPEC.md) ซึ่งประกอบทั้ง `gcloud-auth` และ `gcloud-project` — เป็น kind `workflow` ทั้งคู่ — ดังนั้น manifest ของมันประกาศ `requires_plugins = ["workflow"]` (kind, ครั้งเดียว) ขณะที่ [สัญญา Operation](../../modules/skills/gcloud-ops/SPEC.th.md#สัญญา-operation) ระบุ plugin สองตัวที่มันเรียก
+
+นี่ตามมาจากกฎ kind-based ข้างต้นโดยตรง: `requires_plugins` เป็นการพึ่งพา **kind** ไม่ใช่ **ชื่อ** ผลที่ตามมาสำหรับ skill หลาย plugin คือข้อจำกัด L1 ที่จงใจ — การ resolve ระดับ kind ยืนยันว่ามี plugin `workflow` *สักตัว* เปิดอยู่ ไม่ใช่ว่า plugin *เฉพาะทุกตัว* ที่ skill ประกอบมีครบ:
+
+- **ระดับ kind (วันนี้)** spawn / `bwoc skill verify` / `bwoc check` ยืนยันว่า kind ที่ประกาศ resolve ได้ skill ที่ประกอบ plugin `workflow` สองตัวถูกตอบสนองด้วย plugin `workflow` ที่เปิดอยู่ตัวใดตัวหนึ่ง
+- **fallback ตอน invoke (วันนี้)** ถ้า plugin ที่ประกอบขาดตอน invoke, skill ล้มเหลวอย่างนุ่มนวล โดย surface ว่า verb ใต้ฝากระโปรงตัวไหน dispatch ไม่ได้ (เช่น "`bwoc gcloud project show` — ไม่มี plugin `gcloud-project` ที่เปิดอยู่") agent ไม่เคยถูก half-wire เงียบ ๆ ตอน runtime
+- **การบังคับระดับชื่อ (future extension)** การยืนยันว่า instance ที่ระบุ *ทั้งหมด* (`gcloud-auth` **และ** `gcloud-project`) เปิดอยู่ — ไม่ใช่แค่ plugin `workflow` *บางตัว* — เป็นส่วนเพิ่มในอนาคตที่บันทึกไว้ จงใจไม่เพิ่มเป็น manifest field ที่ไม่ enforce; สัญญา Operation ของ SPEC เป็นการระบุที่เชื่อถือได้จนกว่า resolver จะรองรับการตรวจระดับชื่อ
+
+หลักจำง่าย: **ระบุ kind ใน manifest, ระบุ instance ใน SPEC** วิธีนี้ทำให้ manifest เป็นกลางและสลับได้ ขณะที่ทำให้องค์ประกอบจริง audit ได้ใน prose
+
 ---
 
 ## CLI Surface

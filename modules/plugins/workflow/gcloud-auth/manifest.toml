@@ -1,0 +1,15 @@
+[plugin]
+name        = "gcloud-auth"
+kind        = "workflow"
+version     = "0.1.0"
+description = "Google Cloud (gcloud) credential-state adapter — surfaces active credential source + account email without ever reading or printing the credential value."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+
+# [config.schema] intentionally omitted.
+#
+# Credential resolution is environment-driven (ADC -> .bwoc/secrets/gcloud-sa.json
+# -> BWOC_GCLOUD_* env), not workspace-config-driven. The auth contract lives in
+# the sibling `auth.toml` (shape only — never values). The only workspace-level
+# surface is the universal `enabled` key on `[plugins.gcloud-auth]`. See
+# notes/2026-05-28_gcloud-workflow-plugin-architecture.md §Decision 3.

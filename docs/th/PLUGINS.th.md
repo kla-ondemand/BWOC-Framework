@@ -33,7 +33,7 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 
 ## ประเภทของปลั๊กอิน
 
-ปลั๊กอินทุกตัวประกาศ `kind` Kind กำหนด lifecycle hook ที่เฟรมเวิร์กจะเรียก spec นี้ส่งเจ็ดประเภท:
+ปลั๊กอินทุกตัวประกาศ `kind` Kind กำหนด lifecycle hook ที่เฟรมเวิร์กจะเรียก spec นี้ส่งแปดประเภท:
 
 | Kind | สิ่งที่ขยาย | ผู้รับ lifecycle |
 |---|---|---|
@@ -44,6 +44,7 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 | `jira` | Sync สองทิศทางกับ issue tracker ภายนอก (Jira Cloud) — อ่าน issue ผ่าน JQL และ **เขียน** status transition, การแก้ field, และการ assign sprint กลับไปยัง tracker | `bwoc jira` CLI |
 | `okr` | ติดตาม Objectives + Key Results ที่ operator เขียนเอง — อ่าน `objectives.toml` / `key_results.toml`, บันทึกความคืบหน้า, และส่งรายงานความคืบหน้าที่เป็น normative | `bwoc okr` CLI |
 | `council` | decision protocol แบบมีโครงสร้างระหว่าง agent ในฟลีต — agent ใดก็เปิด decision ได้, ผู้ร่วมถกใน rounds และโหวต, บันทึก outcome พร้อม evidence + dissent | `bwoc council` CLI |
+| `figma` | Integration แบบอ่านเป็นหลักกับ Figma REST API — ดึง metadata ของ frame/node, export รูป, query component library, และ surface design token; เชื่อม design→dev | `bwoc figma` CLI |
 
 ปลั๊กอินตั้ง `kind` ครั้งเดียว ปลั๊กอินข้าม kind ไม่รองรับ — แยกออกเป็นหลายตัว
 
@@ -54,6 +55,8 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 ประเภท `okr` เพิ่มเข้ามาใน `BWOC-EPIC-4` เป็น **reporting kind** ตัวที่สามของเฟรมเวิร์ก เคียงข้าง `audit` ขณะที่ `audit` ตรวจ *workspace* ตามมาตรฐานภายนอกแล้วส่ง findings, `okr` ติดตาม Objectives + Key Results ที่ *operator เขียนเอง* (`objectives.toml` / `key_results.toml`) แล้วส่งความคืบหน้า มัน**ไม่ใช่** `workflow` kind: ไม่เอื้อมไประบบภายนอก, ไม่ถือ credential, และ write เดียวของมัน — `track` ที่อัปเดตค่า `current` ของ key result — แตะ TOML ในเครื่องของ operator เอง ไม่ใช่ system of record จึง**ไม่มี** operator-confirmation gate มันพก [สคีมา OKR Progress](#สคีมา-okr-progress) ที่เป็น normative และ **reuse [Evidence kinds](#evidence-kinds) ของ audit** แทนที่จะสร้างของตัวเอง — evidence vocabulary เดียวทั่วเฟรมเวิร์ก เหตุผลว่าทำไม `okr` เป็น kind แยกแทนที่จะเป็น `audit` หรือ `workflow` plugin, รูปร่างข้อมูล, สัญญา verb `track` / `check-progress` / `report`, และการตัดสินใจ `confidence` เป็น enum ดู [BWOC-46 design note](../../notes/2026-05-28_okr-plugin-architecture.md) — spec นี้ประกาศ kind และ progress schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
 
 ประเภท `council` เพิ่มเข้ามาใน `BWOC-EPIC-5` เป็น **coordination kind** ตัวแรกของเฟรมเวิร์ก — มันไม่ได้เอื้อมออกไประบบภายนอก (อย่าง `workflow`/`jira`) และไม่ได้รายงานเหนือ workspace (อย่าง `audit`/`okr`) แต่ทำงาน **ในหมู่ agent ของฟลีตเอง** decision ของ council เดินตาม protocol หลายขั้น — `propose` → `discuss` (rounds) → `vote` → `resolve` — มี quorum gate และ voting model ที่ประกาศ (`simple-majority` / `consensus` / `weighted` / `sangha`); ดึงผู้ร่วมจาก `bwoc team`, route discussion turn ผ่าน `bwoc send`, และเก็บ [สคีมา Council Decision](#สคีมา-council-decision) ที่เป็น normative พร้อม outcome และ dissent ที่ถูกรักษาไว้ มัน **บันทึก** decision ไม่ใช่ execute — outcome ที่ `binding` จะ emit `bwoc task` แทนที่จะไปแก้อะไรเอง รายละเอียด protocol, voting model, quorum + tie-break, ความต่าง binding-vs-advisory, และ reference `council-sangha-7` (โมเดลตาม Aparihaniya-dhamma 7) ดู [BWOC-56 design note](../../notes/2026-05-28_council-plugin-architecture.md) — spec นี้ประกาศ kind และ decision schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
+
+ประเภท `figma` เพิ่มเข้ามาใน `BWOC-EPIC-7` เป็น integration แบบ **อ่านเป็นหลัก (read-mostly)** กับ Figma REST API เช่นเดียวกับ `jira` (และต่างจาก `gcloud` ที่ reuse `workflow`) มันได้ kind ของตัวเองเพราะพก [สคีมา Figma Asset Mapping](#สคีมา-figma-asset-mapping) ที่เป็น normative — ความสัมพันธ์ที่ BWOC เป็นเจ้าของ ผูก Figma node กับ artifact ที่ export + design token; กฎคือ **ได้ kind ของตัวเองเมื่อ BWOC นิยาม normative schema เหนือ integration, reuse `workflow` เมื่อเป็น passthrough ที่ไม่มี shape ที่ BWOC เป็นเจ้าของ** ต่างจาก `jira`, `figma` ไม่เคยเขียนกลับไประบบภายนอก: ทุก verb อ่าน Figma (`fetch` / `tokens` / `status`) หรือเขียน **ในเครื่อง** (`export` วางรูป content-addressable ใต้ `figma/exports/`) จึงพกวินัย schema ของ jira แต่ไม่มี bidirectional-sync machinery — ไม่มี ledger, conflict policy, operator-confirm gate Auth เป็น personal access token ของ operator (`BWOC_FIGMA_TOKEN` env / `.bwoc/secrets.toml`, shape-only ใน `auth.toml`, ไม่เคย commit) auth model, ขอบเขต file-vs-team-library, การจัดการ REST rate-limit, และกลยุทธ์ export caching ดู [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) — spec นี้ประกาศ kind และ asset schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
 
 ### สิ่งที่ Plugin ไม่ใช่
 
@@ -330,6 +333,47 @@ decision เดินตาม protocol `proposed → discussing → voting → 
   "evidence_links": [{ "kind": "file", "value": "notes/2026-05-28_council-plugin-architecture.md" }],
   "opened_at":    "2026-05-28T12:00:00Z",
   "closed_at":    "2026-05-28T12:30:00Z"
+}
+```
+
+---
+
+## สคีมา Figma Asset Mapping
+
+ปลั๊กอิน `figma` map Figma node กับ artifact ที่ export + design token ผ่าน **asset entry** สคีมาด้านล่างเป็น normative — verb ของ reference plugin (ตาม `BWOC-64`) และ output ของ `bwoc figma` (ตาม `BWOC-63`) ต้องส่ง entry ที่ตรงรูปนี้ และ `bwoc check` (ตาม `BWOC-65`) validate มัน นี่คือสัญญาของ kind `figma` เป็นคู่ฝั่ง design→dev แบบอ่านเป็นหลักของ [สคีมา Jira Issue Mapping](#สคีมา-jira-issue-mapping) — พกวินัย schema ของ jira แต่ไม่เขียนกลับระบบภายนอก
+
+auth model, ขอบเขต file-vs-team-library, การจัดการ REST rate-limit, และกลยุทธ์ export caching แบบ content-addressable อยู่ใน [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) ไม่ทำซ้ำที่นี่
+
+### ฟิลด์
+
+| ฟิลด์ | ชนิด | บังคับ | ความหมาย |
+|---|---|---|---|
+| `file_key` | string | ใช่ | Figma file key (จาก URL ของไฟล์) คู่กับ `node_id` เป็น **key ภายนอกที่เสถียร** ที่ mapping ยึด |
+| `node_id` | string | ใช่ | node ภายในไฟล์ (frame / component / instance / …) ครึ่งที่สองของ stable key |
+| `name` | string | ใช่ | ชื่อ node projection ที่เปลี่ยนได้ของ Figma state รีเฟรชทุก `fetch` |
+| `type` | string | ใช่ | ชนิด node (`FRAME`, `COMPONENT`, `INSTANCE`, …) |
+| `last_modified` | string (ISO 8601 datetime) | ใช่ | timestamp last-modified ของไฟล์จาก Figma — สัญญาณ cache-invalidation ของ content-addressable export |
+| `exported_path` | string | ไม่ | path (เทียบ workspace) ของรูปที่ export ใต้ `figma/exports/` ตัดออกจนกว่าจะ export |
+| `image_url` | string | ไม่ | render URL ที่ Figma host จากการ export **ไม่ durable** — render URL ของ Figma หมดอายุ; artifact ที่ durable คือ `exported_path` ไม่ใช่ตัวนี้ ตัดออกเมื่อไม่ขอ |
+| `design_tokens` | object | ไม่ | design token ที่สกัด `{ name: value }` (สี, spacing, type) ผูกกับ node นี้ — สะพาน design→spec ตัดออกเมื่อไม่มี |
+
+ฟิลด์ไม่บังคับจะ **ตัดออกจาก entry** เมื่อไม่มีค่า — node ที่ไม่เคย export ไม่มี key `exported_path` — ไม่ serialize เป็น `null` ตาม convention ของ Audit Findings / Jira / OKR / Council
+
+### ความเสถียรของฟิลด์
+
+`file_key` + `node_id` เป็น stable key — คู่ที่ consumer (dashboard, การอ้าง token ใน spec doc) ถือเป็น identifier ถาวรได้ ฟิลด์อื่นเป็น projection ที่เปลี่ยนได้ของ Figma state (`name`, `type`, `last_modified`, `design_tokens`) หรือผลการ export ในเครื่อง (`exported_path`, `image_url`) รีเฟรชทุก `fetch`/`export`; อย่า key บนมัน `image_url` โดยเฉพาะไม่ durable (หมดอายุ) — เก็บ `exported_path` แทน
+
+### ตัวอย่าง
+
+```json
+{
+  "file_key":      "AbC123dEf456",
+  "node_id":       "12:345",
+  "name":          "Primary Button",
+  "type":          "COMPONENT",
+  "last_modified": "2026-05-27T09:00:00Z",
+  "exported_path": "figma/exports/9f86d081884c7d65.png",
+  "design_tokens": { "color/primary": "#2D7FF9", "radius/sm": "4px" }
 }
 ```
 

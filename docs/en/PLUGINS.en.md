@@ -33,7 +33,7 @@ Pick the layer that matches *who turns it on*. If an individual agent's logic ca
 
 ## Plugin Kinds
 
-Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Eight kinds ship with this spec:
+Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Nine kinds ship with this spec:
 
 | Kind | What it extends | Lifecycle owner |
 |---|---|---|
@@ -45,6 +45,7 @@ Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework w
 | `okr` | Tracking of operator-authored Objectives + Key Results — reads `objectives.toml` / `key_results.toml`, records progress, and emits a normative progress report | `bwoc okr` CLI |
 | `council` | A structured decision protocol among fleet agents — any agent opens a decision, participants discuss in rounds and vote, an outcome is recorded with evidence + dissent | `bwoc council` CLI |
 | `figma` | Read-mostly integration with Figma's REST API — fetches frame/node metadata, exports images, queries component libraries, and surfaces design tokens; bridges design→dev | `bwoc figma` CLI |
+| `gws` | Read-mostly integration with Google Workspace REST APIs (Drive / Gmail / Calendar) via OAuth2 user scopes — lists/reads files, mail threads, and calendar events | `bwoc gws` CLI |
 
 A plugin sets `kind` once. Cross-kind plugins are not supported — split them.
 
@@ -57,6 +58,8 @@ The `okr` kind was added in `BWOC-EPIC-4` as the framework's third **reporting**
 The `council` kind was added in `BWOC-EPIC-5` as the framework's first **coordination** kind — it acts neither outward to an external system (like `workflow`/`jira`) nor over the workspace as a report (like `audit`/`okr`), but **among the fleet's own agents**. A council decision follows a multi-step protocol — `propose` → `discuss` (rounds) → `vote` → `resolve` — with a quorum gate and a declared voting model (`simple-majority` / `consensus` / `weighted` / `sangha`); it draws participants from a `bwoc team`, routes discussion turns through `bwoc send`, and persists a normative [Council Decision Schema](#council-decision-schema) with the outcome and any dissent preserved. It **records** decisions, it does not execute them — a `binding` outcome emits a `bwoc task` rather than mutating anything itself. For the protocol detail, the voting models, quorum + tie-break rules, the binding-vs-advisory distinction, and the `council-sangha-7` reference (modelled on Aparihāniya-dhamma 7), see the [BWOC-56 design note](../../notes/2026-05-28_council-plugin-architecture.md) — this spec declares the kind and the decision schema and does not duplicate that rationale.
 
 The `figma` kind was added in `BWOC-EPIC-7` as a **read-mostly** integration with Figma's REST API. Like `jira` (and unlike `gcloud`, which reused `workflow`), it earns its own kind because it carries a normative [Figma Asset Mapping Schema](#figma-asset-mapping-schema) — a durable BWOC-owned relationship tying a Figma node to an exported artifact + design tokens; the rule is **own-kind when BWOC defines a normative schema over the integration, `workflow`-reuse when it is a passthrough with no BWOC-owned shape**. Unlike `jira`, `figma` never writes back to the external system: every verb either reads Figma (`fetch` / `tokens` / `status`) or writes **locally** (`export` drops a content-addressable image under `figma/exports/`), so it carries jira's schema discipline but none of its bidirectional-sync machinery — no ledger, no conflict policy, no operator-confirm gates. Auth is an operator personal access token (`BWOC_FIGMA_TOKEN` env / `.bwoc/secrets.toml`, shape-only in `auth.toml`, never committed). For the auth model, file-vs-team-library scope, REST rate-limit handling, and the export-caching strategy, see the [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) — this spec declares the kind and the asset schema and does not duplicate that rationale.
+
+The `gws` kind was added in `BWOC-EPIC-13` as a **read-mostly** integration with Google Workspace REST APIs (Drive / Gmail / Calendar). Like `figma`, it earns its own kind because it carries normative [Workspace resource schemas](#workspace-resource-schema) (a Drive file, a Gmail thread, a Calendar event) + an OAuth scope model. It is **not** part of `gcloud`: gcloud reaches GCP *infrastructure* through the local `gcloud` CLI with ADC/service-account; `gws` reaches productivity *apps* through the Workspace REST APIs with **OAuth2 user-consent scopes** (`drive.readonly` / `gmail.readonly` / `calendar.readonly`) — a different auth family and surface entirely. It ships a credential-foundation plugin (`gws-auth`) that the per-service plugins (`gws-drive` / `gws-gmail` / `gws-calendar`) source, the gcloud-* family shape. Read-mostly: write verbs (send mail, create event, upload file) are deferred to future slices, each inheriting the [write-verb operator-confirm gate](#write-verbs--the-operator-confirm-gate-normative). OAuth token via `BWOC_GWS_TOKEN` env / `.bwoc/secrets/gws-token.json` (shape-only in `auth.toml`, never committed). For the OAuth model, per-service scopes, pagination, and rate-limit handling, see the [BWOC-72 design note](../../notes/2026-05-28_google-workspace-plugin-architecture.md) — this spec declares the kind and the resource schemas and does not duplicate that rationale.
 
 ### Write verbs — the operator-confirm gate (normative)
 
@@ -387,6 +390,57 @@ Optional fields are **omitted from the entry** when absent — a never-exported 
   "last_modified": "2026-05-27T09:00:00Z",
   "exported_path": "figma/exports/9f86d081884c7d65.png",
   "design_tokens": { "color/primary": "#2D7FF9", "radius/sm": "4px" }
+}
+```
+
+---
+
+## Workspace Resource Schema
+
+A `gws` plugin surfaces Google Workspace resources read-mostly. Each service emits a **resource entry** in its own normative shape — the `gws` kind's contract, validated by `bwoc check` (per `BWOC-77`) and emitted by the `bwoc gws` verbs (per `BWOC-74`). The OAuth model, per-service scopes, pagination, and rate-limit handling live in the [BWOC-72 design note](../../notes/2026-05-28_google-workspace-plugin-architecture.md) and are not duplicated here. All three shapes follow the framework conventions: a stable id key, mutable projections refreshed each read, optional fields omitted (not `null`).
+
+### Drive file
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `file_id` | string | yes | **Stable key** — the Drive file id. |
+| `name` | string | yes | File name (mutable projection). |
+| `mime_type` | string | yes | e.g. `application/vnd.google-apps.document`. |
+| `modified_time` | string (ISO 8601) | yes | Last-modified; cache-invalidation signal. |
+| `owners` | array of string | no | Owner email(s). Omitted when not returned. |
+| `web_view_link` | string | no | Browser URL for the file. Omitted when absent. |
+
+### Gmail thread
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `thread_id` | string | yes | **Stable key** — the Gmail thread id. |
+| `subject` | string | yes | Thread subject. |
+| `from` | string | yes | Sender of the latest message. |
+| `snippet` | string | no | Short preview. Omitted when empty. |
+| `labels` | array of string | no | Label ids/names. Omitted when none. |
+| `last_message_time` | string (ISO 8601) | yes | Timestamp of the latest message. |
+
+### Calendar event
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `event_id` | string | yes | **Stable key** — the Calendar event id. |
+| `calendar_id` | string | yes | The calendar the event belongs to. |
+| `summary` | string | yes | Event title. |
+| `start` | string (ISO 8601) | yes | Start time (or date for all-day). |
+| `end` | string (ISO 8601) | yes | End time. |
+| `attendees_count` | number | no | Number of attendees. Omitted when none. |
+
+### Example (Drive file)
+
+```json
+{
+  "file_id":       "1AbC_dEfGhIjKlMnOpQrStUvWxYz",
+  "name":          "BWOC Architecture.gdoc",
+  "mime_type":     "application/vnd.google-apps.document",
+  "modified_time": "2026-05-27T09:00:00Z",
+  "web_view_link": "https://docs.google.com/document/d/1AbC_dEfGhIjKlMnOpQrStUvWxYz/edit"
 }
 ```
 

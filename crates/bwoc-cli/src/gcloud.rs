@@ -25,6 +25,22 @@
 //! | `project set-default --project <id>` | `gcloud-project` | **Write** to local `gcloud` config. Gated.                  |
 //! | `status`                      | both, but degrades | Combined auth + project view, never fails when plugins are absent. |
 //!
+//! ## Verb table (EPIC-9 compute slice — first write-capable verbs)
+//!
+//! | Verb                                | Needs plugin    | Gate | Notes                                          |
+//! |---|---|---|---|
+//! | `compute list [--project] [--zone]` | `gcloud-compute`| none | Read-only instance listing.                    |
+//! | `compute start --instance --zone`   | `gcloud-compute`| **operator-confirm** | Boots a VM (cost). `--yes` for headless. |
+//! | `compute stop --instance --zone`    | `gcloud-compute`| **operator-confirm** | Halts a VM (interrupts workloads). `--yes`. |
+//!
+//! The write gate lives **here in the CLI**, not the plugin (BWOC-66 §3 /
+//! BWOC-67): it shows the exact effect + the literal `gcloud` command, defaults
+//! to No, accepts `--yes` for non-interactive use, and reports a refused write
+//! as "no change" with a reason — never a bare failure. `delete` is **out of
+//! scope** for EPIC-9 (irreversible; deferred to a stronger gate). The write
+//! request carries `confirmed: true` so the plugin can refuse a gate-bypassing
+//! direct invoke.
+//!
 //! ## Auth model — operator credentials, never echoed
 //!
 //! Credential resolution shape (precedence order, decision 3 in the design note):
@@ -75,6 +91,7 @@ const EXIT_PLUGIN_ERROR: i32 = 255;
 
 const PLUGIN_AUTH: &str = "gcloud-auth";
 const PLUGIN_PROJECT: &str = "gcloud-project";
+const PLUGIN_COMPUTE: &str = "gcloud-compute";
 const PLUGIN_KIND: &str = "workflow";
 
 const ENV_ACCOUNT: &str = "BWOC_GCLOUD_ACCOUNT";
@@ -97,6 +114,9 @@ pub enum GcloudCommand {
     /// Project context operations (gcloud-project plugin).
     #[command(subcommand)]
     Project(ProjectCommand),
+    /// Compute instance lifecycle operations (gcloud-compute plugin, EPIC-9).
+    #[command(subcommand)]
+    Compute(ComputeCommand),
     /// Combined auth + project view. Degrades cleanly when plugins are missing.
     Status(StatusArgs),
 }
@@ -185,6 +205,78 @@ pub struct ProjectSetDefaultArgs {
     json: bool,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum ComputeCommand {
+    /// List compute instances the active credential can see. Read — no gate.
+    List(ComputeListArgs),
+    /// Start a stopped instance. **Write** — operator-confirm gated.
+    Start(ComputeStartArgs),
+    /// Stop a running instance. **Write** — operator-confirm gated.
+    Stop(ComputeStopArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ComputeListArgs {
+    /// Project id to list instances from (default: active gcloud project).
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Restrict the listing to a single zone.
+    #[arg(long = "zone")]
+    zone: Option<String>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ComputeStartArgs {
+    /// Instance name to start. Required.
+    #[arg(long = "instance")]
+    instance: String,
+    /// Zone the instance lives in. Required.
+    #[arg(long = "zone")]
+    zone: String,
+    /// Project id (default: active gcloud project). Shown in the gate.
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Acknowledge the write up front (required in --json mode). An agent sets
+    /// this ONLY when the operator authorized this specific action.
+    #[arg(long)]
+    yes: bool,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ComputeStopArgs {
+    /// Instance name to stop. Required.
+    #[arg(long = "instance")]
+    instance: String,
+    /// Zone the instance lives in. Required.
+    #[arg(long = "zone")]
+    zone: String,
+    /// Project id (default: active gcloud project). Shown in the gate.
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Acknowledge the write up front (required in --json mode). An agent sets
+    /// this ONLY when the operator authorized this specific action.
+    #[arg(long)]
+    yes: bool,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Args, Debug)]
 pub struct StatusArgs {
     /// Workspace root.
@@ -203,6 +295,9 @@ pub fn run(cmd: GcloudCommand) -> i32 {
         GcloudCommand::Project(ProjectCommand::List(a)) => run_project_list(a),
         GcloudCommand::Project(ProjectCommand::Show(a)) => run_project_show(a),
         GcloudCommand::Project(ProjectCommand::SetDefault(a)) => run_project_set_default(a),
+        GcloudCommand::Compute(ComputeCommand::List(a)) => run_compute_list(a),
+        GcloudCommand::Compute(ComputeCommand::Start(a)) => run_compute_start(a),
+        GcloudCommand::Compute(ComputeCommand::Stop(a)) => run_compute_stop(a),
         GcloudCommand::Status(a) => run_combined_status(a),
     }
 }
@@ -565,6 +660,44 @@ fn project_set_default_request(
     })
 }
 
+fn compute_list_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    project: Option<&str>,
+    zone: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "list",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "project": project,
+        "zone": zone,
+    })
+}
+
+/// Write request for `start` / `stop`. Carries `confirmed: true` — the
+/// CLI-set marker the plugin's write verbs check for, so a direct plugin
+/// invoke that bypasses the CLI gate can be refused (BWOC-66 §3 / BWOC-67).
+/// The CLI only builds this after the operator-confirm gate has passed.
+fn compute_write_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    verb: &str,
+    instance: &str,
+    zone: &str,
+    project: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": verb,
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "instance": instance,
+        "zone": zone,
+        "project": project,
+        "confirmed": true,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers.
 // ---------------------------------------------------------------------------
@@ -622,6 +755,124 @@ fn is_valid_project_id(id: &str) -> bool {
     bytes
         .iter()
         .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// GCE instance name: 1–30 chars (RFC1035-ish; gcloud caps at 63 but the
+/// shorter cap is harmless here), lowercase letter first, then lowercase
+/// letters / digits / hyphens, not ending in a hyphen. Local pre-check — its
+/// primary job is to reject `-`-leading option-injection before we ever spawn
+/// the plugin; the live API re-validates.
+fn is_valid_instance_name(name: &str) -> bool {
+    let b = name.as_bytes();
+    if !(1..=63).contains(&b.len()) {
+        return false;
+    }
+    if !b[0].is_ascii_lowercase() {
+        return false;
+    }
+    if *b.last().unwrap() == b'-' {
+        return false;
+    }
+    b.iter()
+        .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+/// GCE zone: lowercase letter first, lowercase letters/digits/hyphens, not
+/// ending in a hyphen, 3–63 chars (e.g. `us-central1-a`). Same `-`-leading
+/// injection guard as the instance/project pre-checks.
+fn is_valid_zone(zone: &str) -> bool {
+    let b = zone.as_bytes();
+    if !(3..=63).contains(&b.len()) {
+        return false;
+    }
+    if !b[0].is_ascii_lowercase() {
+        return false;
+    }
+    if *b.last().unwrap() == b'-' {
+        return false;
+    }
+    b.iter()
+        .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+/// The literal `gcloud` command a compute write verb will run, shown verbatim
+/// in the confirmation gate. The user-supplied positional (instance) goes after
+/// the `--` separator so it can never be parsed as a flag; flag values use the
+/// `--flag=value` form for the same reason (#92 / #91 option-injection guard).
+fn gcloud_compute_command(verb: &str, instance: &str, zone: &str, project: Option<&str>) -> String {
+    let mut s = format!("gcloud compute instances {verb} --zone={zone}");
+    if let Some(p) = project {
+        s.push_str(&format!(" --project={p}"));
+    }
+    s.push_str(&format!(" -- {instance}"));
+    s
+}
+
+/// One-line description of the remote effect, surfaced in the gate so the
+/// operator confirms against the consequence, not just the verb name.
+fn compute_write_effect(verb: &str) -> &'static str {
+    match verb {
+        "start" => "boots the instance (incurs compute cost)",
+        "stop" => "halts the instance (interrupts running workloads)",
+        _ => "changes instance state",
+    }
+}
+
+/// Outcome of the operator-confirm gate. Pure so it is unit-testable away from
+/// the stdin/stderr of the actual prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateOutcome {
+    /// Confirmed (or `--yes`) — perform the write.
+    Proceed,
+    /// `--json` cannot prompt and `--yes` was not passed.
+    BlockedJsonNeedsYes,
+    /// Interactive operator answered No (or stdin was unreadable).
+    Declined,
+}
+
+/// Decide the gate outcome. `interactive_confirm` is the y/N answer when a
+/// prompt was shown (`Some`), or `None` when no prompt happened (`--yes` or
+/// `--json` mode).
+fn gate_decision(yes: bool, json: bool, interactive_confirm: Option<bool>) -> GateOutcome {
+    if yes {
+        return GateOutcome::Proceed;
+    }
+    if json {
+        return GateOutcome::BlockedJsonNeedsYes;
+    }
+    match interactive_confirm {
+        Some(true) => GateOutcome::Proceed,
+        _ => GateOutcome::Declined,
+    }
+}
+
+/// Report a write that did not happen — "no change" with a reason, never a bare
+/// failure (BWOC-67 gate contract point 4 / BWOC-66 §3).
+fn emit_compute_no_change(
+    label: &str,
+    instance: &str,
+    zone: &str,
+    code: &str,
+    reason: &str,
+    json: bool,
+) {
+    if json {
+        let value = serde_json::json!({
+            "ok": false,
+            "verb": label,
+            "changed": false,
+            "instance": instance,
+            "zone": zone,
+            "error": code,
+            "reason": reason,
+        });
+        print_json(&value);
+    } else {
+        eprintln!(
+            "bwoc gcloud {label}: no change — {reason} \
+             (instance '{instance}' in zone '{zone}' unchanged)"
+        );
+    }
 }
 
 /// Stub-error envelope for the missing-plugin path. Names the exact plugin and
@@ -958,6 +1209,260 @@ fn run_project_set_default(args: ProjectSetDefaultArgs) -> i32 {
                 emit_error_json("project set-default", "plugin_error", &e);
             } else {
                 eprintln!("bwoc gcloud project set-default: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compute verbs (EPIC-9) — `list` reads (no gate); `start`/`stop` write
+// (operator-confirm gated in the CLI, never the plugin).
+// ---------------------------------------------------------------------------
+
+fn run_compute_list(args: ComputeListArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud compute list: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if let Some(p) = &args.project {
+        if !is_valid_project_id(p) {
+            let msg = format!(
+                "invalid project id '{p}' — expected 6–30 chars, lowercase \
+                 letters/digits/hyphens, starting with a letter"
+            );
+            if args.json {
+                emit_error_json("compute list", "bad_project_id", &msg);
+            } else {
+                eprintln!("bwoc gcloud compute list: {msg}");
+            }
+            return EXIT_USAGE;
+        }
+    }
+    if let Some(z) = &args.zone {
+        if !is_valid_zone(z) {
+            let msg = format!(
+                "invalid zone '{z}' — expected lowercase letters/digits/hyphens, \
+                 starting with a letter (e.g. us-central1-a)"
+            );
+            if args.json {
+                emit_error_json("compute list", "bad_zone", &msg);
+            } else {
+                eprintln!("bwoc gcloud compute list: {msg}");
+            }
+            return EXIT_USAGE;
+        }
+    }
+    let plugin = match require_plugin(&root, PLUGIN_COMPUTE, "compute list", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = compute_list_request(
+        &root,
+        &plugin.dir,
+        args.project.as_deref(),
+        args.zone.as_deref(),
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                }
+            } else {
+                // The plugin returns gcloud's JSON, surfaced through; accept
+                // either a `{ instances: [...] }` envelope or a bare array.
+                let instances = value
+                    .get("instances")
+                    .and_then(|v| v.as_array())
+                    .or_else(|| value.as_array());
+                let total = instances.map(|a| a.len()).unwrap_or(0);
+                println!("bwoc gcloud compute list: {total} instance(s)");
+                if let Some(arr) = instances {
+                    for inst in arr {
+                        let name = inst.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                        let zone = inst.get("zone").and_then(|v| v.as_str()).unwrap_or("?");
+                        let status = inst.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                        println!("  {name} [{zone}] — {status}");
+                    }
+                }
+                EXIT_OK
+            }
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("compute list", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud compute list: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+fn run_compute_start(args: ComputeStartArgs) -> i32 {
+    run_compute_write(
+        "start",
+        &args.instance,
+        &args.zone,
+        args.project.as_deref(),
+        args.yes,
+        args.json,
+        args.workspace,
+    )
+}
+
+fn run_compute_stop(args: ComputeStopArgs) -> i32 {
+    run_compute_write(
+        "stop",
+        &args.instance,
+        &args.zone,
+        args.project.as_deref(),
+        args.yes,
+        args.json,
+        args.workspace,
+    )
+}
+
+/// Shared body for the two gated write verbs. The gate lives here (the operator
+/// boundary), not in the plugin: show the exact effect + the literal `gcloud`
+/// command, default No, `--yes` to bypass, refused → "no change" with a reason.
+fn run_compute_write(
+    verb: &str,
+    instance: &str,
+    zone: &str,
+    project: Option<&str>,
+    yes: bool,
+    json: bool,
+    workspace: Option<PathBuf>,
+) -> i32 {
+    let label = format!("compute {verb}");
+    let root = match resolve_workspace(workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud {label}: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if !is_valid_instance_name(instance) {
+        let msg = format!(
+            "invalid instance name '{instance}' — expected 1–63 chars, lowercase \
+             letter first, then lowercase letters/digits/hyphens, no trailing hyphen"
+        );
+        if json {
+            emit_error_json(&label, "bad_instance", &msg);
+        } else {
+            eprintln!("bwoc gcloud {label}: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    if !is_valid_zone(zone) {
+        let msg = format!(
+            "invalid zone '{zone}' — expected lowercase letters/digits/hyphens, \
+             starting with a letter (e.g. us-central1-a)"
+        );
+        if json {
+            emit_error_json(&label, "bad_zone", &msg);
+        } else {
+            eprintln!("bwoc gcloud {label}: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    if let Some(p) = project {
+        if !is_valid_project_id(p) {
+            let msg = format!(
+                "invalid project id '{p}' — expected 6–30 chars, lowercase \
+                 letters/digits/hyphens, starting with a letter"
+            );
+            if json {
+                emit_error_json(&label, "bad_project_id", &msg);
+            } else {
+                eprintln!("bwoc gcloud {label}: {msg}");
+            }
+            return EXIT_USAGE;
+        }
+    }
+
+    let command = gcloud_compute_command(verb, instance, zone, project);
+
+    // Operator-confirm gate. Show the exact effect + literal command, then
+    // prompt (interactive only). `--json` cannot prompt, so it needs `--yes`.
+    let interactive_confirm = if !yes && !json {
+        eprintln!("bwoc gcloud {label}: operator confirmation required (write verb).");
+        eprintln!("  instance: {instance}");
+        eprintln!("  zone:     {zone}");
+        if let Some(p) = project {
+            eprintln!("  project:  {p}");
+        }
+        eprintln!("  effect:   {}", compute_write_effect(verb));
+        eprintln!("  command:  {command}");
+        Some(confirm(&format!(
+            "Proceed to {verb} instance '{instance}' in zone '{zone}'?"
+        )))
+    } else {
+        None
+    };
+
+    match gate_decision(yes, json, interactive_confirm) {
+        GateOutcome::BlockedJsonNeedsYes => {
+            emit_compute_no_change(
+                &label,
+                instance,
+                zone,
+                "confirmation_required",
+                "--json mode cannot prompt; pass --yes only when the operator \
+                 authorized this specific action",
+                json,
+            );
+            return EXIT_USAGE;
+        }
+        GateOutcome::Declined => {
+            emit_compute_no_change(
+                &label,
+                instance,
+                zone,
+                "declined",
+                "operator declined confirmation",
+                json,
+            );
+            return EXIT_USAGE;
+        }
+        GateOutcome::Proceed => {}
+    }
+
+    let plugin = match require_plugin(&root, PLUGIN_COMPUTE, &label, json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = compute_write_request(&root, &plugin.dir, verb, instance, zone, project);
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if json {
+                if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                }
+            } else {
+                let status = value
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| value.get("current_status").and_then(|v| v.as_str()))
+                    .unwrap_or("done");
+                println!("bwoc gcloud {label}: instance '{instance}' in zone '{zone}' — {status}");
+                EXIT_OK
+            }
+        }
+        Err(e) => {
+            if json {
+                emit_error_json(&label, "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud {label}: {e}");
             }
             EXIT_PLUGIN_ERROR
         }
@@ -1308,6 +1813,188 @@ mod tests {
         assert!(json_write_blocked(true, false));
         assert!(!json_write_blocked(true, true));
         assert!(!json_write_blocked(false, false));
+    }
+
+    // --- compute: arg parsing ---------------------------------------------
+
+    #[test]
+    fn parses_compute_list() {
+        match parse(&["compute", "list", "--zone", "us-central1-a", "--json"]).unwrap() {
+            GcloudCommand::Compute(ComputeCommand::List(a)) => {
+                assert_eq!(a.zone.as_deref(), Some("us-central1-a"));
+                assert!(a.json);
+            }
+            other => panic!("expected Compute::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_compute_start_and_stop() {
+        match parse(&[
+            "compute",
+            "start",
+            "--instance",
+            "web-1",
+            "--zone",
+            "us-central1-a",
+            "--yes",
+        ])
+        .unwrap()
+        {
+            GcloudCommand::Compute(ComputeCommand::Start(a)) => {
+                assert_eq!(a.instance, "web-1");
+                assert_eq!(a.zone, "us-central1-a");
+                assert!(a.yes);
+            }
+            other => panic!("expected Compute::Start, got {other:?}"),
+        }
+        match parse(&[
+            "compute",
+            "stop",
+            "--instance",
+            "web-1",
+            "--zone",
+            "us-central1-a",
+        ])
+        .unwrap()
+        {
+            GcloudCommand::Compute(ComputeCommand::Stop(a)) => {
+                assert_eq!(a.instance, "web-1");
+                assert!(!a.yes);
+            }
+            other => panic!("expected Compute::Stop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compute_write_requires_instance_and_zone() {
+        assert!(parse(&["compute", "start"]).is_err());
+        assert!(parse(&["compute", "start", "--instance", "web-1"]).is_err());
+        assert!(parse(&["compute", "start", "--zone", "us-central1-a"]).is_err());
+        assert!(parse(&["compute", "stop", "--instance", "web-1"]).is_err());
+    }
+
+    // --- compute: gate decision (confirm required / --yes bypass / refused) -
+
+    #[test]
+    fn gate_yes_bypasses_prompt() {
+        // --yes proceeds regardless of json or a (never-shown) prompt answer.
+        assert_eq!(gate_decision(true, false, None), GateOutcome::Proceed);
+        assert_eq!(gate_decision(true, true, None), GateOutcome::Proceed);
+    }
+
+    #[test]
+    fn gate_json_without_yes_is_blocked() {
+        assert_eq!(
+            gate_decision(false, true, None),
+            GateOutcome::BlockedJsonNeedsYes
+        );
+    }
+
+    #[test]
+    fn gate_interactive_confirm_proceeds() {
+        assert_eq!(
+            gate_decision(false, false, Some(true)),
+            GateOutcome::Proceed
+        );
+    }
+
+    #[test]
+    fn gate_refused_is_no_change() {
+        // Operator said No → declined (no change).
+        assert_eq!(
+            gate_decision(false, false, Some(false)),
+            GateOutcome::Declined
+        );
+        // Unreadable stdin (None while interactive) is treated as a decline too.
+        assert_eq!(gate_decision(false, false, None), GateOutcome::Declined);
+    }
+
+    // --- compute: instance / zone validation -------------------------------
+
+    #[test]
+    fn accepts_valid_instance_names_and_zones() {
+        assert!(is_valid_instance_name("web-1"));
+        assert!(is_valid_instance_name("a"));
+        assert!(is_valid_instance_name("instance-with-many-parts-9"));
+        assert!(is_valid_zone("us-central1-a"));
+        assert!(is_valid_zone("europe-west4-b"));
+    }
+
+    #[test]
+    fn rejects_invalid_instance_names_and_zones() {
+        assert!(!is_valid_instance_name("")); // empty
+        assert!(!is_valid_instance_name("-leading-hyphen")); // option-injection guard
+        assert!(!is_valid_instance_name("1-digit-first"));
+        assert!(!is_valid_instance_name("UPPER"));
+        assert!(!is_valid_instance_name("trailing-")); // trailing hyphen
+        assert!(!is_valid_instance_name(&"a".repeat(64))); // too long
+        assert!(!is_valid_zone("--inject")); // option-injection guard
+        assert!(!is_valid_zone("Us-Central")); // uppercase
+        assert!(!is_valid_zone("ab")); // too short
+        assert!(!is_valid_zone("zone-")); // trailing hyphen
+    }
+
+    // --- compute: literal command + request shapes -------------------------
+
+    #[test]
+    fn compute_command_puts_instance_after_separator() {
+        let cmd = gcloud_compute_command("start", "web-1", "us-central1-a", None);
+        assert_eq!(
+            cmd,
+            "gcloud compute instances start --zone=us-central1-a -- web-1"
+        );
+        // `--` precedes the positional so a `-`-leading value can't be a flag.
+        assert!(cmd.contains(" -- web-1"));
+    }
+
+    #[test]
+    fn compute_command_includes_project_when_set() {
+        let cmd = gcloud_compute_command("stop", "web-1", "us-central1-a", Some("my-proj-123"));
+        assert_eq!(
+            cmd,
+            "gcloud compute instances stop --zone=us-central1-a --project=my-proj-123 -- web-1"
+        );
+    }
+
+    #[test]
+    fn compute_list_request_carries_optional_filters() {
+        let v = compute_list_request(
+            Path::new("/ws"),
+            Path::new("/p"),
+            Some("my-proj-123"),
+            Some("us-central1-a"),
+        );
+        assert_eq!(v["operation"], "list");
+        assert_eq!(v["project"], "my-proj-123");
+        assert_eq!(v["zone"], "us-central1-a");
+        // Omitted filters serialize as null, not missing.
+        let bare = compute_list_request(Path::new("/ws"), Path::new("/p"), None, None);
+        assert!(bare["project"].is_null());
+        assert!(bare["zone"].is_null());
+    }
+
+    #[test]
+    fn compute_write_request_carries_confirmed_marker() {
+        let v = compute_write_request(
+            Path::new("/ws"),
+            Path::new("/p"),
+            "start",
+            "web-1",
+            "us-central1-a",
+            None,
+        );
+        assert_eq!(v["operation"], "start");
+        assert_eq!(v["instance"], "web-1");
+        assert_eq!(v["zone"], "us-central1-a");
+        // The CLI-set gate marker the plugin checks for (BWOC-66 §3).
+        assert_eq!(v["confirmed"], true);
+    }
+
+    #[test]
+    fn compute_write_effect_names_consequence() {
+        assert!(compute_write_effect("start").contains("cost"));
+        assert!(compute_write_effect("stop").contains("workloads"));
     }
 
     // --- plugin discovery / stub-error path --------------------------------

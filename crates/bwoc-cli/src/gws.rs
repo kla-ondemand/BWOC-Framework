@@ -1,0 +1,1556 @@
+//! `bwoc gws <verb>` — operator-facing CLI surface for the `gws` plugin kind
+//! (BWOC-74). Foundation of `BWOC-EPIC-13` (Google Workspace, read-mostly).
+//!
+//! ## What this is
+//!
+//! The CLI half of the contract framed in
+//! `notes/2026-05-28_google-workspace-plugin-architecture.md` (BWOC-72) and made
+//! normative by the **Workspace Resource Schema** in `docs/en/PLUGINS.en.md`
+//! (BWOC-73). It owns **argument parsing, workspace + plugin resolution, the
+//! token-presence gate, pagination clamping, and the JSON shapes** — it does NOT
+//! speak to Google directly. The live REST calls (Drive `files.list`, Gmail
+//! `threads.list`, Calendar `events.list`, …) belong to the per-service
+//! `gws`-kind plugins (`gws-drive`, `gws-gmail`, `gws-calendar`, BWOC-75/76), all
+//! sourcing the `gws-auth` credential foundation. This CLI discovers each enabled
+//! `gws-*` plugin by name + `kind = "gws"` and invokes its `[plugin].entry`; when
+//! a plugin is absent the live verbs **stub-error gracefully** (exit `4`) rather
+//! than panicking.
+//!
+//! ## Verb table — read-mostly
+//!
+//! | Verb                                  | Needs token | Plugin         | `operation` | Notes                                          |
+//! |---|---|---|---|---|
+//! | `auth status`                         | no          | `gws-auth`     | `status`    | Token present? granted scopes? account. Never the token value. |
+//! | `drive list [--query] [--max]`        | yes         | `gws-drive`    | `list`      | Drive files in the Drive-file schema.          |
+//! | `drive show --file <id>`              | yes         | `gws-drive`    | `get`       | One Drive file's metadata.                     |
+//! | `gmail search [--query] [--max]`      | yes         | `gws-gmail`    | `search`    | Gmail threads in the Gmail-thread schema.      |
+//! | `gmail show --thread <id>`            | yes         | `gws-gmail`    | `show`      | One thread (subject/from/labels/messages).     |
+//! | `gmail labels`                        | yes         | `gws-gmail`    | `labels`    | Label list.                                    |
+//! | `calendar list`                       | yes         | `gws-calendar` | `calendars` | Calendars the token can see.                   |
+//! | `calendar events [--calendar] [--max]`| yes         | `gws-calendar` | `events`    | Events in the Calendar-event schema.           |
+//!
+//! Every verb has a `--json` twin. The request payload is handed to the plugin
+//! over **stdin as JSON** (the gcloud/jira dispatch precedent), carrying the
+//! `operation` string above plus the verb's parameters; the plugin replies with
+//! one JSON document on stdout.
+//!
+//! ## Auth model — operator OAuth token, never echoed
+//!
+//! Workspace REST authenticates with an **OAuth2 access token** (Bearer) carrying
+//! user-consented readonly scopes. The token resolves from (precedence order, the
+//! design-note pattern):
+//!
+//! 1. **`BWOC_GWS_TOKEN`** env — transient / CI;
+//! 2. **`<workspace>/.bwoc/secrets/gws-token.json`** — workspace-local, gitignored.
+//!
+//! **This CLI only checks the token's *presence*** — it never reads, logs,
+//! serializes, or forwards the value. The plugin (which inherits this process's
+//! environment) reads `BWOC_GWS_TOKEN` / the secrets file itself and owns the
+//! outbound `Authorization: Bearer` header and refresh. The read verbs
+//! (`drive` / `gmail` / `calendar`) require a token and exit `2` when none is
+//! present; `auth status` reports presence without requiring it (that is the point
+//! of `status`). Mirrors the Adinnādāna invariant the `jira` / `gcloud` / `figma`
+//! lanes established.
+//!
+//! ## Read-mostly — writes deferred
+//!
+//! Every EPIC-13 verb reads. The obvious writes (Gmail send, Calendar insert,
+//! Drive upload) are deferred to future slices, each inheriting the write-verb
+//! operator-confirm gate (PLUGINS §Write verbs). There is therefore no remote
+//! write to gate here.
+//!
+//! ## Pagination — `--max` caps an otherwise unbounded list
+//!
+//! The list verbs (`drive list`, `gmail search`, `calendar events`) page under the
+//! hood in the plugin. `--max <n>` caps the total surfaced so an agent never pulls
+//! an unbounded inbox; it is clamped to `1..=MAX_RESULTS_CEILING` before being
+//! handed to the plugin. Omitting `--max` lets the plugin apply its own bounded
+//! default.
+//!
+//! ## Exit codes — normative
+//!
+//! - `0` — success.
+//! - `1` — local I/O error (e.g. JSON serialization).
+//! - `2` — operator/usage error (no workspace, missing token for a read verb,
+//!   malformed id).
+//! - `4` — a required `gws-*` plugin is not enabled in this workspace (the live
+//!   path is unavailable; the remediation message names the missing one).
+//! - `255` — plugin runtime error (spawn failure or non-JSON output).
+//!
+//! Passing `--json` makes the exit code redundant: the structured envelope carries
+//! `ok`/`error` fields with the same signal.
+
+use clap::{Args, Subcommand};
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+// ---------------------------------------------------------------------------
+// Exit codes + plugin names/kind + env var + paths (single source of truth).
+// ---------------------------------------------------------------------------
+
+const EXIT_OK: i32 = 0;
+const EXIT_LOCAL_ERROR: i32 = 1;
+const EXIT_USAGE: i32 = 2;
+const EXIT_NO_PLUGIN: i32 = 4;
+const EXIT_PLUGIN_ERROR: i32 = 255;
+
+const PLUGIN_AUTH: &str = "gws-auth";
+const PLUGIN_DRIVE: &str = "gws-drive";
+const PLUGIN_GMAIL: &str = "gws-gmail";
+const PLUGIN_CALENDAR: &str = "gws-calendar";
+const PLUGIN_KIND: &str = "gws";
+
+const ENV_TOKEN: &str = "BWOC_GWS_TOKEN";
+const SECRETS_REL: &str = ".bwoc/secrets/gws-token.json";
+
+/// Upper bound `--max` is clamped to. The Workspace list endpoints page; this
+/// keeps an agent from requesting an unbounded pull while still allowing a large
+/// explicit page.
+const MAX_RESULTS_CEILING: u32 = 1000;
+
+// ---------------------------------------------------------------------------
+// CLI surface — defined here so arg parsing is unit-testable against
+// `GwsCommand` directly (see `tests` module).
+// ---------------------------------------------------------------------------
+
+#[derive(Subcommand, Debug)]
+pub enum GwsCommand {
+    /// OAuth credential state operations (gws-auth plugin).
+    #[command(subcommand)]
+    Auth(AuthCommand),
+    /// Drive file operations (gws-drive plugin).
+    #[command(subcommand)]
+    Drive(DriveCommand),
+    /// Gmail thread + label operations (gws-gmail plugin).
+    #[command(subcommand)]
+    Gmail(GmailCommand),
+    /// Calendar + event operations (gws-calendar plugin).
+    #[command(subcommand)]
+    Calendar(CalendarCommand),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthCommand {
+    /// Report token presence, granted scopes, and account (never the token).
+    Status(AuthStatusArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DriveCommand {
+    /// List Drive files the token can see (Drive-file schema).
+    List(DriveListArgs),
+    /// Show one Drive file's metadata.
+    Show(DriveShowArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GmailCommand {
+    /// Search Gmail threads (Gmail-thread schema).
+    Search(GmailSearchArgs),
+    /// Show one thread (subject/from/labels + messages).
+    Show(GmailShowArgs),
+    /// List Gmail labels.
+    Labels(GmailLabelsArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CalendarCommand {
+    /// List calendars the token can see.
+    List(CalendarListArgs),
+    /// List events (Calendar-event schema).
+    Events(CalendarEventsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct AuthStatusArgs {
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DriveListArgs {
+    /// Drive query (Drive `q` syntax, e.g. "mimeType='application/pdf'").
+    #[arg(long)]
+    query: Option<String>,
+    /// Cap the number of files returned (clamped to 1..=1000).
+    #[arg(long)]
+    max: Option<u32>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct DriveShowArgs {
+    /// Drive file id. Required.
+    #[arg(long = "file")]
+    file: String,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct GmailSearchArgs {
+    /// Gmail search query (e.g. "from:me is:unread").
+    #[arg(long)]
+    query: Option<String>,
+    /// Cap the number of threads returned (clamped to 1..=1000).
+    #[arg(long)]
+    max: Option<u32>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct GmailShowArgs {
+    /// Gmail thread id. Required.
+    #[arg(long = "thread")]
+    thread: String,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct GmailLabelsArgs {
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CalendarListArgs {
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CalendarEventsArgs {
+    /// Calendar id to read events from (default: the token's primary calendar).
+    #[arg(long = "calendar")]
+    calendar: Option<String>,
+    /// Cap the number of events returned (clamped to 1..=1000).
+    #[arg(long)]
+    max: Option<u32>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+/// Dispatch a parsed `GwsCommand`. Returns the process exit code.
+pub fn run(cmd: GwsCommand) -> i32 {
+    match cmd {
+        GwsCommand::Auth(AuthCommand::Status(a)) => run_auth_status(a),
+        GwsCommand::Drive(DriveCommand::List(a)) => run_drive_list(a),
+        GwsCommand::Drive(DriveCommand::Show(a)) => run_drive_show(a),
+        GwsCommand::Gmail(GmailCommand::Search(a)) => run_gmail_search(a),
+        GwsCommand::Gmail(GmailCommand::Show(a)) => run_gmail_show(a),
+        GwsCommand::Gmail(GmailCommand::Labels(a)) => run_gmail_labels(a),
+        GwsCommand::Calendar(CalendarCommand::List(a)) => run_calendar_list(a),
+        GwsCommand::Calendar(CalendarCommand::Events(a)) => run_calendar_events(a),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workspace resolution — same shape as gcloud.rs / jira.rs / figma.rs.
+// ---------------------------------------------------------------------------
+
+fn find_workspace_root(explicit: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p);
+    }
+    if let Ok(env_path) = std::env::var("BWOC_WORKSPACE") {
+        let p = PathBuf::from(env_path);
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
+    }
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        if cur.join(".bwoc/workspace.toml").is_file() {
+            return Some(cur);
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn resolve_workspace(explicit: Option<PathBuf>) -> Result<PathBuf, String> {
+    find_workspace_root(explicit).ok_or_else(|| {
+        "no workspace found (no .bwoc/workspace.toml in cwd or ancestors). \
+         Pass --workspace, set BWOC_WORKSPACE, or run `bwoc init` first."
+            .to_string()
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Auth shape — the token is NEVER captured. We surface presence + which source
+// would win, derived from env + filesystem probes only. The `gws-auth` plugin's
+// `status` verb returns the live answer (granted scopes, account); this is the
+// offline pre-check that gates the read verbs and feeds the remediation message.
+// ---------------------------------------------------------------------------
+
+/// Where an OAuth token would resolve from. `gws-auth status` returns the live
+/// answer; this is the offline pre-check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum TokenSource {
+    Env,
+    SecretsFile,
+    None,
+}
+
+impl TokenSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            TokenSource::Env => "env",
+            TokenSource::SecretsFile => "secrets-file",
+            TokenSource::None => "none",
+        }
+    }
+}
+
+/// Offline token probe. Env presence + secrets-file presence only — the token
+/// value is never read, hashed, or surfaced.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct AuthShape {
+    /// First source that would resolve, per the precedence in the design note.
+    active_source: TokenSource,
+    /// Whether `BWOC_GWS_TOKEN` is set (non-empty).
+    env_token_present: bool,
+    /// Whether `<workspace>/.bwoc/secrets/gws-token.json` exists. Presence only —
+    /// the file is never read or hashed here.
+    secrets_file_present: bool,
+}
+
+impl AuthShape {
+    /// True when any token source is present (the read-verb gate).
+    fn has_token(&self) -> bool {
+        self.active_source != TokenSource::None
+    }
+}
+
+fn probe_auth_shape(workspace: &Path, getenv: &dyn Fn(&str) -> Option<String>) -> AuthShape {
+    let env_token_present = getenv(ENV_TOKEN).filter(|s| !s.is_empty()).is_some();
+    let secrets_file_present = workspace.join(SECRETS_REL).is_file();
+
+    // Precedence: env > secrets file.
+    let active_source = if env_token_present {
+        TokenSource::Env
+    } else if secrets_file_present {
+        TokenSource::SecretsFile
+    } else {
+        TokenSource::None
+    };
+
+    AuthShape {
+        active_source,
+        env_token_present,
+        secrets_file_present,
+    }
+}
+
+fn real_getenv(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
+
+// ---------------------------------------------------------------------------
+// Pagination — clamp `--max` to a sane window before handing it to the plugin.
+// ---------------------------------------------------------------------------
+
+/// Clamp an explicit `--max` to `1..=MAX_RESULTS_CEILING`. `None` (no `--max`)
+/// stays `None` so the plugin applies its own bounded default. `Some(0)` clamps
+/// up to `1` — a zero-result page is never what the operator meant.
+fn normalize_max(max: Option<u32>) -> Option<u32> {
+    max.map(|n| n.clamp(1, MAX_RESULTS_CEILING))
+}
+
+// ---------------------------------------------------------------------------
+// Id validation — local pre-check. Values travel to the plugin over JSON stdin
+// (not argv), so there is no CLI→plugin option-injection surface; the guards
+// reject empty / `-`-leading / over-long / out-of-charset junk before we spawn.
+// ---------------------------------------------------------------------------
+
+/// Drive file id / Gmail thread id: Google opaque ids — letters, digits, `_`,
+/// `-`. 1..=512 chars, no leading hyphen.
+fn is_valid_resource_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    if !(1..=512).contains(&b.len()) {
+        return false;
+    }
+    if b[0] == b'-' {
+        return false;
+    }
+    b.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+/// Calendar id: opaque id, the literal `primary`, or an email-like address
+/// (e.g. `…@group.calendar.google.com`). Adds `.` and `@` to the charset;
+/// 1..=512 chars, no leading hyphen.
+fn is_valid_calendar_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    if !(1..=512).contains(&b.len()) {
+        return false;
+    }
+    if b[0] == b'-' {
+        return false;
+    }
+    b.iter()
+        .all(|&c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c == b'.' || c == b'@')
+}
+
+/// Free-text query (Drive `q`, Gmail search). 1..=1024 chars, no control bytes
+/// (tabs/newlines excluded — they have no meaning in a single-line query and a
+/// stray control byte usually signals a paste error or injection attempt).
+fn is_valid_query(q: &str) -> bool {
+    let len = q.len();
+    if !(1..=1024).contains(&len) {
+        return false;
+    }
+    !q.chars().any(|c| c.is_control())
+}
+
+// ---------------------------------------------------------------------------
+// Plugin discovery — finds the enabled `gws-*` plugin by name + kind=gws.
+// Mirrors gcloud.rs exactly: checks both the flat layout
+// (`modules/plugins/<name>/`) and the kind-namespaced layout
+// (`modules/plugins/gws/<name>/`).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ManifestRaw {
+    plugin: PluginSection,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PluginSection {
+    name: String,
+    kind: String,
+    entry: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GwsPlugin {
+    name: String,
+    dir: PathBuf,
+    entry: String,
+}
+
+/// Read `.bwoc/workspace.toml [plugins.<name>] enabled` flags.
+fn workspace_enabled_set(root: &Path) -> Result<BTreeMap<String, bool>, String> {
+    let path = root.join(".bwoc/workspace.toml");
+    let body =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let value: toml::Value =
+        toml::from_str(&body).map_err(|e| format!("{}: parse: {e}", path.display()))?;
+    let mut out = BTreeMap::new();
+    let Some(plugins) = value.get("plugins").and_then(|v| v.as_table()) else {
+        return Ok(out);
+    };
+    for (name, entry) in plugins {
+        let enabled = entry
+            .as_table()
+            .and_then(|t| t.get("enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        out.insert(name.clone(), enabled);
+    }
+    Ok(out)
+}
+
+/// Try the two known plugin layouts in order — flat, then `gws/`-namespaced.
+fn candidate_plugin_dirs(root: &Path, name: &str) -> [PathBuf; 2] {
+    [
+        root.join("modules/plugins").join(name),
+        root.join("modules/plugins/gws").join(name),
+    ]
+}
+
+/// Find a `gws`-kind plugin by name across both layouts. Returns `None` when no
+/// manifest matches; returns `Err` on parse failure (the plugin *exists* but is
+/// malformed — surface, don't silently degrade).
+fn discover_plugin(root: &Path, name: &str) -> Result<Option<GwsPlugin>, String> {
+    for plugin_dir in candidate_plugin_dirs(root, name) {
+        let manifest = plugin_dir.join("manifest.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let body = std::fs::read_to_string(&manifest)
+            .map_err(|e| format!("read {}: {e}", manifest.display()))?;
+        let parsed: ManifestRaw =
+            toml::from_str(&body).map_err(|e| format!("parse {}: {e}", manifest.display()))?;
+        if parsed.plugin.name != name {
+            // Wrong manifest at this path — keep looking.
+            continue;
+        }
+        if parsed.plugin.kind != PLUGIN_KIND {
+            // Right name, wrong kind. Surface — this is a misconfiguration.
+            return Err(format!(
+                "{}: [plugin].kind = {:?}, expected {:?}",
+                manifest.display(),
+                parsed.plugin.kind,
+                PLUGIN_KIND
+            ));
+        }
+        return Ok(Some(GwsPlugin {
+            name: parsed.plugin.name,
+            dir: plugin_dir,
+            entry: parsed.plugin.entry,
+        }));
+    }
+    Ok(None)
+}
+
+/// Discover + check the `enabled` flag in `workspace.toml`. A plugin installed
+/// but disabled returns `None` — same stub-error path as "not installed".
+fn find_enabled_plugin(root: &Path, name: &str) -> Result<Option<GwsPlugin>, String> {
+    let Some(plugin) = discover_plugin(root, name)? else {
+        return Ok(None);
+    };
+    let enabled = workspace_enabled_set(root)?;
+    if matches!(enabled.get(name), Some(true)) {
+        Ok(Some(plugin))
+    } else {
+        Ok(None)
+    }
+}
+
+fn resolve_entry_program(plugin_dir: &Path, entry: &str) -> OsString {
+    let candidate = plugin_dir.join(entry);
+    if candidate.is_file() {
+        candidate.into_os_string()
+    } else {
+        OsString::from(entry)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin invocation — same shape as gcloud.rs::invoke_plugin. The token is NOT
+// passed explicitly: the plugin inherits this process's environment (including
+// `BWOC_GWS_TOKEN`) and reads it itself. We never touch the value.
+// ---------------------------------------------------------------------------
+
+fn invoke_plugin(
+    plugin: &GwsPlugin,
+    workspace: &Path,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    // BWOC-36: guard against path-traversal RCE before spawning the entry.
+    crate::util::validate_plugin_entry(&plugin.entry)?;
+    let program = resolve_entry_program(&plugin.dir, &plugin.entry);
+    let operation = request
+        .get("operation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let mut child = Command::new(&program)
+        .current_dir(&plugin.dir)
+        .env("BWOC_WORKSPACE", workspace)
+        .env("BWOC_PLUGIN_DIR", &plugin.dir)
+        .env("BWOC_GWS_OPERATION", operation)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn '{}': {e}", program.to_string_lossy()))?;
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = writeln!(stdin, "{request}");
+    }
+    drop(child.stdin.take());
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("wait '{}': {e}", program.to_string_lossy()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "plugin '{}' exited {} (stderr: {})",
+            plugin.name,
+            output.status.code().unwrap_or(-1),
+            stderr.trim()
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout)
+        .map_err(|e| format!("plugin '{}' did not emit valid JSON: {e}", plugin.name))
+}
+
+// ---------------------------------------------------------------------------
+// Request payloads handed to the plugin over stdin (one per verb). Optional
+// params serialize as JSON null (present-but-absent), per the gcloud precedent.
+// ---------------------------------------------------------------------------
+
+fn auth_status_request(workspace: &Path, plugin_dir: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "status",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+    })
+}
+
+fn drive_list_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    query: Option<&str>,
+    max: Option<u32>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "list",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "query": query,
+        "max": max,
+    })
+}
+
+fn drive_show_request(workspace: &Path, plugin_dir: &Path, file_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "get",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "file_id": file_id,
+    })
+}
+
+fn gmail_search_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    query: Option<&str>,
+    max: Option<u32>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "search",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "query": query,
+        "max": max,
+    })
+}
+
+fn gmail_show_request(workspace: &Path, plugin_dir: &Path, thread_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "show",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "thread_id": thread_id,
+    })
+}
+
+fn gmail_labels_request(workspace: &Path, plugin_dir: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "labels",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+    })
+}
+
+fn calendar_list_request(workspace: &Path, plugin_dir: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "calendars",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+    })
+}
+
+fn calendar_events_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    calendar: Option<&str>,
+    max: Option<u32>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "events",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "calendar_id": calendar,
+        "max": max,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers.
+// ---------------------------------------------------------------------------
+
+fn print_json(value: &serde_json::Value) -> bool {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => {
+            println!("{s}");
+            true
+        }
+        Err(e) => {
+            eprintln!("bwoc gws: serialize JSON: {e}");
+            false
+        }
+    }
+}
+
+fn emit_error_json(verb: &str, code: &str, message: &str) {
+    let value = serde_json::json!({
+        "ok": false,
+        "verb": verb,
+        "error": code,
+        "message": message,
+    });
+    print_json(&value);
+}
+
+/// Stub-error envelope for the missing-plugin path. Names the exact plugin and
+/// the install hint the operator needs.
+fn no_plugin_message(plugin_name: &str) -> String {
+    format!(
+        "no enabled '{plugin_name}' plugin (gws kind) in this workspace. \
+         The live Google Workspace path is provided by `{plugin_name}` (see the \
+         EPIC-13 design note). Install it (BWOC-75/76) with \
+         `bwoc plugin install <source>` then `bwoc plugin enable {plugin_name}`."
+    )
+}
+
+fn require_plugin(
+    root: &Path,
+    plugin_name: &str,
+    verb: &str,
+    json: bool,
+) -> Result<GwsPlugin, i32> {
+    match find_enabled_plugin(root, plugin_name) {
+        Ok(Some(p)) => Ok(p),
+        Ok(None) => {
+            let msg = no_plugin_message(plugin_name);
+            if json {
+                emit_error_json(verb, "no_plugin", &msg);
+            } else {
+                eprintln!("bwoc gws {verb}: {msg}");
+            }
+            Err(EXIT_NO_PLUGIN)
+        }
+        Err(e) => {
+            if json {
+                emit_error_json(verb, "discovery_error", &e);
+            } else {
+                eprintln!("bwoc gws {verb}: {e}");
+            }
+            Err(EXIT_PLUGIN_ERROR)
+        }
+    }
+}
+
+/// The read-verb token gate. Returns `Ok(())` when a token is present; otherwise
+/// emits the usage error and the exit code to return. `auth status` skips this.
+fn require_token(shape: &AuthShape, verb: &str, json: bool) -> Result<(), i32> {
+    if shape.has_token() {
+        return Ok(());
+    }
+    let msg = format!(
+        "no OAuth token found. Set {ENV_TOKEN} or create {SECRETS_REL} (gitignored). \
+         Run `bwoc gws auth status` to inspect credential state."
+    );
+    if json {
+        emit_error_json(verb, "no_token", &msg);
+    } else {
+        eprintln!("bwoc gws {verb}: {msg}");
+    }
+    Err(EXIT_USAGE)
+}
+
+/// Resolve the workspace, printing the usage error under `verb` on failure.
+fn workspace_or_usage(workspace: Option<PathBuf>, verb: &str) -> Result<PathBuf, i32> {
+    resolve_workspace(workspace).map_err(|e| {
+        eprintln!("bwoc gws {verb}: {e}");
+        EXIT_USAGE
+    })
+}
+
+/// Run a read verb that needs a token + an enabled plugin, then relay the
+/// plugin's JSON. `render` prints the human-readable view from the plugin value.
+fn run_read_verb(
+    verb: &str,
+    plugin_name: &str,
+    workspace: Option<PathBuf>,
+    json: bool,
+    build_request: impl FnOnce(&Path, &Path) -> serde_json::Value,
+    render: impl FnOnce(&serde_json::Value),
+) -> i32 {
+    let root = match workspace_or_usage(workspace, verb) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let shape = probe_auth_shape(&root, &real_getenv);
+    if let Err(code) = require_token(&shape, verb, json) {
+        return code;
+    }
+    let plugin = match require_plugin(&root, plugin_name, verb, json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = build_request(&root, &plugin.dir);
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if json {
+                if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_LOCAL_ERROR
+                }
+            } else {
+                render(&value);
+                EXIT_OK
+            }
+        }
+        Err(e) => {
+            if json {
+                emit_error_json(verb, "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gws {verb}: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+/// Accept either a `{ "<key>": [...] }` envelope or a bare top-level array.
+fn array_under<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a Vec<serde_json::Value>> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .or_else(|| value.as_array())
+}
+
+fn field<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+    v.get(key).and_then(|x| x.as_str()).unwrap_or("?")
+}
+
+// ---------------------------------------------------------------------------
+// Verb implementations.
+// ---------------------------------------------------------------------------
+
+fn run_auth_status(args: AuthStatusArgs) -> i32 {
+    let verb = "auth status";
+    let root = match workspace_or_usage(args.workspace, verb) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let shape = probe_auth_shape(&root, &real_getenv);
+
+    // `auth status` does not require a token — reporting its absence is the point.
+    let plugin = match require_plugin(&root, PLUGIN_AUTH, verb, args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = auth_status_request(&root, &plugin.dir);
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                let merged = serde_json::json!({
+                    "ok": true,
+                    "workspace": root.display().to_string(),
+                    "auth": value,
+                    "shape": shape,
+                });
+                if print_json(&merged) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                }
+            } else {
+                let account = field(&value, "account");
+                let has = value
+                    .get("has_credential")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(shape.has_token());
+                let scopes = value
+                    .get("scopes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_else(|| "(unknown)".to_string());
+                println!(
+                    "bwoc gws auth: source={}, account={account}, has_credential={has}, scopes=[{scopes}]",
+                    shape.active_source.as_str()
+                );
+                EXIT_OK
+            }
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json(verb, "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gws {verb}: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+fn run_drive_list(args: DriveListArgs) -> i32 {
+    let verb = "drive list";
+    if let Some(q) = &args.query {
+        if !is_valid_query(q) {
+            return usage_bad_field(
+                verb,
+                "bad_query",
+                "query must be 1..=1024 chars, no control bytes",
+                args.json,
+            );
+        }
+    }
+    let max = normalize_max(args.max);
+    let query = args.query.clone();
+    run_read_verb(
+        verb,
+        PLUGIN_DRIVE,
+        args.workspace,
+        args.json,
+        move |ws, dir| drive_list_request(ws, dir, query.as_deref(), max),
+        |value| {
+            let files = array_under(value, "files");
+            let total = files.map(|a| a.len()).unwrap_or(0);
+            println!("bwoc gws drive list: {total} file(s)");
+            if let Some(arr) = files {
+                for f in arr {
+                    println!(
+                        "  {}  {} [{}] {}",
+                        field(f, "file_id"),
+                        field(f, "name"),
+                        field(f, "mime_type"),
+                        field(f, "modified_time"),
+                    );
+                }
+            }
+        },
+    )
+}
+
+fn run_drive_show(args: DriveShowArgs) -> i32 {
+    let verb = "drive show";
+    if !is_valid_resource_id(&args.file) {
+        return usage_bad_field(
+            verb,
+            "bad_file_id",
+            "file id must be 1..=512 chars of [A-Za-z0-9_-], no leading hyphen",
+            args.json,
+        );
+    }
+    let file = args.file.clone();
+    run_read_verb(
+        verb,
+        PLUGIN_DRIVE,
+        args.workspace,
+        args.json,
+        move |ws, dir| drive_show_request(ws, dir, &file),
+        |value| {
+            println!(
+                "bwoc gws drive show: {} — {} [{}] {}",
+                field(value, "file_id"),
+                field(value, "name"),
+                field(value, "mime_type"),
+                field(value, "modified_time"),
+            );
+        },
+    )
+}
+
+fn run_gmail_search(args: GmailSearchArgs) -> i32 {
+    let verb = "gmail search";
+    if let Some(q) = &args.query {
+        if !is_valid_query(q) {
+            return usage_bad_field(
+                verb,
+                "bad_query",
+                "query must be 1..=1024 chars, no control bytes",
+                args.json,
+            );
+        }
+    }
+    let max = normalize_max(args.max);
+    let query = args.query.clone();
+    run_read_verb(
+        verb,
+        PLUGIN_GMAIL,
+        args.workspace,
+        args.json,
+        move |ws, dir| gmail_search_request(ws, dir, query.as_deref(), max),
+        |value| {
+            let threads = array_under(value, "threads");
+            let total = threads.map(|a| a.len()).unwrap_or(0);
+            println!("bwoc gws gmail search: {total} thread(s)");
+            if let Some(arr) = threads {
+                for t in arr {
+                    println!(
+                        "  {}  {} — {} ({})",
+                        field(t, "thread_id"),
+                        field(t, "subject"),
+                        field(t, "from"),
+                        field(t, "last_message_time"),
+                    );
+                }
+            }
+        },
+    )
+}
+
+fn run_gmail_show(args: GmailShowArgs) -> i32 {
+    let verb = "gmail show";
+    if !is_valid_resource_id(&args.thread) {
+        return usage_bad_field(
+            verb,
+            "bad_thread_id",
+            "thread id must be 1..=512 chars of [A-Za-z0-9_-], no leading hyphen",
+            args.json,
+        );
+    }
+    let thread = args.thread.clone();
+    run_read_verb(
+        verb,
+        PLUGIN_GMAIL,
+        args.workspace,
+        args.json,
+        move |ws, dir| gmail_show_request(ws, dir, &thread),
+        |value| {
+            let labels = value
+                .get("labels")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            println!(
+                "bwoc gws gmail show: {} — {} (from {}) labels=[{labels}]",
+                field(value, "thread_id"),
+                field(value, "subject"),
+                field(value, "from"),
+            );
+        },
+    )
+}
+
+fn run_gmail_labels(args: GmailLabelsArgs) -> i32 {
+    let verb = "gmail labels";
+    run_read_verb(
+        verb,
+        PLUGIN_GMAIL,
+        args.workspace,
+        args.json,
+        gmail_labels_request,
+        |value| {
+            let labels = array_under(value, "labels");
+            let total = labels.map(|a| a.len()).unwrap_or(0);
+            println!("bwoc gws gmail labels: {total} label(s)");
+            if let Some(arr) = labels {
+                for l in arr {
+                    // Accept a bare string or an object with name/id.
+                    if let Some(s) = l.as_str() {
+                        println!("  {s}");
+                    } else {
+                        println!("  {}", field(l, "name"));
+                    }
+                }
+            }
+        },
+    )
+}
+
+fn run_calendar_list(args: CalendarListArgs) -> i32 {
+    let verb = "calendar list";
+    run_read_verb(
+        verb,
+        PLUGIN_CALENDAR,
+        args.workspace,
+        args.json,
+        calendar_list_request,
+        |value| {
+            let cals = array_under(value, "calendars");
+            let total = cals.map(|a| a.len()).unwrap_or(0);
+            println!("bwoc gws calendar list: {total} calendar(s)");
+            if let Some(arr) = cals {
+                for c in arr {
+                    println!("  {}  {}", field(c, "calendar_id"), field(c, "summary"));
+                }
+            }
+        },
+    )
+}
+
+fn run_calendar_events(args: CalendarEventsArgs) -> i32 {
+    let verb = "calendar events";
+    if let Some(c) = &args.calendar {
+        if !is_valid_calendar_id(c) {
+            return usage_bad_field(
+                verb,
+                "bad_calendar_id",
+                "calendar id must be 1..=512 chars of [A-Za-z0-9_-.@], no leading hyphen",
+                args.json,
+            );
+        }
+    }
+    let max = normalize_max(args.max);
+    let calendar = args.calendar.clone();
+    run_read_verb(
+        verb,
+        PLUGIN_CALENDAR,
+        args.workspace,
+        args.json,
+        move |ws, dir| calendar_events_request(ws, dir, calendar.as_deref(), max),
+        |value| {
+            let events = array_under(value, "events");
+            let total = events.map(|a| a.len()).unwrap_or(0);
+            println!("bwoc gws calendar events: {total} event(s)");
+            if let Some(arr) = events {
+                for e in arr {
+                    println!(
+                        "  {}  {} ({} → {})",
+                        field(e, "event_id"),
+                        field(e, "summary"),
+                        field(e, "start"),
+                        field(e, "end"),
+                    );
+                }
+            }
+        },
+    )
+}
+
+/// Emit a usage error for a malformed field and return `EXIT_USAGE`.
+fn usage_bad_field(verb: &str, code: &str, message: &str, json: bool) -> i32 {
+    if json {
+        emit_error_json(verb, code, message);
+    } else {
+        eprintln!("bwoc gws {verb}: {message}");
+    }
+    EXIT_USAGE
+}
+
+// ===========================================================================
+// Tests — arg parsing, JSON shapes, id/query validation, pagination clamp,
+// auth-shape probe, no-plugin stub path, never-leak guardrails.
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::collections::HashMap;
+
+    #[derive(Parser, Debug)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: GwsCommand,
+    }
+
+    fn parse(args: &[&str]) -> Result<GwsCommand, clap::Error> {
+        let mut full = vec!["bwoc-gws-test"];
+        full.extend_from_slice(args);
+        TestCli::try_parse_from(full).map(|c| c.cmd)
+    }
+
+    fn getenv_from(map: HashMap<&'static str, &'static str>) -> impl Fn(&str) -> Option<String> {
+        move |k: &str| map.get(k).map(|v| v.to_string())
+    }
+
+    // --- arg parsing -------------------------------------------------------
+
+    #[test]
+    fn parses_auth_status() {
+        match parse(&["auth", "status", "--json"]).unwrap() {
+            GwsCommand::Auth(AuthCommand::Status(a)) => assert!(a.json),
+            other => panic!("expected Auth::Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_drive_list_with_query_and_max() {
+        match parse(&[
+            "drive",
+            "list",
+            "--query",
+            "name contains 'spec'",
+            "--max",
+            "20",
+            "--json",
+        ])
+        .unwrap()
+        {
+            GwsCommand::Drive(DriveCommand::List(a)) => {
+                assert_eq!(a.query.as_deref(), Some("name contains 'spec'"));
+                assert_eq!(a.max, Some(20));
+                assert!(a.json);
+            }
+            other => panic!("expected Drive::List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_drive_show_requires_file() {
+        match parse(&["drive", "show", "--file", "1AbC_dEf-123"]).unwrap() {
+            GwsCommand::Drive(DriveCommand::Show(a)) => assert_eq!(a.file, "1AbC_dEf-123"),
+            other => panic!("expected Drive::Show, got {other:?}"),
+        }
+        assert!(parse(&["drive", "show"]).is_err());
+    }
+
+    #[test]
+    fn parses_gmail_verbs() {
+        match parse(&["gmail", "search", "--query", "is:unread", "--max", "5"]).unwrap() {
+            GwsCommand::Gmail(GmailCommand::Search(a)) => {
+                assert_eq!(a.query.as_deref(), Some("is:unread"));
+                assert_eq!(a.max, Some(5));
+            }
+            other => panic!("expected Gmail::Search, got {other:?}"),
+        }
+        match parse(&["gmail", "show", "--thread", "abc123"]).unwrap() {
+            GwsCommand::Gmail(GmailCommand::Show(a)) => assert_eq!(a.thread, "abc123"),
+            other => panic!("expected Gmail::Show, got {other:?}"),
+        }
+        match parse(&["gmail", "labels", "--json"]).unwrap() {
+            GwsCommand::Gmail(GmailCommand::Labels(a)) => assert!(a.json),
+            other => panic!("expected Gmail::Labels, got {other:?}"),
+        }
+        assert!(parse(&["gmail", "show"]).is_err());
+    }
+
+    #[test]
+    fn parses_calendar_verbs() {
+        match parse(&["calendar", "list"]).unwrap() {
+            GwsCommand::Calendar(CalendarCommand::List(_)) => {}
+            other => panic!("expected Calendar::List, got {other:?}"),
+        }
+        match parse(&["calendar", "events", "--calendar", "primary", "--max", "50"]).unwrap() {
+            GwsCommand::Calendar(CalendarCommand::Events(a)) => {
+                assert_eq!(a.calendar.as_deref(), Some("primary"));
+                assert_eq!(a.max, Some(50));
+            }
+            other => panic!("expected Calendar::Events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_subcommand() {
+        assert!(parse(&["frobnicate"]).is_err());
+        assert!(parse(&["drive", "delete"]).is_err()); // read-mostly — no write verbs
+    }
+
+    // --- pagination clamp --------------------------------------------------
+
+    #[test]
+    fn normalize_max_clamps_to_window() {
+        assert_eq!(normalize_max(None), None);
+        assert_eq!(normalize_max(Some(0)), Some(1)); // zero is never intended
+        assert_eq!(normalize_max(Some(20)), Some(20));
+        assert_eq!(
+            normalize_max(Some(MAX_RESULTS_CEILING)),
+            Some(MAX_RESULTS_CEILING)
+        );
+        assert_eq!(normalize_max(Some(99_999)), Some(MAX_RESULTS_CEILING));
+    }
+
+    // --- id / query validation --------------------------------------------
+
+    #[test]
+    fn accepts_valid_resource_ids() {
+        assert!(is_valid_resource_id("1AbC_dEfGhIjKlMnOpQrStUvWxYz"));
+        assert!(is_valid_resource_id("abc-123_XYZ"));
+        assert!(is_valid_resource_id("a"));
+    }
+
+    #[test]
+    fn rejects_invalid_resource_ids() {
+        assert!(!is_valid_resource_id("")); // empty
+        assert!(!is_valid_resource_id("-leading-hyphen")); // option-injection guard
+        assert!(!is_valid_resource_id("has spaces"));
+        assert!(!is_valid_resource_id("has/slash"));
+        assert!(!is_valid_resource_id("at@sign")); // '@' not allowed for file/thread ids
+        assert!(!is_valid_resource_id(&"a".repeat(513))); // too long
+    }
+
+    #[test]
+    fn calendar_id_allows_email_and_primary() {
+        assert!(is_valid_calendar_id("primary"));
+        assert!(is_valid_calendar_id("user@gmail.com"));
+        assert!(is_valid_calendar_id("abc123@group.calendar.google.com"));
+        assert!(!is_valid_calendar_id("-inject"));
+        assert!(!is_valid_calendar_id("has space"));
+        assert!(!is_valid_calendar_id(""));
+    }
+
+    #[test]
+    fn query_validation() {
+        assert!(is_valid_query("from:me is:unread"));
+        assert!(is_valid_query("name contains 'spec'"));
+        assert!(!is_valid_query("")); // empty
+        assert!(!is_valid_query("has\nnewline")); // control byte
+        assert!(!is_valid_query(&"q".repeat(1025))); // too long
+    }
+
+    // --- auth-shape probe (env + file, no network) -------------------------
+
+    #[test]
+    fn auth_shape_none_when_nothing_present() {
+        let ws = tempfile::tempdir().unwrap();
+        let env = getenv_from(HashMap::new());
+        let shape = probe_auth_shape(ws.path(), &env);
+        assert_eq!(shape.active_source, TokenSource::None);
+        assert!(!shape.env_token_present);
+        assert!(!shape.secrets_file_present);
+        assert!(!shape.has_token());
+    }
+
+    #[test]
+    fn auth_shape_env_wins_over_secrets_file() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join(".bwoc/secrets")).unwrap();
+        std::fs::write(ws.path().join(SECRETS_REL), "{\"access_token\":\"secret\"}").unwrap();
+        let env = getenv_from(HashMap::from([(ENV_TOKEN, "ya29.super-secret-token")]));
+        let shape = probe_auth_shape(ws.path(), &env);
+        assert_eq!(shape.active_source, TokenSource::Env);
+        assert!(shape.env_token_present);
+        assert!(shape.secrets_file_present);
+        assert!(shape.has_token());
+    }
+
+    #[test]
+    fn auth_shape_secrets_file_when_no_env() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join(".bwoc/secrets")).unwrap();
+        std::fs::write(ws.path().join(SECRETS_REL), "{}").unwrap();
+        let env = getenv_from(HashMap::new());
+        let shape = probe_auth_shape(ws.path(), &env);
+        assert_eq!(shape.active_source, TokenSource::SecretsFile);
+        assert!(!shape.env_token_present);
+        assert!(shape.secrets_file_present);
+        assert!(shape.has_token());
+    }
+
+    #[test]
+    fn auth_shape_serializes_source_as_kebab_case() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join(".bwoc/secrets")).unwrap();
+        std::fs::write(ws.path().join(SECRETS_REL), "{}").unwrap();
+        let env = getenv_from(HashMap::new());
+        let shape = probe_auth_shape(ws.path(), &env);
+        let json = serde_json::to_string(&shape).unwrap();
+        assert!(
+            json.contains("\"active_source\":\"secrets-file\""),
+            "{json}"
+        );
+    }
+
+    // --- never-leak guardrail ---------------------------------------------
+
+    #[test]
+    fn auth_shape_never_carries_token_value() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join(".bwoc/secrets")).unwrap();
+        std::fs::write(
+            ws.path().join(SECRETS_REL),
+            "{\"access_token\":\"ya29.LEAK-ME-NOT\",\"refresh_token\":\"1//super-secret\"}",
+        )
+        .unwrap();
+        let env = getenv_from(HashMap::from([(ENV_TOKEN, "ya29.ENV-LEAK-ME-NOT")]));
+        let shape = probe_auth_shape(ws.path(), &env);
+        let json = serde_json::to_string(&shape).unwrap();
+        assert!(!json.contains("LEAK-ME-NOT"), "shape leaked token: {json}");
+        assert!(
+            !json.contains("super-secret"),
+            "shape leaked refresh token: {json}"
+        );
+        assert!(!json.contains("ya29"), "shape leaked token prefix: {json}");
+    }
+
+    // --- request payload shapes (what the CLI hands the plugin) ------------
+
+    #[test]
+    fn auth_status_request_shape() {
+        let v = auth_status_request(Path::new("/ws"), Path::new("/p"));
+        assert_eq!(v["operation"], "status");
+        assert_eq!(v["workspace"], "/ws");
+        assert_eq!(v["plugin_dir"], "/p");
+    }
+
+    #[test]
+    fn drive_list_request_carries_query_and_max() {
+        let v = drive_list_request(Path::new("/ws"), Path::new("/p"), Some("q"), Some(10));
+        assert_eq!(v["operation"], "list");
+        assert_eq!(v["query"], "q");
+        assert_eq!(v["max"], 10);
+        // Omitted optionals serialize as null, not missing.
+        let bare = drive_list_request(Path::new("/ws"), Path::new("/p"), None, None);
+        assert!(bare["query"].is_null());
+        assert!(bare["max"].is_null());
+    }
+
+    #[test]
+    fn drive_show_request_shape() {
+        let v = drive_show_request(Path::new("/ws"), Path::new("/p"), "file-1");
+        assert_eq!(v["operation"], "get");
+        assert_eq!(v["file_id"], "file-1");
+    }
+
+    #[test]
+    fn gmail_request_shapes() {
+        let s = gmail_search_request(
+            Path::new("/ws"),
+            Path::new("/p"),
+            Some("is:unread"),
+            Some(3),
+        );
+        assert_eq!(s["operation"], "search");
+        assert_eq!(s["query"], "is:unread");
+        assert_eq!(s["max"], 3);
+        let show = gmail_show_request(Path::new("/ws"), Path::new("/p"), "t-1");
+        assert_eq!(show["operation"], "show");
+        assert_eq!(show["thread_id"], "t-1");
+        let labels = gmail_labels_request(Path::new("/ws"), Path::new("/p"));
+        assert_eq!(labels["operation"], "labels");
+    }
+
+    #[test]
+    fn calendar_request_shapes() {
+        let list = calendar_list_request(Path::new("/ws"), Path::new("/p"));
+        assert_eq!(list["operation"], "calendars");
+        let events =
+            calendar_events_request(Path::new("/ws"), Path::new("/p"), Some("primary"), Some(7));
+        assert_eq!(events["operation"], "events");
+        assert_eq!(events["calendar_id"], "primary");
+        assert_eq!(events["max"], 7);
+        let bare = calendar_events_request(Path::new("/ws"), Path::new("/p"), None, None);
+        assert!(bare["calendar_id"].is_null());
+        assert!(bare["max"].is_null());
+    }
+
+    // --- plugin discovery / stub-error path --------------------------------
+
+    fn write_workspace(root: &Path, workspace_toml: &str) {
+        std::fs::create_dir_all(root.join(".bwoc")).unwrap();
+        std::fs::write(root.join(".bwoc/workspace.toml"), workspace_toml).unwrap();
+    }
+
+    fn write_plugin_at(root: &Path, layout: &str, name: &str, kind: &str) {
+        let dir = root.join("modules/plugins").join(layout).join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            format!(
+                "[plugin]\nname = \"{name}\"\nkind = \"{kind}\"\nversion = \"0.1.0\"\n\
+                 description = \"x\"\ncompat = \">=2.5.0\"\nentry = \"gws.sh\"\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn no_plugins_dir_discovers_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(discover_plugin(dir.path(), PLUGIN_DRIVE).unwrap().is_none());
+    }
+
+    #[test]
+    fn discovers_flat_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin_at(dir.path(), "", PLUGIN_DRIVE, "gws");
+        let p = discover_plugin(dir.path(), PLUGIN_DRIVE).unwrap().unwrap();
+        assert_eq!(p.name, PLUGIN_DRIVE);
+        assert_eq!(p.entry, "gws.sh");
+    }
+
+    #[test]
+    fn discovers_gws_namespaced_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin_at(dir.path(), "gws", PLUGIN_GMAIL, "gws");
+        let p = discover_plugin(dir.path(), PLUGIN_GMAIL).unwrap().unwrap();
+        assert_eq!(p.name, PLUGIN_GMAIL);
+    }
+
+    #[test]
+    fn discovery_rejects_wrong_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin_at(dir.path(), "", PLUGIN_AUTH, "workflow");
+        let err = discover_plugin(dir.path(), PLUGIN_AUTH).unwrap_err();
+        assert!(err.contains("expected"), "{err}");
+        assert!(err.contains("gws"), "{err}");
+    }
+
+    #[test]
+    fn enabled_plugin_requires_enabled_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        write_plugin_at(dir.path(), "", PLUGIN_CALENDAR, "gws");
+        // installed but disabled → stub path.
+        write_workspace(dir.path(), "[plugins.gws-calendar]\nenabled = false\n");
+        assert!(
+            find_enabled_plugin(dir.path(), PLUGIN_CALENDAR)
+                .unwrap()
+                .is_none()
+        );
+        // enabled → discovered.
+        write_workspace(dir.path(), "[plugins.gws-calendar]\nenabled = true\n");
+        let p = find_enabled_plugin(dir.path(), PLUGIN_CALENDAR)
+            .unwrap()
+            .unwrap();
+        assert_eq!(p.name, PLUGIN_CALENDAR);
+    }
+
+    #[test]
+    fn no_plugin_message_names_install_command() {
+        let m = no_plugin_message(PLUGIN_DRIVE);
+        assert!(m.contains(PLUGIN_DRIVE));
+        assert!(m.contains("bwoc plugin install"));
+        assert!(m.contains("bwoc plugin enable"));
+    }
+
+    // --- token gate --------------------------------------------------------
+
+    #[test]
+    fn require_token_passes_when_present_blocks_when_absent() {
+        let present = AuthShape {
+            active_source: TokenSource::Env,
+            env_token_present: true,
+            secrets_file_present: false,
+        };
+        assert!(require_token(&present, "drive list", true).is_ok());
+        let absent = AuthShape {
+            active_source: TokenSource::None,
+            env_token_present: false,
+            secrets_file_present: false,
+        };
+        assert_eq!(require_token(&absent, "drive list", true), Err(EXIT_USAGE));
+    }
+}

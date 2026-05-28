@@ -263,6 +263,7 @@ const GITIGNORE_REST: &str = "\
 # only (Sila — Adinnaadana).
 .bwoc/secrets/
 .bwoc/secrets/gcloud-sa.json
+.bwoc/secrets/gws-token.json
 
 # Figma export cache (BWOC-64)
 #

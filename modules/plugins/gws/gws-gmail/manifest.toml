@@ -1,0 +1,14 @@
+[plugin]
+name        = "gws-gmail"
+kind        = "gws"
+version     = "0.1.0"
+description = "Reference gws plugin — read-mostly Google Gmail adapter: searches threads (threads.list/get), shows a single thread (threads.get), and lists labels (labels.list), each projected into the normative Gmail thread / label shape. Never sends or modifies mail. Sources the OAuth credential helpers from the sibling gws-auth foundation; requires the gmail.readonly scope."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+
+# [config.schema] intentionally omitted.
+#
+# This plugin holds no config of its own. Credentials resolve at runtime through
+# the sibling gws-auth foundation (BWOC_GWS_TOKEN env / .bwoc/secrets/gws-token.json),
+# never from workspace config. The only workspace-level surface is the universal
+# `enabled` key on [plugins.gws-gmail]. See SPEC.md §Configuration.

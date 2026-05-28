@@ -1764,10 +1764,20 @@ struct InitArgs {
     /// Overwrite an existing workspace.toml.
     #[arg(long)]
     force: bool,
-    /// Emit JSON `{ workspace, name, version, defaults, files_created }`
-    /// instead of the human-readable creation report.
+    /// Emit JSON `{ workspace, name, version, defaults, runtime, profile,
+    /// files_created }` instead of the human-readable creation report.
     #[arg(long)]
     json: bool,
+    /// Scaffold without agent runtime/daemon provisioning — for CI,
+    /// read-only, or inspection workspaces that never spawn agents. The
+    /// workspace is still valid (`bwoc check` passes); the daemon-ephemeral
+    /// `.gitignore` patterns are simply omitted.
+    #[arg(long = "no-runtime")]
+    no_runtime: bool,
+    /// Initialize a single-agent workspace (one agent slot) instead of the
+    /// multi-agent fleet default. Scaffolds single-agent-oriented guidance.
+    #[arg(long = "single-agent")]
+    single_agent: bool,
 }
 
 impl InitArgs {
@@ -1777,6 +1787,8 @@ impl InitArgs {
             force: self.force,
             lang,
             json: self.json,
+            no_runtime: self.no_runtime,
+            single_agent: self.single_agent,
         }
     }
 }

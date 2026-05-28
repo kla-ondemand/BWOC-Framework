@@ -17,10 +17,17 @@ pub struct InitArgs {
     pub path: Option<PathBuf>,
     pub force: bool,
     pub lang: String,
-    /// Emit JSON `{ workspace, name, version, defaults, files_created }`
-    /// instead of the human-readable creation report. Lets scripts chain
-    /// init → other commands without parsing the report.
+    /// Emit JSON `{ workspace, name, version, defaults, runtime, profile,
+    /// files_created }` instead of the human-readable creation report. Lets
+    /// scripts chain init → other commands without parsing the report.
     pub json: bool,
+    /// Scaffold without agent runtime/daemon provisioning (CI / read-only /
+    /// inspection workspaces). Omits the daemon-ephemeral `.gitignore`
+    /// patterns; the workspace stays valid.
+    pub no_runtime: bool,
+    /// Scaffold a single-agent workspace (one agent slot) instead of the
+    /// multi-agent fleet default.
+    pub single_agent: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +45,10 @@ pub enum InitError {
 pub fn run(args: InitArgs) -> i32 {
     let bundle = i18n::bundle_for(&args.lang);
     let json = args.json;
+    // Capture the mode flags before `args` is moved into `init` so the JSON
+    // shape + human report can echo the chosen profile back to the caller.
+    let runtime_enabled = !args.no_runtime;
+    let single_agent = args.single_agent;
     match init(args) {
         Ok(ws_root) => {
             let path = ws_root.display().to_string();
@@ -58,6 +69,8 @@ pub fn run(args: InitArgs) -> i32 {
                     "name": ws.as_ref().map(|w| w.workspace.name.clone()),
                     "version": ws.as_ref().map(|w| w.workspace.version.clone()),
                     "defaults": defaults,
+                    "runtime": runtime_enabled,
+                    "profile": if single_agent { "single-agent" } else { "fleet" },
                     "files_created": [
                         ".bwoc/workspace.toml",
                         ".bwoc/agents.toml",
@@ -84,6 +97,14 @@ pub fn run(args: InitArgs) -> i32 {
             println!("{}", i18n::t(&bundle, "init-created-agents-dir"));
             println!("{}", i18n::t(&bundle, "init-created-projects-dir"));
             println!("{}", i18n::t(&bundle, "init-created-notes-dir"));
+            // Mode notes — printed in English (like the error path) only when
+            // a non-default flag is set, so default output is unchanged.
+            if !runtime_enabled {
+                println!("  • runtime/daemon provisioning skipped (--no-runtime)");
+            }
+            if single_agent {
+                println!("  • single-agent workspace (--single-agent)");
+            }
             println!();
             println!("{}", i18n::t(&bundle, "init-next-steps-header"));
             println!(
@@ -134,10 +155,16 @@ fn init(args: InitArgs) -> Result<PathBuf, InitError> {
     let registry = AgentsRegistry::default();
     registry.save(&root)?;
 
-    // Create the agents/ directory + its README.
+    // Create the agents/ directory + its README. `--single-agent` swaps in
+    // single-agent-oriented guidance instead of the fleet default.
     let agents_dir = root.join(&ws.defaults.agents_dir);
     fs::create_dir_all(&agents_dir)?;
-    write_readme_if_missing(&agents_dir, AGENTS_README)?;
+    let agents_readme = if args.single_agent {
+        AGENTS_README_SINGLE
+    } else {
+        AGENTS_README
+    };
+    write_readme_if_missing(&agents_dir, agents_readme)?;
 
     // Scaffold the standard workspace layout: empty dirs the user is
     // expected to populate, each with a README explaining its role.
@@ -152,22 +179,30 @@ fn init(args: InitArgs) -> Result<PathBuf, InitError> {
     }
 
     // Write a sensible .gitignore if one doesn't exist. Idempotent —
-    // don't clobber user edits.
-    write_gitignore_if_missing(&root)?;
+    // don't clobber user edits. `--no-runtime` drops the daemon-ephemeral
+    // block (the workspace never spawns agents, so those files never appear).
+    write_gitignore_if_missing(&root, args.no_runtime)?;
 
     Ok(root)
 }
 
-/// Write a `.gitignore` at the workspace root if none exists. Excludes
-/// daemon ephemerals (`agent.pid`/`agent.sock`/`inbox.cursor`) that
-/// regenerate on every `bwoc start`. `inbox.jsonl` is left tracked by
-/// default — users may want message-log history checked in.
-fn write_gitignore_if_missing(root: &Path) -> io::Result<()> {
+/// Write a `.gitignore` at the workspace root if none exists. The default
+/// excludes daemon ephemerals (`agent.pid`/`agent.sock`/`inbox.cursor`) that
+/// regenerate on every `bwoc start`; `inbox.jsonl` is left tracked by default
+/// — users may want message-log history checked in. When `no_runtime` is set,
+/// the daemon-ephemeral block is replaced by a short note, since a runtime-less
+/// workspace never produces those files.
+fn write_gitignore_if_missing(root: &Path, no_runtime: bool) -> io::Result<()> {
     let path = root.join(".gitignore");
     if path.exists() {
         return Ok(());
     }
-    fs::write(path, GITIGNORE_TEMPLATE)
+    let header = if no_runtime {
+        GITIGNORE_NO_RUNTIME_NOTE
+    } else {
+        GITIGNORE_DAEMON_BLOCK
+    };
+    fs::write(path, format!("{header}{GITIGNORE_REST}"))
 }
 
 /// Write `README.md` into `dir` if it doesn't already exist. Idempotent —
@@ -180,7 +215,10 @@ fn write_readme_if_missing(dir: &Path, content: &str) -> io::Result<()> {
     fs::write(readme, content)
 }
 
-const GITIGNORE_TEMPLATE: &str = "\
+/// Default `.gitignore` head: the daemon-ephemeral block. Concatenated with
+/// [`GITIGNORE_REST`] this reproduces the historical full template byte-for-byte,
+/// so the default (no-flag) `bwoc init` output is unchanged.
+const GITIGNORE_DAEMON_BLOCK: &str = "\
 # BWOC workspace — daemon ephemerals
 #
 # These files regenerate on every `bwoc start` and shouldn't be
@@ -195,6 +233,25 @@ agents/*/.bwoc/inbox.cursor
 # default is to keep them tracked.
 # agents/*/.bwoc/inbox.jsonl
 
+";
+
+/// `--no-runtime` `.gitignore` head: replaces the daemon-ephemeral block with
+/// a note explaining why those patterns are absent. A runtime-less workspace
+/// never spawns agents, so the daemon ephemerals never appear.
+const GITIGNORE_NO_RUNTIME_NOTE: &str = "\
+# BWOC workspace — runtime provisioning skipped (--no-runtime)
+#
+# This workspace was initialized without agent runtime/daemon setup, so
+# the daemon-ephemeral ignore patterns (agent.pid / agent.sock /
+# inbox.cursor) are intentionally omitted — a runtime-less workspace
+# never produces them. Re-run `bwoc init --force` without --no-runtime
+# to add them if you later decide to spawn agents.
+
+";
+
+/// Shared `.gitignore` tail (secret store, figma cache, generic local state).
+/// Appended after either head above.
+const GITIGNORE_REST: &str = "\
 # BWOC workspace — secret store (BWOC-53)
 #
 # Path convention for plugins that resolve credentials from disk —
@@ -244,6 +301,29 @@ and slot dirs (`persona/`, `memories/`, `mindsets/`, `skills/`,
 - `bwoc list`             — see what's registered
 - `bwoc check <name>`     — audit backend neutrality
 - `bwoc retire <name>`    — remove an agent (registry + files)
+
+See [`docs/en/INCARNATION.en.md`](../docs/en/INCARNATION.en.md) for
+the full walkthrough.
+";
+
+const AGENTS_README_SINGLE: &str = "# agents/ (single-agent workspace)
+
+This workspace was initialized with `--single-agent`: it holds a single
+incarnated BWOC agent rather than the multi-agent fleet. The directory
+layout is identical — one subdirectory with the agent's `AGENTS.md`,
+`config.manifest.json`, backend symlinks (`CLAUDE.md` / `AGY.md` /
+`CODEX.md` / `KIMI.md` → `AGENTS.md`), and slot dirs (`persona/`,
+`memories/`, `mindsets/`, `skills/`, `interconnect/`).
+
+## Commands
+
+- `bwoc new <name>`       — incarnate the agent here
+- `bwoc status <name>`    — health + identity snapshot for the one agent
+- `bwoc check <name>`     — audit backend neutrality
+- `bwoc retire <name>`    — remove the agent (registry + files)
+
+You can grow into a fleet at any time — `bwoc new` a second agent and the
+multi-agent commands (`bwoc list`, `bwoc fleet`) apply unchanged.
 
 See [`docs/en/INCARNATION.en.md`](../docs/en/INCARNATION.en.md) for
 the full walkthrough.
@@ -343,6 +423,8 @@ mod tests {
             force,
             lang: "en".to_string(),
             json: false,
+            no_runtime: false,
+            single_agent: false,
         }
     }
 
@@ -391,6 +473,80 @@ mod tests {
         let dir = fresh_dir("force");
         assert_eq!(run(args(&dir, false)), 0);
         assert_eq!(run(args(&dir, true)), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --- BWOC-71: --no-runtime / --single-agent ---------------------------
+
+    /// Default (no flags): the .gitignore carries the daemon-ephemeral block
+    /// and the agents/ README is the fleet variant. Guards the AC "existing
+    /// behavior unchanged when flags absent".
+    #[test]
+    fn init_default_runtime_and_fleet() {
+        let dir = fresh_dir("default-mode");
+        assert_eq!(run(args(&dir, false)), 0);
+        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("agents/*/.bwoc/agent.pid"));
+        assert!(gitignore.contains("daemon ephemerals"));
+        // Default head + shared tail reproduce the historical full template.
+        assert_eq!(
+            gitignore,
+            format!("{GITIGNORE_DAEMON_BLOCK}{GITIGNORE_REST}")
+        );
+        let readme = fs::read_to_string(dir.join("agents/README.md")).unwrap();
+        assert!(!readme.contains("single-agent workspace"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `--no-runtime` omits the daemon-ephemeral patterns but still writes a
+    /// valid workspace (workspace.toml + agents.toml present).
+    #[test]
+    fn init_no_runtime_omits_daemon_gitignore() {
+        let dir = fresh_dir("no-runtime");
+        let mut a = args(&dir, false);
+        a.no_runtime = true;
+        assert_eq!(run(a), 0);
+        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        // The ignore *patterns* are gone (the prose note may still name them).
+        assert!(!gitignore.contains("agents/*/.bwoc/agent.pid"));
+        assert!(!gitignore.contains("agents/*/.bwoc/agent.sock"));
+        assert!(gitignore.contains("runtime provisioning skipped"));
+        // Shared tail (secret store etc.) is still present.
+        assert!(gitignore.contains(".bwoc/secrets/"));
+        // Workspace stays valid.
+        assert!(dir.join(".bwoc/workspace.toml").exists());
+        assert!(dir.join(".bwoc/agents.toml").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `--single-agent` scaffolds the single-agent README variant.
+    #[test]
+    fn init_single_agent_readme() {
+        let dir = fresh_dir("single-agent");
+        let mut a = args(&dir, false);
+        a.single_agent = true;
+        assert_eq!(run(a), 0);
+        let readme = fs::read_to_string(dir.join("agents/README.md")).unwrap();
+        assert!(readme.contains("single-agent workspace"));
+        // Daemon gitignore block is untouched by --single-agent.
+        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(gitignore.contains("agents/*/.bwoc/agent.pid"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The two flags compose: no daemon block AND single-agent README.
+    #[test]
+    fn init_flags_compose() {
+        let dir = fresh_dir("compose");
+        let mut a = args(&dir, false);
+        a.no_runtime = true;
+        a.single_agent = true;
+        assert_eq!(run(a), 0);
+        let gitignore = fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(!gitignore.contains("agents/*/.bwoc/agent.pid"));
+        assert!(gitignore.contains("runtime provisioning skipped"));
+        let readme = fs::read_to_string(dir.join("agents/README.md")).unwrap();
+        assert!(readme.contains("single-agent workspace"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

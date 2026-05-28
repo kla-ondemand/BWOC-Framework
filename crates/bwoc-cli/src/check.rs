@@ -994,7 +994,7 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// PLUGINS.en.md enum; recognized here so the reference
 /// `council/council-sangha-7` plugin (BWOC-59) passes basic well-formedness.
 /// The council-specific manifest (voting_model / quorum) + Decision Schema
-/// validation lands in BWOC-60.
+/// validation lands in BWOC-60 (`audit_council`).
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -1059,6 +1059,12 @@ const OKR_UNITS: &[&str] = &["count", "percent", "currency", "ratio", "boolean"]
 
 /// Maturity values accepted in a skill manifest (Ariya-dhana 7 scale).
 const MATURITY_LEVELS: &[&str] = &["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
+
+/// Closed `status` enum for a Council Decision entry. Source of truth:
+/// PLUGINS.en.md §"Council Decision Schema" — the protocol states
+/// `proposed → discussing → voting → resolved` (or `abandoned` if quorum fails).
+/// Mirrors the runtime `STATUS_*` constants in `council.rs`.
+const COUNCIL_STATUSES: &[&str] = &["proposed", "discussing", "voting", "resolved", "abandoned"];
 
 /// Audit one skill installed at `<workspace>/modules/skills/<name>/`. Required
 /// fields, types, neutrality, and the spec's non-empty-`exposes` rule are all
@@ -1371,6 +1377,16 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     // any `bwoc okr` run.
     if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("okr") {
         audit_okr_data(plugin_dir, &mut report);
+    }
+
+    // Council contract audit (BWOC-60). council-kind plugins (the reference
+    // `council-sangha-7`) declare a `[council]` table (voting_model + quorum),
+    // seed issue templates in a sibling `decisions.toml`, and emit decision
+    // records conforming to the Council Decision Schema (PLUGINS.en.md). Validate
+    // the manifest table, the templates, and any plugin-local decision records —
+    // the deep validation deferred from BWOC-59.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("council") {
+        audit_council(&raw, plugin_dir, &mut report);
     }
 
     report
@@ -1776,6 +1792,658 @@ fn check_okr_evidence(
         None => report.violations.push(format!(
             "key result {label} evidence.value missing — required (empty string when kind='none')"
         )),
+    }
+}
+
+/// Validate a `council`-kind plugin's council-specific contract (BWOC-60).
+/// Source of truth: PLUGINS.en.md §"Council Decision Schema" + the
+/// `council-sangha-7` SPEC.md §Configuration + the BWOC-56 design note (§3
+/// voting models, §4 quorum). `bwoc check` (BWOC-59) already accepts the
+/// `council` kind at basic well-formedness; this is the deep validation that
+/// story deferred here.
+///
+/// Three concerns:
+///   1. the manifest `[council]` table — `voting_model` ∈ the four models and
+///      `quorum` (an integer count or `"n/m"` fraction) are validated through
+///      the SAME parsers the runtime tally uses (`council::validate_*`), so the
+///      static audit and the runtime cannot drift on what is well-formed.
+///   2. `decisions.toml` — the issue templates that seed a decision's question +
+///      options on `propose --template`; each `[[template]]` must be well-formed.
+///   3. any plugin-local `records/*.json` decision entries — validated against
+///      the Council Decision Schema. Decision records are runtime state (the
+///      normal store is `<workspace>/.bwoc/council/`); the SPEC documents a
+///      plugin-local `records/` fallback, so when that dir is present each entry
+///      is validated, and when absent (the shipped reference plugin carries
+///      templates, not records) there is nothing to audit.
+fn audit_council(raw: &toml::Value, plugin_dir: &Path, report: &mut AuditReport) {
+    audit_council_manifest(raw, report);
+    audit_council_templates(plugin_dir, report);
+    audit_council_records(plugin_dir, report);
+}
+
+/// Validate the `[council]` table in a council plugin's manifest: `voting_model`
+/// in the closed four-model set and `quorum` present + well-formed. Both route
+/// through the runtime `council::validate_*` parsers so a value the runtime would
+/// reject cannot pass `bwoc check`, and vice versa (anti-drift, BWOC-60).
+fn audit_council_manifest(raw: &toml::Value, report: &mut AuditReport) {
+    let council = match raw.get("council").and_then(|v| v.as_table()) {
+        Some(t) => {
+            report.passes.push("[council] table present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[council] table missing — a council plugin must declare voting_model + quorum"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    // voting_model — required string; the runtime VotingModel parser is the
+    // authority on the accepted set, so accept/reject can never drift from it.
+    match council.get("voting_model") {
+        Some(toml::Value::String(vm)) => {
+            if crate::council::validate_voting_model(vm).is_ok() {
+                report
+                    .passes
+                    .push(format!("[council].voting_model '{vm}' in supported set"));
+            } else {
+                report.violations.push(format!(
+                    "[council].voting_model '{vm}' not in {{simple-majority, consensus, weighted, sangha}}"
+                ));
+            }
+        }
+        Some(_) => report
+            .violations
+            .push("[council].voting_model has wrong type — expected string".to_string()),
+        None => report
+            .violations
+            .push("[council].voting_model missing — required field".to_string()),
+    }
+
+    // quorum — required; a positive integer count or an "n/m" fraction string.
+    // Validated through the same parser the runtime tally uses.
+    match council.get("quorum") {
+        Some(q) => match crate::council::validate_quorum(q) {
+            Ok(()) => report
+                .passes
+                .push("[council].quorum is well-formed (count or fraction)".to_string()),
+            Err(e) => report
+                .violations
+                .push(format!("[council].quorum is malformed — {e}")),
+        },
+        None => report
+            .violations
+            .push("[council].quorum missing — required field".to_string()),
+    }
+}
+
+/// Validate the `decisions.toml` issue templates shipped next to a council
+/// plugin's manifest. Each `[[template]]` seeds a decision's `question` +
+/// `options` on `propose --template <id>` (SPEC.md §How it runs), so the static
+/// shape is validated before any `bwoc council` run: a unique non-empty
+/// `template_id`, an integer `condition`, a non-empty `name`, a non-empty
+/// `question`, and `options` — a string array of ≥2 choices (the Council
+/// Decision Schema fixes `options` ≥2 at propose time).
+///
+/// An absent `decisions.toml` is a violation: the reference council plugin's
+/// templates are its seed contract (SPEC.md §Configuration — "v1 reads templates
+/// from decisions.toml").
+fn audit_council_templates(plugin_dir: &Path, report: &mut AuditReport) {
+    let path = plugin_dir.join("decisions.toml");
+    let body = match fs::read_to_string(&path) {
+        Ok(s) => {
+            report.passes.push("decisions.toml present".to_string());
+            s
+        }
+        Err(e) => {
+            report.violations.push(format!(
+                "decisions.toml missing or unreadable: {e} — a council plugin must seed its issue templates"
+            ));
+            return;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("decisions.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("decisions.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    let templates = match raw.get("template").and_then(|v| v.as_array()) {
+        Some(a) if !a.is_empty() => {
+            report
+                .passes
+                .push(format!("decisions.toml declares {} template(s)", a.len()));
+            a
+        }
+        Some(_) => {
+            report.violations.push(
+                "decisions.toml [[template]] array is empty — declare at least one issue template"
+                    .to_string(),
+            );
+            return;
+        }
+        None => {
+            report.violations.push(
+                "decisions.toml declares no [[template]] entries — a council plugin must seed at least one"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for (i, tmpl) in templates.iter().enumerate() {
+        let pos = i + 1;
+        let table = match tmpl.as_table() {
+            Some(t) => t,
+            None => {
+                report.violations.push(format!(
+                    "template #{pos} is not a table — expected [[template]] with scalar fields"
+                ));
+                continue;
+            }
+        };
+        let label = table
+            .get("template_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("'{s}'"))
+            .unwrap_or_else(|| format!("#{pos}"));
+
+        // template_id — required, non-empty, unique within the plugin.
+        match table.get("template_id") {
+            Some(toml::Value::String(s)) if !s.is_empty() => {
+                if !seen_ids.insert(s.clone()) {
+                    report.violations.push(format!(
+                        "template_id '{s}' declared more than once — ids must be unique"
+                    ));
+                }
+            }
+            Some(toml::Value::String(_)) => report.violations.push(format!(
+                "template {label} template_id is empty — required field"
+            )),
+            Some(_) => report.violations.push(format!(
+                "template {label} template_id has wrong type — expected string"
+            )),
+            None => report
+                .violations
+                .push(format!("template {label} missing required 'template_id'")),
+        }
+
+        // condition — required integer (which Aparihaniya-dhamma signal, 1..7).
+        match table.get("condition") {
+            Some(v) if v.is_integer() => {}
+            Some(_) => report.violations.push(format!(
+                "template {label} condition has wrong type — expected an integer"
+            )),
+            None => report.violations.push(format!(
+                "template {label} missing required 'condition' (integer)"
+            )),
+        }
+
+        // name / question — required, non-empty strings.
+        for field in &["name", "question"] {
+            match table.get(*field) {
+                Some(toml::Value::String(s)) if !s.is_empty() => {}
+                Some(_) => report.violations.push(format!(
+                    "template {label} {field} has wrong type or is empty — expected non-empty string"
+                )),
+                None => report
+                    .violations
+                    .push(format!("template {label} missing required '{field}'")),
+            }
+        }
+
+        // options — required string array of ≥2 choices.
+        match table.get("options") {
+            Some(toml::Value::Array(opts)) if opts.iter().all(|o| o.is_str()) => {
+                if opts.len() >= 2 {
+                    report
+                        .passes
+                        .push(format!("template {label} declares {} options", opts.len()));
+                } else {
+                    report.violations.push(format!(
+                        "template {label} options must declare ≥2 choices, found {}",
+                        opts.len()
+                    ));
+                }
+            }
+            Some(toml::Value::Array(_)) => report.violations.push(format!(
+                "template {label} options must be an array of strings"
+            )),
+            Some(_) => report.violations.push(format!(
+                "template {label} options has wrong type — expected an array of strings"
+            )),
+            None => report.violations.push(format!(
+                "template {label} missing required 'options' (array of ≥2 strings)"
+            )),
+        }
+    }
+}
+
+/// Validate any plugin-local decision records against the Council Decision
+/// Schema. Decision records persist as one JSON file per decision; the normal
+/// store is `<workspace>/.bwoc/council/`, but the SPEC documents a plugin-local
+/// `records/` fallback for hand-invocation / smoke tests. When that directory is
+/// present, every `*.json` in it is validated; when absent (the shipped
+/// reference plugin ships templates, not records), there is nothing to audit.
+fn audit_council_records(plugin_dir: &Path, report: &mut AuditReport) {
+    let records_dir = plugin_dir.join("records");
+    let read = match fs::read_dir(&records_dir) {
+        Ok(r) => r,
+        // No plugin-local records — decision records live under the workspace.
+        Err(_) => return,
+    };
+    let mut json_paths: Vec<std::path::PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    json_paths.sort();
+    for path in json_paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let body = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("records/{name} unreadable: {e}"));
+                continue;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("records/{name} is not valid JSON: {e}"));
+                continue;
+            }
+        };
+        validate_council_decision(&name, &value, report);
+    }
+}
+
+/// Validate one decision entry against the Council Decision Schema (PLUGINS.en.md
+/// §"Council Decision Schema"). `label` identifies the record in messages. The
+/// schema is the `council` kind's contract — the reference plugin's verbs and the
+/// `bwoc council` CLI emit entries of this shape, and `bwoc check` validates it
+/// (BWOC-60). The append-only fields (`rounds`, `votes`) are validated by
+/// per-element shape; append-only itself is a cross-snapshot protocol invariant,
+/// not observable in one record. Operational fields beyond the schema's named set
+/// (`question`, `effect`, a vote `rationale`, `cast_at`) are ignored, not
+/// rejected — the validator checks the contract, additive fields are allowed.
+fn validate_council_decision(label: &str, value: &serde_json::Value, report: &mut AuditReport) {
+    let obj = match value.as_object() {
+        Some(o) => o,
+        None => {
+            report.violations.push(format!(
+                "decision {label} is not a JSON object — expected a Council Decision entry"
+            ));
+            return;
+        }
+    };
+
+    // decision_id — required, non-empty string (the stable key).
+    match obj.get("decision_id") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => report
+            .passes
+            .push(format!("decision {label} decision_id present")),
+        _ => report.violations.push(format!(
+            "decision {label} missing required 'decision_id' (non-empty string)"
+        )),
+    }
+
+    // status — required, closed protocol enum.
+    match obj.get("status").and_then(|v| v.as_str()) {
+        Some(s) if COUNCIL_STATUSES.contains(&s) => report
+            .passes
+            .push(format!("decision {label} status '{s}' in supported set")),
+        Some(s) => report.violations.push(format!(
+            "decision {label} status '{s}' not in {{proposed, discussing, voting, resolved, abandoned}}"
+        )),
+        None => report
+            .violations
+            .push(format!("decision {label} missing required 'status' (string)")),
+    }
+
+    // participants — required array of agent-id strings (may be empty for an
+    // "open" council where quorum counts whoever votes).
+    match obj.get("participants") {
+        Some(serde_json::Value::Array(a)) => {
+            if a.iter().all(|p| p.is_string()) {
+                report.passes.push(format!(
+                    "decision {label} participants is a string array ({} member(s))",
+                    a.len()
+                ));
+            } else {
+                report.violations.push(format!(
+                    "decision {label} participants must be an array of agent-id strings"
+                ));
+            }
+        }
+        _ => report.violations.push(format!(
+            "decision {label} missing required 'participants' (array of strings)"
+        )),
+    }
+
+    // options — required string array of ≥2 choices (fixed at propose time).
+    match obj.get("options") {
+        Some(serde_json::Value::Array(a)) if a.iter().all(|o| o.is_string()) => {
+            if a.len() >= 2 {
+                report
+                    .passes
+                    .push(format!("decision {label} declares {} options", a.len()));
+            } else {
+                report.violations.push(format!(
+                    "decision {label} options must declare ≥2 choices, found {}",
+                    a.len()
+                ));
+            }
+        }
+        Some(serde_json::Value::Array(_)) => report.violations.push(format!(
+            "decision {label} options must be an array of strings"
+        )),
+        _ => report.violations.push(format!(
+            "decision {label} missing required 'options' (array of ≥2 strings)"
+        )),
+    }
+
+    validate_council_rounds(label, obj.get("rounds"), report);
+    validate_council_votes(label, obj.get("votes"), report);
+
+    // dissent / evidence_links — optional; validated only when present (omitted,
+    // never null, when absent — per the schema's omit-don't-null convention).
+    if let Some(d) = obj.get("dissent") {
+        validate_council_dissent(label, d, report);
+    }
+    if let Some(e) = obj.get("evidence_links") {
+        validate_council_evidence_links(label, e, report);
+    }
+
+    // opened_at — required ISO-8601 datetime string.
+    match obj.get("opened_at") {
+        Some(serde_json::Value::String(s)) if !s.is_empty() => {}
+        _ => report.violations.push(format!(
+            "decision {label} missing required 'opened_at' (ISO-8601 datetime string)"
+        )),
+    }
+}
+
+/// Validate a decision's `rounds`: a required array where each round carries a
+/// `turns` array of `{ participant, message_ref }` (Council Decision Schema).
+fn validate_council_rounds(
+    label: &str,
+    rounds: Option<&serde_json::Value>,
+    report: &mut AuditReport,
+) {
+    let arr = match rounds {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(_) => {
+            report.violations.push(format!(
+                "decision {label} rounds has wrong type — expected an array"
+            ));
+            return;
+        }
+        None => {
+            report.violations.push(format!(
+                "decision {label} missing required 'rounds' (array)"
+            ));
+            return;
+        }
+    };
+    let mut ok = true;
+    for (i, round) in arr.iter().enumerate() {
+        let rpos = i + 1;
+        let turns = match round.as_object().and_then(|o| o.get("turns")) {
+            Some(serde_json::Value::Array(t)) => t,
+            _ => {
+                report.violations.push(format!(
+                    "decision {label} round #{rpos} missing 'turns' (array of {{ participant, message_ref }})"
+                ));
+                ok = false;
+                continue;
+            }
+        };
+        for (j, turn) in turns.iter().enumerate() {
+            let tpos = j + 1;
+            let to = turn.as_object();
+            let has_participant = matches!(
+                to.and_then(|o| o.get("participant")),
+                Some(serde_json::Value::String(s)) if !s.is_empty()
+            );
+            let has_ref = matches!(
+                to.and_then(|o| o.get("message_ref")),
+                Some(serde_json::Value::String(s)) if !s.is_empty()
+            );
+            if !has_participant || !has_ref {
+                report.violations.push(format!(
+                    "decision {label} round #{rpos} turn #{tpos} must carry non-empty 'participant' + 'message_ref' strings"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        report.passes.push(format!(
+            "decision {label} rounds well-formed ({} round(s))",
+            arr.len()
+        ));
+    }
+}
+
+/// Validate a decision's `votes`: a required append-only array where each cast is
+/// `{ participant, option, abstain }`. A non-abstaining vote names a non-empty
+/// `option`; an abstention carries no `option` (Council Decision Schema + the
+/// runtime `VoteRecord` shape).
+fn validate_council_votes(
+    label: &str,
+    votes: Option<&serde_json::Value>,
+    report: &mut AuditReport,
+) {
+    let arr = match votes {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(_) => {
+            report.violations.push(format!(
+                "decision {label} votes has wrong type — expected an array"
+            ));
+            return;
+        }
+        None => {
+            report
+                .violations
+                .push(format!("decision {label} missing required 'votes' (array)"));
+            return;
+        }
+    };
+    let mut ok = true;
+    for (i, vote) in arr.iter().enumerate() {
+        let vpos = i + 1;
+        let vo = match vote.as_object() {
+            Some(o) => o,
+            None => {
+                report.violations.push(format!(
+                    "decision {label} vote #{vpos} is not an object — expected {{ participant, option, abstain }}"
+                ));
+                ok = false;
+                continue;
+            }
+        };
+        if !matches!(vo.get("participant"), Some(serde_json::Value::String(s)) if !s.is_empty()) {
+            report.violations.push(format!(
+                "decision {label} vote #{vpos} missing 'participant' (non-empty string)"
+            ));
+            ok = false;
+        }
+        let abstain = match vo.get("abstain") {
+            Some(serde_json::Value::Bool(b)) => *b,
+            _ => {
+                report.violations.push(format!(
+                    "decision {label} vote #{vpos} missing 'abstain' (boolean)"
+                ));
+                ok = false;
+                continue;
+            }
+        };
+        match vo.get("option") {
+            Some(serde_json::Value::String(s)) => {
+                if !abstain && s.is_empty() {
+                    report.violations.push(format!(
+                        "decision {label} vote #{vpos} has an empty 'option' — a non-abstaining vote names a choice"
+                    ));
+                    ok = false;
+                }
+            }
+            None | Some(serde_json::Value::Null) => {
+                if !abstain {
+                    report.violations.push(format!(
+                        "decision {label} vote #{vpos} is not an abstention but names no 'option'"
+                    ));
+                    ok = false;
+                }
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "decision {label} vote #{vpos} option has wrong type — expected a string"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        report.passes.push(format!(
+            "decision {label} votes well-formed ({} cast)",
+            arr.len()
+        ));
+    }
+}
+
+/// Validate a decision's optional `dissent` array. Each entry is
+/// `{ participant, option, rationale? }` — recorded minority positions preserved
+/// on resolve (Council Decision Schema + the runtime `Dissent` shape).
+fn validate_council_dissent(label: &str, dissent: &serde_json::Value, report: &mut AuditReport) {
+    let arr = match dissent {
+        serde_json::Value::Array(a) => a,
+        _ => {
+            report.violations.push(format!(
+                "decision {label} dissent has wrong type — expected an array of {{ participant, option, rationale }}"
+            ));
+            return;
+        }
+    };
+    let mut ok = true;
+    for (i, d) in arr.iter().enumerate() {
+        let dpos = i + 1;
+        let dobj = match d.as_object() {
+            Some(o) => o,
+            None => {
+                report
+                    .violations
+                    .push(format!("decision {label} dissent #{dpos} is not an object"));
+                ok = false;
+                continue;
+            }
+        };
+        let has_participant = matches!(
+            dobj.get("participant"),
+            Some(serde_json::Value::String(s)) if !s.is_empty()
+        );
+        let has_option =
+            matches!(dobj.get("option"), Some(serde_json::Value::String(s)) if !s.is_empty());
+        if !has_participant || !has_option {
+            report.violations.push(format!(
+                "decision {label} dissent #{dpos} must carry non-empty 'participant' + 'option' strings"
+            ));
+            ok = false;
+        }
+        if let Some(r) = dobj.get("rationale") {
+            if !r.is_string() && !r.is_null() {
+                report.violations.push(format!(
+                    "decision {label} dissent #{dpos} rationale has wrong type — expected a string"
+                ));
+                ok = false;
+            }
+        }
+    }
+    if ok && !arr.is_empty() {
+        report.passes.push(format!(
+            "decision {label} dissent well-formed ({} entry/entries)",
+            arr.len()
+        ));
+    }
+}
+
+/// Validate a decision's optional `evidence_links` array. It REUSES the audit
+/// [Evidence kinds] — `{ kind, value }` over the closed `EVIDENCE_KINDS`
+/// vocabulary; the council kind introduces none of its own (Council Decision
+/// Schema).
+fn validate_council_evidence_links(
+    label: &str,
+    links: &serde_json::Value,
+    report: &mut AuditReport,
+) {
+    let arr = match links {
+        serde_json::Value::Array(a) => a,
+        _ => {
+            report.violations.push(format!(
+                "decision {label} evidence_links has wrong type — expected an array of {{ kind, value }}"
+            ));
+            return;
+        }
+    };
+    let mut ok = true;
+    for (i, link) in arr.iter().enumerate() {
+        let lpos = i + 1;
+        let lobj = match link.as_object() {
+            Some(o) => o,
+            None => {
+                report.violations.push(format!(
+                    "decision {label} evidence_link #{lpos} is not an object"
+                ));
+                ok = false;
+                continue;
+            }
+        };
+        match lobj.get("kind").and_then(|v| v.as_str()) {
+            Some(k) if EVIDENCE_KINDS.contains(&k) => {}
+            Some(k) => {
+                report.violations.push(format!(
+                    "decision {label} evidence_link #{lpos} kind '{k}' not in {{file, content, command, attestation, sample, none}}"
+                ));
+                ok = false;
+            }
+            None => {
+                report.violations.push(format!(
+                    "decision {label} evidence_link #{lpos} missing 'kind' (string)"
+                ));
+                ok = false;
+            }
+        }
+        if !lobj.get("value").map(|v| v.is_string()).unwrap_or(false) {
+            report.violations.push(format!(
+                "decision {label} evidence_link #{lpos} missing 'value' (string)"
+            ));
+            ok = false;
+        }
+    }
+    if ok && !arr.is_empty() {
+        report.passes.push(format!(
+            "decision {label} evidence_links reuse the audit Evidence kinds"
+        ));
     }
 }
 
@@ -2960,10 +3628,11 @@ entry       = "jira.sh"
     fn audit_plugin_manifest_council_kind_accepted() {
         // BWOC-59: the 'council' kind is declared in the PLUGINS.en.md enum
         // (BWOC-57); the validator must accept it so the reference
-        // council-sangha-7 plugin passes its own `bwoc check`. The council
-        // manifest carries a [council] table (voting_model / quorum) the
-        // validator does not yet inspect (deep validation is BWOC-60), so the
-        // extra table must be ignored, not rejected — the manifest passes clean.
+        // council-sangha-7 plugin passes its own `bwoc check`. BWOC-60 added the
+        // deep council validation (the [council] table + the decisions.toml
+        // templates), so a clean pass now requires both — this fixture supplies a
+        // well-formed [council] table and decisions.toml. The granular
+        // [council]/templates/Decision-Schema checks have their own tests below.
         let dir = write_plugin_manifest(
             "council-kind",
             "council-sangha-7",
@@ -2980,6 +3649,7 @@ voting_model = "sangha"
 quorum       = "2/3"
 "#,
         );
+        fs::write(dir.join("decisions.toml"), COUNCIL_TEMPLATES_OK).unwrap();
         let report = audit_plugin_manifest(&dir);
         assert!(
             report.violations.is_empty(),
@@ -4803,6 +5473,478 @@ evidence      = { kind = "none", value = "" }
             !report.violations.iter().any(|v| v.contains("as_of")),
             "a never-tracked KR (no as_of) must not raise an as_of violation, got: {:?}",
             report.violations
+        );
+        cleanup(&dir);
+    }
+
+    // ---- BWOC-60: council manifest + templates + Decision Schema ----------
+
+    /// Minimal valid council-kind plugin manifest (matches the dir basename
+    /// `council-sangha-7` so the name check passes), reused by the fixtures.
+    const COUNCIL_MANIFEST_OK: &str = r#"[plugin]
+name        = "council-sangha-7"
+kind        = "council"
+version     = "0.1.0"
+description = "Aparihaniya-dhamma 7 consensus council reference plugin."
+compat      = ">=2.9.0"
+entry       = "protocol.sh"
+
+[council]
+voting_model = "sangha"
+quorum       = "2/3"
+"#;
+
+    /// A well-formed decisions.toml — two issue templates, each with ≥2 options.
+    const COUNCIL_TEMPLATES_OK: &str = r#"[[template]]
+template_id = "ap1-regular-meetings"
+condition   = 1
+name        = "Regular meetings"
+question    = "Shall the fleet hold standups on a fixed, frequent cadence?"
+options     = ["affirm-cadence", "revise-cadence"]
+
+[[template]]
+template_id = "ap2-coordinated-start-end"
+condition   = 2
+name        = "Coordinated start/end"
+question    = "Shall the fleet begin and end sprints in concord?"
+options     = ["affirm-concord", "revise-concord"]
+"#;
+
+    /// Write a council-kind plugin with an optional sibling decisions.toml.
+    fn write_council_plugin(
+        label: &str,
+        manifest: &str,
+        templates: Option<&str>,
+    ) -> std::path::PathBuf {
+        let dir = write_plugin_manifest(label, "council-sangha-7", manifest);
+        if let Some(t) = templates {
+            fs::write(dir.join("decisions.toml"), t).unwrap();
+        }
+        dir
+    }
+
+    /// A schema-conformant decision record (resolved, with an abstention, dissent,
+    /// and an evidence link) — the base the Decision Schema tests mutate.
+    fn good_decision() -> serde_json::Value {
+        serde_json::json!({
+            "decision_id": "D1",
+            "status": "resolved",
+            "participants": ["agent-jisoo", "agent-jennie", "agent-lisa", "agent-rose"],
+            "options": ["adopt", "defer"],
+            "rounds": [{
+                "round": 1,
+                "turns": [{ "participant": "agent-jisoo", "message_ref": "msg-20260528T120000Z-a1b2c" }]
+            }],
+            "votes": [
+                { "participant": "agent-jisoo", "option": "adopt", "abstain": false, "cast_at": "2026-05-28T12:10:00Z" },
+                { "participant": "agent-rose",  "abstain": true,                      "cast_at": "2026-05-28T12:11:00Z" }
+            ],
+            "outcome": "adopt",
+            "dissent": [{ "participant": "agent-lisa", "option": "defer", "rationale": "prefers to wait" }],
+            "evidence_links": [{ "kind": "file", "value": "notes/2026-05-28_council-plugin-architecture.md" }],
+            "opened_at": "2026-05-28T12:00:00Z",
+            "closed_at": "2026-05-28T12:30:00Z"
+        })
+    }
+
+    fn decision_violations(value: &serde_json::Value) -> Vec<String> {
+        let mut report = AuditReport {
+            target: "test".to_string(),
+            passes: Vec::new(),
+            warnings: Vec::new(),
+            violations: Vec::new(),
+        };
+        validate_council_decision("D1.json", value, &mut report);
+        report.violations
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_council_sangha7_reference_passes() {
+        // End-to-end (BWOC-60): audit the actual shipped council/council-sangha-7
+        // reference plugin — manifest [council] table + decisions.toml templates —
+        // exactly as `bwoc check --all` does in an operator workspace. The plugin
+        // ships templates, not records, so the records audit finds nothing.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../modules/plugins/council/council-sangha-7");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real council-sangha-7 manifest + decisions.toml must pass bwoc check, got: {:?}",
+            report.violations
+        );
+        // Confirm the council-specific audit actually ran (not silently skipped).
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p == "[council].voting_model 'sangha' in supported set"),
+            "expected the council voting_model to be validated, got: {:?}",
+            report.passes
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("decisions.toml declares") && p.contains("template")),
+            "expected the council decisions.toml templates to be validated, got: {:?}",
+            report.passes
+        );
+    }
+
+    #[test]
+    fn audit_council_well_formed_manifest_passes() {
+        let dir = write_council_plugin(
+            "council-ok",
+            COUNCIL_MANIFEST_OK,
+            Some(COUNCIL_TEMPLATES_OK),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a well-formed council plugin must pass, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_integer_quorum_passes() {
+        let manifest = COUNCIL_MANIFEST_OK.replace(r#"quorum       = "2/3""#, "quorum       = 3");
+        let dir = write_council_plugin("council-intq", &manifest, Some(COUNCIL_TEMPLATES_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "an integer quorum must be well-formed, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_bad_voting_model_fails() {
+        let manifest = COUNCIL_MANIFEST_OK
+            .replace(r#"voting_model = "sangha""#, r#"voting_model = "dictator""#);
+        let dir = write_council_plugin("council-badvm", &manifest, Some(COUNCIL_TEMPLATES_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("voting_model 'dictator' not in")),
+            "an out-of-set voting_model must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_missing_voting_model_fails() {
+        let manifest = COUNCIL_MANIFEST_OK.replace("voting_model = \"sangha\"\n", "");
+        let dir = write_council_plugin("council-novm", &manifest, Some(COUNCIL_TEMPLATES_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[council].voting_model missing")),
+            "a missing voting_model must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_bad_quorum_fails() {
+        // A zero-denominator fraction is rejected by the same parser the runtime
+        // tally uses (anti-drift) — the static check must reject it too.
+        let manifest =
+            COUNCIL_MANIFEST_OK.replace(r#"quorum       = "2/3""#, r#"quorum       = "1/0""#);
+        let dir = write_council_plugin("council-badq", &manifest, Some(COUNCIL_TEMPLATES_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[council].quorum is malformed")),
+            "a malformed quorum must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_missing_council_table_fails() {
+        // Strip the whole [council] table — a council plugin must declare it.
+        let manifest = &COUNCIL_MANIFEST_OK[..COUNCIL_MANIFEST_OK.find("[council]").unwrap()];
+        let dir = write_council_plugin("council-notable", manifest, Some(COUNCIL_TEMPLATES_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[council] table missing")),
+            "a missing [council] table must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_missing_decisions_toml_fails() {
+        let dir = write_council_plugin("council-notmpl", COUNCIL_MANIFEST_OK, None);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("decisions.toml missing or unreadable")),
+            "a missing decisions.toml must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_template_options_below_two_fails() {
+        let templates = COUNCIL_TEMPLATES_OK.replace(
+            r#"options     = ["affirm-cadence", "revise-cadence"]"#,
+            r#"options     = ["affirm-cadence"]"#,
+        );
+        let dir = write_council_plugin("council-1opt", COUNCIL_MANIFEST_OK, Some(&templates));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("options must declare ≥2 choices")),
+            "a template with <2 options must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_template_duplicate_id_fails() {
+        let templates = COUNCIL_TEMPLATES_OK.replace(
+            r#"template_id = "ap2-coordinated-start-end""#,
+            r#"template_id = "ap1-regular-meetings""#,
+        );
+        let dir = write_council_plugin("council-duptmpl", COUNCIL_MANIFEST_OK, Some(&templates));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("declared more than once")),
+            "a duplicate template_id must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_council_template_non_integer_condition_fails() {
+        let templates = COUNCIL_TEMPLATES_OK.replace("condition   = 1", r#"condition   = "one""#);
+        let dir = write_council_plugin("council-strcond", COUNCIL_MANIFEST_OK, Some(&templates));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("condition has wrong type")),
+            "a non-integer condition must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn council_decision_well_formed_passes() {
+        assert!(
+            decision_violations(&good_decision()).is_empty(),
+            "a schema-conformant decision must pass, got: {:?}",
+            decision_violations(&good_decision())
+        );
+    }
+
+    #[test]
+    fn council_decision_bad_status_fails() {
+        let mut d = good_decision();
+        d["status"] = serde_json::json!("frozen");
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("status 'frozen' not in")),
+            "an out-of-enum status must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_missing_decision_id_fails() {
+        let mut d = good_decision();
+        d.as_object_mut().unwrap().remove("decision_id");
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("missing required 'decision_id'")),
+            "a missing decision_id must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_options_below_two_fails() {
+        let mut d = good_decision();
+        d["options"] = serde_json::json!(["adopt"]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("options must declare ≥2 choices")),
+            "fewer than two options must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_round_turn_missing_message_ref_fails() {
+        let mut d = good_decision();
+        d["rounds"] = serde_json::json!([{
+            "round": 1,
+            "turns": [{ "participant": "agent-jisoo" }]
+        }]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("must carry non-empty 'participant' + 'message_ref'")),
+            "a turn missing message_ref must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_vote_missing_abstain_fails() {
+        let mut d = good_decision();
+        d["votes"] = serde_json::json!([{ "participant": "agent-jisoo", "option": "adopt" }]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("missing 'abstain'")),
+            "a vote missing the abstain flag must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_non_abstain_without_option_fails() {
+        let mut d = good_decision();
+        d["votes"] = serde_json::json!([{ "participant": "agent-jisoo", "abstain": false }]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("names no 'option'")),
+            "a non-abstaining vote with no option must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_abstention_without_option_passes() {
+        // The mirror of the above: an abstention legitimately carries no option.
+        let mut d = good_decision();
+        d["votes"] = serde_json::json!([
+            { "participant": "agent-jisoo", "option": "adopt", "abstain": false },
+            { "participant": "agent-rose",  "abstain": true }
+        ]);
+        assert!(
+            !decision_violations(&d).iter().any(|v| v.contains("vote")),
+            "an abstention with no option must be accepted, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_dissent_missing_option_fails() {
+        let mut d = good_decision();
+        d["dissent"] = serde_json::json!([{ "participant": "agent-lisa", "rationale": "x" }]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("dissent #1 must carry non-empty 'participant' + 'option'")),
+            "a dissent entry missing its option must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_bad_evidence_kind_fails() {
+        let mut d = good_decision();
+        d["evidence_links"] = serde_json::json!([{ "kind": "screenshot", "value": "x.png" }]);
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("kind 'screenshot' not in")),
+            "an out-of-vocabulary evidence kind must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn council_decision_missing_opened_at_fails() {
+        let mut d = good_decision();
+        d.as_object_mut().unwrap().remove("opened_at");
+        assert!(
+            decision_violations(&d)
+                .iter()
+                .any(|v| v.contains("missing required 'opened_at'")),
+            "a missing opened_at must fail, got: {:?}",
+            decision_violations(&d)
+        );
+    }
+
+    #[test]
+    fn audit_council_records_dir_validates_each_entry() {
+        // A plugin-local records/ dir (the SPEC's hand-invocation fallback) is
+        // audited per JSON entry against the Council Decision Schema.
+        let dir = write_council_plugin(
+            "council-recs",
+            COUNCIL_MANIFEST_OK,
+            Some(COUNCIL_TEMPLATES_OK),
+        );
+        let records = dir.join("records");
+        fs::create_dir_all(&records).unwrap();
+        // One conformant record, one malformed (bad status).
+        fs::write(
+            records.join("D1.json"),
+            serde_json::to_string_pretty(&good_decision()).unwrap(),
+        )
+        .unwrap();
+        let mut bad = good_decision();
+        bad["status"] = serde_json::json!("frozen");
+        fs::write(
+            records.join("D2.json"),
+            serde_json::to_string_pretty(&bad).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("status 'frozen' not in")),
+            "a malformed plugin-local record must surface a violation, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("D1.json") && p.contains("decision_id present")),
+            "the conformant record must produce passes, got: {:?}",
+            report.passes
         );
         cleanup(&dir);
     }

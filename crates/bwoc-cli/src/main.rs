@@ -20,6 +20,7 @@ mod dashboard;
 mod deep_memory_cmd;
 mod doc_cmd;
 mod doctor;
+mod figma;
 mod fleet;
 mod gcloud;
 mod git_worktree;
@@ -247,6 +248,21 @@ enum Commands {
     /// `notes/2026-05-28_council-plugin-architecture.md`.
     #[command(name = "council", subcommand)]
     Council(council::CouncilCommand),
+
+    /// Operate the `figma` plugin kind (BWOC-EPIC-7): a read-mostly Figma REST
+    /// integration that bridges design→dev. `fetch` pulls frame/node metadata
+    /// (Figma Asset Mapping Schema shape); `export` renders a node image into the
+    /// content-addressable cache under `figma/exports/` and returns its path;
+    /// `tokens` extracts design tokens; `status` reports the auth state (token
+    /// present? which scope?) + rate-limit headroom — never the token value. The
+    /// live REST path is provided by a named `figma`-kind plugin (e.g.
+    /// `figma-rest`, BWOC-64); a missing plugin exits 4. Auth resolves from the
+    /// `BWOC_FIGMA_TOKEN` env (the CLI only checks presence, never logs or
+    /// serializes it); the read verbs exit 2 when it is absent. Every verb has a
+    /// `--json` twin. See `docs/en/PLUGINS.en.md` §Figma Asset Mapping Schema +
+    /// `notes/2026-05-28_figma-plugin-architecture.md`.
+    #[command(name = "figma", subcommand)]
+    Figma(figma::FigmaCommand),
 
     /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
     /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
@@ -2445,6 +2461,12 @@ fn main() -> ExitCode {
             // council owns its arg structs in council.rs; exit-code convention
             // there (0/1/2/3/4/255 — 3 = resolve reached quorum but no outcome).
             let code = council::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Figma(sub)) => {
+            // figma mirrors okr's dispatch — own arg structs in figma.rs;
+            // exit-code convention there (0/1/2/4/255).
+            let code = figma::run(sub);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::A2a(sub)) => {

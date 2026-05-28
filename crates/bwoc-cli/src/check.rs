@@ -998,8 +998,8 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// `figma` (BWOC-62) is the eighth kind — a read-mostly design→dev
 /// integration, declared in the PLUGINS.en.md enum; recognized here so the
 /// reference `figma/figma-rest` plugin (BWOC-64) passes basic well-formedness.
-/// The figma-specific manifest + Asset Mapping Schema validation lands in
-/// BWOC-65.
+/// The figma `auth.toml` secret-leak guard + Asset Mapping Schema validation
+/// land in BWOC-65 (`audit_figma_auth` / `audit_figma_assets`).
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -1393,6 +1393,19 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     // the deep validation deferred from BWOC-59.
     if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("council") {
         audit_council(&raw, plugin_dir, &mut report);
+    }
+
+    // Figma asset-mapping audit (BWOC-65). figma-kind plugins (the reference
+    // `figma-rest`) carry an `auth.toml` credential contract (a personal access
+    // token, SHAPE only) and emit asset entries conforming to the Figma Asset
+    // Mapping Schema (PLUGINS.en.md). Validate the auth.toml with the same
+    // fail-closed secret-leak guard jira (BWOC-45) / gcloud (BWOC-55) use, and
+    // validate any plugin-local captured asset entries against the schema. The
+    // `figma.sh` entry path-traversal safety is already covered by the base
+    // `validate_plugin_entry` check above (BWOC-36) — not re-done here.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("figma") {
+        audit_figma_auth(plugin_dir, &mut report);
+        audit_figma_assets(plugin_dir, &mut report);
     }
 
     report
@@ -2712,6 +2725,278 @@ fn audit_jira_auth(plugin_dir: &Path, report: &mut AuditReport) {
     }
 }
 
+/// Validate the `auth.toml` credential CONTRACT shipped next to a `figma`-kind
+/// plugin's manifest (BWOC-65). Source of truth: the figma-rest SPEC.md
+/// §Authentication + the `auth.toml` header — the file declares the credential
+/// SHAPE only. The real personal access token (PAT) resolves at runtime from
+/// `BWOC_FIGMA_TOKEN` env (or a gitignored secrets file) and MUST NEVER appear
+/// in this tracked file.
+///
+/// Two concerns, in order of severity (mirrors `audit_jira_auth`, BWOC-45, and
+/// `audit_workflow_auth`, BWOC-55):
+///   1. SECURITY (fail-closed) — the `[figma.auth]` `token` placeholder must be
+///      an EMPTY string. A non-empty value is a committed PAT, the single worst
+///      outcome this check exists to prevent, so it is a hard violation. The
+///      value is NEVER echoed back.
+///   2. SHAPE — `[figma.auth.env].token` binds to a non-empty `var`, so the
+///      runtime resolution map is present and well-formed.
+///
+/// The `[figma.auth.secrets_file]` and `[figma.auth.scopes]` sub-tables carry
+/// only path / table / key / scope NAMES (never a credential value), so they are
+/// not secret-leak surfaces and are not policed here. An absent `auth.toml` is
+/// not audited (the contract is validated only when the file exists — same scope
+/// as jira/gcloud).
+fn audit_figma_auth(plugin_dir: &Path, report: &mut AuditReport) {
+    let auth_path = plugin_dir.join("auth.toml");
+    let body = match fs::read_to_string(&auth_path) {
+        Ok(s) => {
+            report.passes.push("auth.toml present".to_string());
+            s
+        }
+        // No auth.toml → nothing to validate here.
+        Err(_) => return,
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report.passes.push("auth.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("auth.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    // [figma.auth] — the placeholder contract table.
+    let auth = match raw
+        .get("figma")
+        .and_then(|f| f.get("auth"))
+        .and_then(|a| a.as_table())
+    {
+        Some(t) => {
+            report.passes.push("[figma.auth] table present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[figma.auth] table missing — auth.toml must declare the credential contract"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    // token: present, a string, and EMPTY. A non-empty value is a committed PAT —
+    // fail closed, and never echo the value.
+    match auth.get("token") {
+        Some(toml::Value::String(s)) if s.is_empty() => report
+            .passes
+            .push("[figma.auth].token is an empty placeholder".to_string()),
+        Some(toml::Value::String(_)) => report.violations.push(
+            "[figma.auth].token has a non-empty value — a personal access token MUST NOT be \
+             committed; leave it empty and set BWOC_FIGMA_TOKEN (value redacted)"
+                .to_string(),
+        ),
+        Some(_) => report.violations.push(
+            "[figma.auth].token has wrong type — expected an (empty) string placeholder"
+                .to_string(),
+        ),
+        None => report
+            .violations
+            .push("[figma.auth].token missing — required placeholder key".to_string()),
+    }
+
+    // [figma.auth.env].token — the runtime env-var binding. The PAT must name the
+    // environment variable it resolves from.
+    let env = match auth.get("env").and_then(|e| e.as_table()) {
+        Some(t) => {
+            report
+                .passes
+                .push("[figma.auth.env] binding map present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[figma.auth.env] binding map missing — auth.toml must declare how the token \
+                 resolves from the environment"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+    match env.get("token").and_then(|v| v.as_table()) {
+        Some(binding) => match binding.get("var").and_then(|v| v.as_str()) {
+            Some(var) if !var.is_empty() => report
+                .passes
+                .push(format!("[figma.auth.env].token binds to ${var}")),
+            _ => report.violations.push(
+                "[figma.auth.env].token missing a non-empty 'var' — the binding must name its \
+                 environment variable"
+                    .to_string(),
+            ),
+        },
+        None => report.violations.push(
+            "[figma.auth.env].token missing or not a table — expected \
+             { var = \"BWOC_FIGMA_TOKEN\", required = true, secret = true }"
+                .to_string(),
+        ),
+    }
+}
+
+/// Validate any plugin-local Figma asset mappings against the Figma Asset
+/// Mapping Schema (BWOC-65). The `figma` kind is read-mostly: the `fetch` /
+/// `tokens` / `export` verbs emit asset entries at runtime — they are never
+/// persisted as tracked plugin files (the only on-disk artifact is the
+/// content-addressable image cache under `figma/exports/`, which is gitignored).
+/// So like council's `records/` fallback (BWOC-60), an optional plugin-local
+/// `mappings/` directory holds captured `bwoc figma` output for hand-invocation
+/// / smoke tests; when present every `*.json` in it is validated, when absent
+/// (the shipped reference plugin ships none) there is nothing to audit.
+///
+/// Each file may be a captured verb envelope — `{ "assets": [ … ] }` (fetch /
+/// tokens) or `{ "asset": { … } }` (export) — a bare array of entries, or a
+/// single entry; every entry it carries is validated against the schema.
+fn audit_figma_assets(plugin_dir: &Path, report: &mut AuditReport) {
+    let mappings_dir = plugin_dir.join("mappings");
+    let read = match fs::read_dir(&mappings_dir) {
+        Ok(r) => r,
+        // No plugin-local mappings — asset entries are emitted at runtime.
+        Err(_) => return,
+    };
+    let mut json_paths: Vec<std::path::PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    json_paths.sort();
+    for path in json_paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let body = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("mappings/{name} unreadable: {e}"));
+                continue;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("mappings/{name} is not valid JSON: {e}"));
+                continue;
+            }
+        };
+        // Unwrap the verb envelope to the asset entries it carries: a `fetch` /
+        // `tokens` body nests them under `assets`, an `export` body under `asset`;
+        // a bare array or single object is taken as the entry set directly.
+        let entries: Vec<&serde_json::Value> =
+            if let Some(arr) = value.get("assets").and_then(|a| a.as_array()) {
+                arr.iter().collect()
+            } else if let Some(asset) = value.get("asset") {
+                vec![asset]
+            } else if let Some(arr) = value.as_array() {
+                arr.iter().collect()
+            } else {
+                vec![&value]
+            };
+        for (i, entry) in entries.iter().enumerate() {
+            let label = format!("mappings/{name}[{i}]");
+            validate_figma_asset(&label, entry, report);
+        }
+    }
+}
+
+/// Validate one asset entry against the Figma Asset Mapping Schema (PLUGINS.en.md
+/// §"Figma Asset Mapping Schema", BWOC-62). `label` identifies the entry in
+/// messages. The schema is the `figma` kind's contract — the reference plugin's
+/// verbs and the `bwoc figma` CLI emit entries of this shape, and `bwoc check`
+/// validates it (BWOC-65). `file_key` + `node_id` is the stable key; the other
+/// required fields are mutable projections of Figma state. Optional fields are
+/// validated only when present and MUST be omitted (never serialized as `null`)
+/// when absent — per the schema's omit-don't-null convention. Additive fields
+/// beyond the schema's named set are ignored, not rejected.
+fn validate_figma_asset(label: &str, value: &serde_json::Value, report: &mut AuditReport) {
+    let obj = match value.as_object() {
+        Some(o) => o,
+        None => {
+            report.violations.push(format!(
+                "asset {label} is not a JSON object — expected a Figma Asset Mapping entry"
+            ));
+            return;
+        }
+    };
+
+    // Required non-empty string fields. `file_key` + `node_id` are the stable
+    // key; `name` / `type` / `last_modified` are required projections of Figma
+    // state (`last_modified` is the export cache-invalidation signal).
+    for field in &["file_key", "node_id", "name", "type", "last_modified"] {
+        match obj.get(*field) {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => {
+                report.passes.push(format!("asset {label} {field} present"))
+            }
+            Some(serde_json::Value::String(_)) => report.violations.push(format!(
+                "asset {label} '{field}' is empty — required non-empty string"
+            )),
+            _ => report.violations.push(format!(
+                "asset {label} missing required '{field}' (non-empty string)"
+            )),
+        }
+    }
+
+    // Optional string fields: validated only when present; an explicit null is a
+    // violation (the schema omits absent fields, never serializes them as null).
+    for field in &["exported_path", "image_url"] {
+        match obj.get(*field) {
+            None => {}
+            Some(serde_json::Value::String(s)) if !s.is_empty() => report
+                .passes
+                .push(format!("asset {label} {field} well-formed")),
+            Some(serde_json::Value::Null) => report.violations.push(format!(
+                "asset {label} '{field}' is null — optional fields MUST be omitted, not null"
+            )),
+            Some(_) => report.violations.push(format!(
+                "asset {label} '{field}' has wrong type — expected a non-empty string when present"
+            )),
+        }
+    }
+
+    // design_tokens: optional `{ name: value }` object; never null. Each value is
+    // a scalar token value (the SPEC's color / spacing / type extraction yields
+    // string or number scalars) — a nested object or array is not a token value.
+    match obj.get("design_tokens") {
+        None => {}
+        Some(serde_json::Value::Object(tokens)) => {
+            if tokens
+                .values()
+                .all(|v| v.is_string() || v.is_number() || v.is_boolean())
+            {
+                report
+                    .passes
+                    .push(format!("asset {label} design_tokens is a scalar map"));
+            } else {
+                report.violations.push(format!(
+                    "asset {label} design_tokens values must be scalar token values \
+                     (string / number), not nested objects or arrays"
+                ));
+            }
+        }
+        Some(serde_json::Value::Null) => report.violations.push(format!(
+            "asset {label} 'design_tokens' is null — optional fields MUST be omitted, not null"
+        )),
+        Some(_) => report.violations.push(format!(
+            "asset {label} 'design_tokens' has wrong type — expected a {{ name: value }} object"
+        )),
+    }
+}
+
 /// Validate the `criteria.toml` declaration that ships next to an
 /// audit-kind plugin's manifest. Source of truth: PLUGINS.en.md
 /// §"Audit Findings Schema" — `criterion_id` is kebab-case and
@@ -3669,10 +3954,10 @@ quorum       = "2/3"
     fn audit_plugin_manifest_figma_kind_accepted() {
         // BWOC-64: the 'figma' kind (the eighth) is declared in the
         // PLUGINS.en.md enum (BWOC-62); the validator must accept it so the
-        // reference figma-rest plugin passes its own `bwoc check`. The
-        // figma-specific manifest + Asset Mapping Schema validation lands in
-        // BWOC-65, so the optional [config.schema] table the manifest carries
-        // must be ignored, not rejected — the manifest passes clean now.
+        // reference figma-rest plugin passes its own `bwoc check`. This fixture
+        // ships no auth.toml / mappings, so the BWOC-65 figma audit is a no-op
+        // here, and the optional [config.schema] table is ignored, not rejected —
+        // the manifest passes clean.
         let dir = write_plugin_manifest(
             "figma-kind",
             "figma-rest",
@@ -3699,9 +3984,9 @@ export_dir = { type = "string", required = false, default = "figma/exports" }
 
     #[test]
     fn audit_plugin_manifest_real_figma_reference_passes() {
-        // End-to-end: audit the actual shipped reference plugin
-        // (modules/plugins/figma/figma-rest/), not a fixture — this is the file
-        // `bwoc check --all` will validate in an operator workspace.
+        // End-to-end (BWOC-65): audit the actual shipped reference plugin
+        // (modules/plugins/figma/figma-rest/) — manifest + auth.toml secret-leak
+        // guard — exactly as `bwoc check --all` does in an operator workspace.
         let dir =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/plugins/figma/figma-rest");
         if !dir.join("manifest.toml").is_file() {
@@ -3710,9 +3995,287 @@ export_dir = { type = "string", required = false, default = "figma/exports" }
         let report = audit_plugin_manifest(&dir);
         assert!(
             report.violations.is_empty(),
-            "real figma-rest manifest must pass bwoc check, got: {:?}",
+            "real figma-rest manifest + auth.toml must pass bwoc check, got: {:?}",
             report.violations
         );
+        // Confirm the figma auth guard actually ran (not silently skipped) — the
+        // shipped auth.toml carries an empty token placeholder + env binding.
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p == "[figma.auth].token is an empty placeholder"),
+            "expected the figma auth.toml token placeholder to be validated, got: {:?}",
+            report.passes
+        );
+    }
+
+    // ---- BWOC-65: figma auth.toml + Asset Mapping Schema -------------------
+
+    /// Body of a minimal valid figma-kind plugin manifest, reused by the
+    /// auth.toml / mappings fixtures below.
+    const FIGMA_MANIFEST: &str = r#"[plugin]
+name        = "figma-rest"
+kind        = "figma"
+version     = "0.1.0"
+description = "Read-mostly Figma REST adapter."
+compat      = ">=2.10.0"
+entry       = "figma.sh"
+"#;
+
+    /// The shipped auth.toml contract shape: an EMPTY token placeholder plus the
+    /// env binding map. Mirrors modules/plugins/figma/figma-rest/auth.toml.
+    const FIGMA_AUTH_OK: &str = r#"[figma.auth]
+token = ""
+
+[figma.auth.env]
+token = { var = "BWOC_FIGMA_TOKEN", required = true, secret = true }
+
+[figma.auth.secrets_file]
+path  = ".bwoc/secrets.toml"
+table = "figma"
+key   = "token"
+
+[figma.auth.scopes]
+required = ["file_content"]
+optional = ["library_content"]
+"#;
+
+    #[test]
+    fn audit_figma_auth_empty_placeholder_passes() {
+        // A figma plugin whose auth.toml holds only an EMPTY token placeholder
+        // plus a complete env binding map is the shipped contract shape — and the
+        // secrets_file / scopes sub-tables (path / table / key / scope NAMES, not
+        // values) must NOT be policed as leaks. Passes clean.
+        let dir = write_plugin_manifest("figma-auth-ok", "figma-rest", FIGMA_MANIFEST);
+        fs::write(dir.join("auth.toml"), FIGMA_AUTH_OK).unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "empty-placeholder figma auth.toml must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_figma_auth_real_token_fails_and_redacts() {
+        // SECURITY: a committed PAT is the worst outcome this check exists to
+        // prevent. A non-empty token MUST be a hard violation, and the leaked
+        // value MUST NOT be echoed into the report (that would re-leak the secret
+        // into whatever consumes `bwoc check` output).
+        let leaked = "figd_super-secret-personal-access-token";
+        let dir = write_plugin_manifest("figma-auth-leak", "figma-rest", FIGMA_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            format!(
+                r#"[figma.auth]
+token = "{leaked}"
+
+[figma.auth.env]
+token = {{ var = "BWOC_FIGMA_TOKEN", required = true, secret = true }}
+"#
+            ),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[figma.auth].token") && v.contains("MUST NOT be committed")),
+            "a committed token must be a violation, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report.violations.iter().all(|v| !v.contains(leaked)),
+            "the secret value must be redacted from the report, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_figma_auth_missing_env_binding_fails() {
+        // The token placeholder is empty (good) but the [figma.auth.env] binding
+        // map is absent — the runtime resolution contract is incomplete.
+        let dir = write_plugin_manifest("figma-auth-noenv", "figma-rest", FIGMA_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            r#"[figma.auth]
+token = ""
+"#,
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[figma.auth.env] binding map missing")),
+            "a missing env binding map must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    /// A schema-conforming asset entry (the PLUGINS.en.md §Figma Asset Mapping
+    /// Schema example), with every optional field populated.
+    fn figma_asset_ok() -> serde_json::Value {
+        serde_json::json!({
+            "file_key": "AbC123dEf456",
+            "node_id": "12:345",
+            "name": "Primary Button",
+            "type": "COMPONENT",
+            "last_modified": "2026-05-27T09:00:00Z",
+            "exported_path": "figma/exports/9f86d081884c7d65.png",
+            "image_url": "https://figma-alpha-api.s3.amazonaws.com/render/9f86.png",
+            "design_tokens": { "color/primary": "#2D7FF9", "radius/sm": "4px" }
+        })
+    }
+
+    fn figma_asset_violations(value: &serde_json::Value) -> Vec<String> {
+        let mut report = AuditReport {
+            target: "test".to_string(),
+            passes: Vec::new(),
+            warnings: Vec::new(),
+            violations: Vec::new(),
+        };
+        validate_figma_asset("asset.json", value, &mut report);
+        report.violations
+    }
+
+    #[test]
+    fn figma_asset_well_formed_passes() {
+        assert!(
+            figma_asset_violations(&figma_asset_ok()).is_empty(),
+            "a schema-conforming asset entry must pass"
+        );
+    }
+
+    #[test]
+    fn figma_asset_minimal_required_only_passes() {
+        // Optional fields omitted (never-exported, no tokens) — the entry is still
+        // schema-conforming on its required-field floor.
+        let entry = serde_json::json!({
+            "file_key": "AbC123",
+            "node_id": "1:2",
+            "name": "Frame",
+            "type": "FRAME",
+            "last_modified": "2026-05-27T09:00:00Z"
+        });
+        assert!(
+            figma_asset_violations(&entry).is_empty(),
+            "a required-only asset entry must pass"
+        );
+    }
+
+    #[test]
+    fn figma_asset_missing_required_field_fails() {
+        let mut entry = figma_asset_ok();
+        entry.as_object_mut().unwrap().remove("node_id");
+        assert!(
+            figma_asset_violations(&entry)
+                .iter()
+                .any(|v| v.contains("missing required 'node_id'")),
+            "a missing stable-key field must fail"
+        );
+    }
+
+    #[test]
+    fn figma_asset_empty_required_field_fails() {
+        let mut entry = figma_asset_ok();
+        entry.as_object_mut().unwrap()["file_key"] = serde_json::json!("");
+        assert!(
+            figma_asset_violations(&entry)
+                .iter()
+                .any(|v| v.contains("'file_key' is empty")),
+            "an empty stable-key field must fail"
+        );
+    }
+
+    #[test]
+    fn figma_asset_null_optional_field_fails() {
+        // The schema omits absent optional fields — it never serializes them as
+        // null. An explicit null is a violation.
+        let mut entry = figma_asset_ok();
+        entry.as_object_mut().unwrap()["exported_path"] = serde_json::Value::Null;
+        assert!(
+            figma_asset_violations(&entry)
+                .iter()
+                .any(|v| v.contains("'exported_path' is null") && v.contains("MUST be omitted")),
+            "a null optional field must fail"
+        );
+    }
+
+    #[test]
+    fn figma_asset_nested_design_tokens_fails() {
+        // design_tokens is a flat { name: value } scalar map — a nested object as
+        // a value is not a token value.
+        let mut entry = figma_asset_ok();
+        entry.as_object_mut().unwrap()["design_tokens"] =
+            serde_json::json!({ "color": { "primary": "#2D7FF9" } });
+        assert!(
+            figma_asset_violations(&entry)
+                .iter()
+                .any(|v| v.contains("design_tokens values must be scalar")),
+            "a nested design_tokens value must fail"
+        );
+    }
+
+    #[test]
+    fn audit_figma_assets_fetch_envelope_validates_entries() {
+        // A captured `fetch` body nests entries under `assets`; a malformed entry
+        // in the array must surface as a violation when the plugin is audited.
+        let dir = write_plugin_manifest("figma-map-fetch", "figma-rest", FIGMA_MANIFEST);
+        fs::write(dir.join("auth.toml"), FIGMA_AUTH_OK).unwrap();
+        fs::create_dir_all(dir.join("mappings")).unwrap();
+        let bad = serde_json::json!({
+            "ok": true,
+            "file_key": "AbC123",
+            "assets": [
+                figma_asset_ok(),
+                { "file_key": "AbC123", "name": "No Node Id", "type": "FRAME",
+                  "last_modified": "2026-05-27T09:00:00Z" }
+            ]
+        });
+        fs::write(
+            dir.join("mappings/fetch.json"),
+            serde_json::to_string_pretty(&bad).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("mappings/fetch.json[1]") && v.contains("'node_id'")),
+            "a malformed entry in the fetch envelope must be flagged, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_figma_assets_export_envelope_passes() {
+        // A captured `export` body nests one entry under `asset`; a well-formed
+        // entry passes clean.
+        let dir = write_plugin_manifest("figma-map-export", "figma-rest", FIGMA_MANIFEST);
+        fs::write(dir.join("auth.toml"), FIGMA_AUTH_OK).unwrap();
+        fs::create_dir_all(dir.join("mappings")).unwrap();
+        let body = serde_json::json!({ "ok": true, "cached": true, "asset": figma_asset_ok() });
+        fs::write(
+            dir.join("mappings/export.json"),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a well-formed export envelope must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
     }
 
     #[test]

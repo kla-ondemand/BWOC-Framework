@@ -8,9 +8,9 @@
 # VM — they cost money and interrupt workloads — so they carry an operator-
 # confirm gate. Per docs/en/PLUGINS.en.md §"Write verbs" the gate lives at the
 # CLI boundary (`bwoc gcloud compute`, BWOC-68); this plugin does NOT re-prompt.
-# It DOES refuse a write unless the CLI-set confirmation marker
-# BWOC_GCLOUD_CONFIRM is present (design note §Decision 3) — defense-in-depth so
-# a direct plugin invocation can never bypass the gate. `delete` is deliberately
+# It DOES refuse a write unless the CLI-set confirmation marker `confirmed: true`
+# is present in the request (design note §Decision 3) — defense-in-depth so a
+# direct plugin invocation can never bypass the gate. `delete` is deliberately
 # not shipped (deferred, §Decision 2).
 #
 # Sources credential helpers from the sibling workflow/gcloud-auth plugin — the
@@ -22,12 +22,12 @@
 #   stdin                  one-line JSON, e.g.
 #                          {"operation":"list"}
 #                          {"operation":"list","zone":"us-central1-a","project":"my-proj"}
-#                          {"operation":"start","instance":"vm-1","zone":"us-central1-a"}
-#                          {"operation":"stop","instance":"vm-1","zone":"us-central1-a"}
+#                          {"operation":"start","instance":"vm-1","zone":"us-central1-a","confirmed":true}
+#                          {"operation":"stop","instance":"vm-1","zone":"us-central1-a","confirmed":true}
+#   .confirmed (in JSON)   write-confirmation marker — set to true by the CLI
+#                          after the operator confirms a write. Read verbs ignore
+#                          it; write verbs refuse without it.
 #   BWOC_GCLOUD_OPERATION  fallback for .operation when stdin is empty
-#   BWOC_GCLOUD_CONFIRM    write-confirmation marker — set to a non-empty value
-#                          by the CLI after the operator confirms a write. Read
-#                          verbs ignore it; write verbs refuse without it.
 #   BWOC_WORKSPACE         absolute workspace root (resolves the SA JSON path)
 #   BWOC_PLUGIN_DIR        absolute path to THIS plugin's directory
 #                          (used to find ../gcloud-auth/gcloud.sh)
@@ -87,22 +87,24 @@ _gcloud_compute_field() {
   printf '%s' "$request" | jq -r --arg f "$field" '.[$f] // empty' 2>/dev/null || true
 }
 
-# _gcloud_compute_assert_confirmed — write-gate guard. The CLI sets
-# BWOC_GCLOUD_CONFIRM to a non-empty value after the operator confirms. Without
-# it, refuse the write and report "no change" with the reason (Dhammanupassana —
-# never a bare failure, never a silent write). Exit 5.
+# _gcloud_compute_assert_confirmed — write-gate guard. The CLI sets the
+# confirmation marker `confirmed: true` in the stdin request after the operator
+# confirms (BWOC-68 compute_write_request). Without it, refuse the write and
+# report "no change" with the reason (Dhammanupassana — never a bare failure,
+# never a silent write). Exit 5.
 _gcloud_compute_assert_confirmed() {
-  local verb="$1"
-  if [[ -n "${BWOC_GCLOUD_CONFIRM:-}" ]]; then return 0; fi
+  local verb="$1" request="$2" confirmed
+  confirmed="$(printf '%s' "$request" | jq -r '.confirmed // false' 2>/dev/null || echo false)"
+  if [[ "$confirmed" == "true" ]]; then return 0; fi
   jq -n --arg op "$verb" '{
     ok: false,
     plugin: "gcloud-compute",
     operation: $op,
     changed: false,
     reason: "unconfirmed-write",
-    message: ("write verb '" + $op + "' requires operator confirmation; the bwoc gcloud compute CLI sets BWOC_GCLOUD_CONFIRM after a y/N prompt. Direct plugin invocation of a write verb is refused — no instance was changed.")
+    message: ("write verb '" + $op + "' requires operator confirmation; the bwoc gcloud compute CLI sets the confirmation marker (\"confirmed\": true) in the request after a y/N prompt. Direct plugin invocation of a write verb is refused — no instance was changed.")
   }'
-  printf '%s\n' "$PLUGIN $verb: refused — no confirmation marker (BWOC_GCLOUD_CONFIRM unset); no change made." >&2
+  printf '%s\n' "$PLUGIN $verb: refused — request not confirmed (no \"confirmed\": true marker); no change made." >&2
   exit 5
 }
 
@@ -150,7 +152,7 @@ _gcloud_compute_lifecycle() {
   local verb="$1" request="$2"
   # The write gate is the primary guard — check it first so a direct-invoke
   # bypass attempt is refused regardless of auth/CLI state (no silent write).
-  _gcloud_compute_assert_confirmed "$verb"
+  _gcloud_compute_assert_confirmed "$verb" "$request"
   gcloud_assert_cli || exit 1
   gcloud_assert_authenticated || exit 3
 

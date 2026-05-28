@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod a2a;
 mod audit;
 mod banner;
 mod chat;
@@ -206,6 +207,70 @@ enum Commands {
     /// Every verb has a `--json` twin. See `docs/en/PLUGINS.en.md`.
     #[command(name = "jira", subcommand)]
     Jira(jira::JiraCommand),
+
+    /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
+    /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
+    /// no auth yet). See #48.
+    #[command(name = "a2a", subcommand)]
+    A2a(A2aCommand),
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum A2aCommand {
+    /// Print the agent's A2A Agent Card (JSON) derived from its manifest.
+    Card(A2aCardArgs),
+    /// Run the A2A HTTP listener: Agent Card at the well-known path + a
+    /// JSON-RPC endpoint that drops inbound messages into the agent's inbox.
+    Serve(A2aServeArgs),
+    /// Fetch and print an external agent's A2A Agent Card (discovery).
+    FetchCard(A2aFetchCardArgs),
+    /// Send a text message to an external A2A agent via SendMessage.
+    Send(A2aSendArgs),
+}
+
+#[derive(Args, Debug)]
+struct A2aFetchCardArgs {
+    /// Base URL of the remote A2A agent (the well-known path is appended).
+    url: String,
+}
+
+#[derive(Args, Debug)]
+struct A2aSendArgs {
+    /// The remote agent's JSON-RPC endpoint URL.
+    url: String,
+    /// Message text to send.
+    message: String,
+    /// Optional A2A `contextId` to associate the message with.
+    #[arg(long)]
+    context: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct A2aCardArgs {
+    /// Agent name or id (the `agent-` prefix is optional).
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct A2aServeArgs {
+    /// Agent name or id (the `agent-` prefix is optional).
+    agent: String,
+    /// Workspace root. Resolution: --workspace > BWOC_WORKSPACE env > ancestor walk.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Address to bind. Defaults to loopback (`127.0.0.1`); a non-loopback
+    /// value warns, since the listener has no authentication yet.
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: std::net::IpAddr,
+    /// TCP port to listen on.
+    #[arg(long, default_value_t = 41241)]
+    port: u16,
+    /// Expose this team's shared task list over A2A `tasks/*` (GetTask/ListTasks).
+    #[arg(long)]
+    team: Option<String>,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -2301,6 +2366,30 @@ fn main() -> ExitCode {
             // unit-testable; dispatch is a thin hand-off. Exit-code convention
             // is documented in jira.rs (0/1/2/3/4/255).
             let code = jira::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::A2a(sub)) => {
+            let code = match sub {
+                A2aCommand::Card(args) => a2a::run_card(a2a::CardArgs {
+                    agent: args.agent,
+                    workspace: args.workspace,
+                }),
+                A2aCommand::Serve(args) => a2a::run_serve(a2a::ServeArgs {
+                    agent: args.agent,
+                    workspace: args.workspace,
+                    bind: args.bind,
+                    port: args.port,
+                    team: args.team,
+                }),
+                A2aCommand::FetchCard(args) => {
+                    a2a::run_fetch_card(a2a::FetchCardArgs { url: args.url })
+                }
+                A2aCommand::Send(args) => a2a::run_send_outbound(a2a::SendOutboundArgs {
+                    url: args.url,
+                    message: args.message,
+                    context: args.context,
+                }),
+            };
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         None => {

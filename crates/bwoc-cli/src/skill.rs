@@ -2398,4 +2398,90 @@ mod tests {
             "a disabled plugin must not satisfy the dependency"
         );
     }
+
+    // ---- BWOC-55: skill-on-multiple-plugins, kind-namespaced layout --------
+
+    /// Write the gcloud-ops skill (requires_plugins = ["workflow"], no gate) so
+    /// verify's result is driven purely by kind-level dependency resolution.
+    /// gcloud-ops names BOTH gcloud plugins in its SPEC, but resolution is
+    /// kind-level only — one enabled workflow-kind plugin satisfies it
+    /// (SKILLS §"Skill-on-multiple-plugins"; name-level is a future extension).
+    fn write_gcloud_ops_skill(root: &Path) {
+        let dir = root.join("modules/skills/gcloud-ops");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            "[skill]\nname = \"gcloud-ops\"\nversion = \"0.1.0\"\n\
+             description = \"gcloud ops via the workflow plugins\"\nmaturity = \"L1\"\n\n\
+             [contract]\nrequires = []\nrequires_plugins = [\"workflow\"]\n\
+             exposes = [\"whoami\", \"current-project\"]\n",
+        )
+        .unwrap();
+    }
+
+    /// Install a workflow-kind plugin under the KIND-NAMESPACED layout
+    /// (`modules/plugins/workflow/gcloud-auth/`, as BWOC-53 ships it) and enable
+    /// it — exercising that nested discovery feeds kind-level resolution.
+    fn install_and_enable_nested_workflow_plugin(root: &Path) {
+        let dir = root.join("modules/plugins/workflow/gcloud-auth");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("manifest.toml"),
+            "[plugin]\nname = \"gcloud-auth\"\nkind = \"workflow\"\nversion = \"0.1.0\"\n\
+             description = \"gcloud credential-state adapter\"\ncompat = \">=2.9.0\"\n\
+             entry = \"gcloud.sh\"\n",
+        )
+        .unwrap();
+        let bwoc = root.join(".bwoc");
+        std::fs::create_dir_all(&bwoc).unwrap();
+        std::fs::write(
+            bwoc.join("workspace.toml"),
+            "[plugins.gcloud-auth]\nenabled = true\n",
+        )
+        .unwrap();
+    }
+
+    fn gcloud_ops_verify_args(root: &Path) -> VerifyArgs {
+        VerifyArgs {
+            common: CommonArgs {
+                workspace: Some(root.to_path_buf()),
+            },
+            name: Some("gcloud-ops".to_string()),
+            all: false,
+            run_gates: false,
+            json: false,
+        }
+    }
+
+    #[test]
+    fn verify_resolves_workflow_dep_from_kind_namespaced_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_gcloud_ops_skill(root);
+        install_and_enable_nested_workflow_plugin(root);
+        assert_eq!(
+            run_verify(gcloud_ops_verify_args(root)),
+            0,
+            "an enabled workflow-kind plugin under modules/plugins/workflow/ must satisfy \
+             requires_plugins = [\"workflow\"] (kind-level resolution)"
+        );
+    }
+
+    #[test]
+    fn verify_fails_workflow_dep_when_nested_plugin_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_gcloud_ops_skill(root);
+        install_and_enable_nested_workflow_plugin(root);
+        std::fs::write(
+            root.join(".bwoc/workspace.toml"),
+            "[plugins.gcloud-auth]\nenabled = false\n",
+        )
+        .unwrap();
+        assert_ne!(
+            run_verify(gcloud_ops_verify_args(root)),
+            0,
+            "a disabled nested workflow plugin must not satisfy the dependency"
+        );
+    }
 }

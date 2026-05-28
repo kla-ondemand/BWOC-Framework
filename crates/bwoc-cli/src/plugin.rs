@@ -177,29 +177,55 @@ fn plugins_dir(root: &Path) -> PathBuf {
     root.join("modules/plugins")
 }
 
-/// Walk `<root>/modules/plugins/*/manifest.toml`, parse each, and return
-/// them sorted by directory name. Dirs without a `manifest.toml` are skipped
-/// — `bwoc check` is the authoritative validator (PLUGINS.en.md §"Verification").
+/// Walk the plugin tree under `<root>/modules/plugins/`, parse each manifest,
+/// and return the plugins sorted by directory name. Two layouts are recognized:
+///   - flat            `modules/plugins/<name>/manifest.toml`
+///   - kind-namespaced `modules/plugins/<kind>/<name>/manifest.toml`
+///
+/// A directory with no `manifest.toml` of its own is a kind-group (e.g.
+/// `modules/plugins/workflow/`, holding the `gcloud-*` plugins from BWOC-53) and
+/// is descended exactly ONE level — the only namespacing the framework uses, and
+/// the same dual layout `bwoc gcloud` resolves (gcloud.rs::candidate_plugin_dirs)
+/// and `bwoc check` audits (check.rs::discover_module_dirs). Dirs without a
+/// manifest anywhere are skipped — `bwoc check` is the authoritative validator
+/// (PLUGINS.en.md §"Verification").
 fn discover(root: &Path) -> Result<Vec<DiscoveredPlugin>, String> {
     let dir = plugins_dir(root);
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+    // Collect candidate plugin dirs across both layouts, then parse each.
+    let mut groups: Vec<_> = std::fs::read_dir(&dir)
         .map_err(|e| format!("read {}: {e}", dir.display()))?
         .filter_map(|r| r.ok())
         .filter(|e| e.path().is_dir())
         .collect();
-    entries.sort_by_key(|e| e.file_name());
+    groups.sort_by_key(|e| e.file_name());
 
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let plugin_dir = entry.path();
-        let dir_name = entry.file_name().to_string_lossy().into_owned();
-        let manifest_path = plugin_dir.join("manifest.toml");
-        if !manifest_path.is_file() {
-            continue;
+    let mut plugin_dirs: Vec<PathBuf> = Vec::new();
+    for entry in groups {
+        let path = entry.path();
+        if path.join("manifest.toml").is_file() {
+            plugin_dirs.push(path);
+        } else if let Ok(inner) = std::fs::read_dir(&path) {
+            // Kind-group dir → collect its manifest-bearing children only.
+            let mut nested: Vec<PathBuf> = inner
+                .filter_map(|r| r.ok())
+                .map(|e| e.path())
+                .filter(|p| p.is_dir() && p.join("manifest.toml").is_file())
+                .collect();
+            nested.sort();
+            plugin_dirs.extend(nested);
         }
+    }
+
+    let mut out = Vec::with_capacity(plugin_dirs.len());
+    for plugin_dir in plugin_dirs {
+        let dir_name = plugin_dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let manifest_path = plugin_dir.join("manifest.toml");
         let manifest = parse_manifest(&manifest_path)
             .map_err(|e| format!("{}/manifest.toml: {e}", dir_name))?;
         if manifest.plugin.name != dir_name {

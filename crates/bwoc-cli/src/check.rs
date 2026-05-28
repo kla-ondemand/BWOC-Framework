@@ -1324,7 +1324,160 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         audit_jira_auth(plugin_dir, &mut report);
     }
 
+    // Auth contract audit (BWOC-55). Workflow-kind plugins (the `gcloud-*`
+    // reference plugins) declare a credential-RESOLUTION shape in a sibling
+    // `auth.toml` — file paths and env-var NAMES, never a value. Validate it
+    // with the same fail-closed secret-leak guard jira uses, adapted to the
+    // `[sources]` shape (notes/2026-05-28_gcloud-workflow-plugin-architecture.md
+    // §Decision 3). Workflow plugins without an auth.toml are not audited.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("workflow") {
+        audit_workflow_auth(plugin_dir, &mut report);
+    }
+
     report
+}
+
+/// Validate the `auth.toml` credential CONTRACT shipped next to a
+/// `workflow`-kind plugin's manifest (BWOC-55). Source of truth: the
+/// `gcloud-auth` / `gcloud-project` SPEC.md §Authentication, the `auth.toml`
+/// header, and notes/2026-05-28_gcloud-workflow-plugin-architecture.md
+/// §Decision 3. The file declares the credential SHAPE only — which sources are
+/// consulted, the file paths, and the env-var NAMES — and carries NO secret
+/// value. The plugin never reads a credential value, so a malformed `auth.toml`
+/// cannot leak a token; this check makes that invariant enforceable statically.
+///
+/// Two concerns, in order of severity (mirrors `audit_jira_auth`, BWOC-45):
+///   1. SECURITY (fail-closed) — each `[sources.<src>]` table may carry ONLY
+///      its declared shape keys (`path`/`priority` for the file sources,
+///      `vars`/`priority` for the env source). ANY other key is treated as an
+///      inline credential value — the single worst outcome this check exists to
+///      prevent — and is a hard violation. The value is NEVER echoed back.
+///   2. SHAPE — `[sources]` declares the three precedence-ordered sources
+///      `adc` / `service_account` / `env`, each well-typed, so the runtime
+///      resolution contract is present and well-formed.
+///
+/// An absent `auth.toml` is not audited — a workflow plugin need not carry
+/// credentials (the contract is validated only when the file exists, mirroring
+/// the BWOC-45 jira scope).
+fn audit_workflow_auth(plugin_dir: &Path, report: &mut AuditReport) {
+    let auth_path = plugin_dir.join("auth.toml");
+    let body = match fs::read_to_string(&auth_path) {
+        Ok(s) => {
+            report.passes.push("auth.toml present".to_string());
+            s
+        }
+        // No auth.toml → nothing to validate here.
+        Err(_) => return,
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report.passes.push("auth.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("auth.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    // [sources] — the credential-resolution contract table.
+    let sources = match raw.get("sources").and_then(|s| s.as_table()) {
+        Some(t) => {
+            report.passes.push("[sources] table present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[sources] table missing — auth.toml must declare the credential-resolution \
+                 contract (adc / service_account / env)"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    // Each source: present, a table, carrying ONLY its declared shape keys.
+    // `path`/`vars` are the resolution descriptors; `priority` orders precedence.
+    // Any other key is treated as an inline credential value — fail closed and
+    // never echo it (echoing would re-leak the secret into `bwoc check` output).
+    for (src, allowed) in [
+        ("adc", &["path", "priority"][..]),
+        ("service_account", &["path", "priority"][..]),
+        ("env", &["vars", "priority"][..]),
+    ] {
+        let table = match sources.get(src) {
+            Some(toml::Value::Table(t)) => {
+                report.passes.push(format!("[sources].{src} declared"));
+                t
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "[sources].{src} has wrong type — expected an inline table of shape descriptors"
+                ));
+                continue;
+            }
+            None => {
+                report.violations.push(format!(
+                    "[sources].{src} missing — required credential-source key"
+                ));
+                continue;
+            }
+        };
+
+        // Fail-closed secret-leak guard: reject any key outside the shape set.
+        for key in table.keys() {
+            if !allowed.contains(&key.as_str()) {
+                report.violations.push(format!(
+                    "[sources].{src}.{key} is not a declared shape key — auth.toml carries SHAPE \
+                     only; an inline credential value MUST NOT be committed (value redacted)"
+                ));
+            }
+        }
+
+        // Shape type checks for the declared descriptors.
+        if src == "env" {
+            match table.get("vars") {
+                Some(toml::Value::Array(a)) if !a.is_empty() && a.iter().all(|v| v.is_str()) => {
+                    report
+                        .passes
+                        .push("[sources].env.vars names the resolving env vars".to_string());
+                }
+                Some(_) => report.violations.push(
+                    "[sources].env.vars has wrong type — expected a non-empty array of \
+                     env-var-name strings"
+                        .to_string(),
+                ),
+                None => report.violations.push(
+                    "[sources].env.vars missing — the env source must name the variables it \
+                     resolves from"
+                        .to_string(),
+                ),
+            }
+        } else {
+            match table.get("path") {
+                Some(toml::Value::String(s)) if !s.is_empty() => report
+                    .passes
+                    .push(format!("[sources].{src}.path declares a resolution path")),
+                Some(_) => report.violations.push(format!(
+                    "[sources].{src}.path has wrong type — expected a non-empty path string"
+                )),
+                None => report.violations.push(format!(
+                    "[sources].{src}.path missing — a file source must declare its path"
+                )),
+            }
+        }
+
+        // `priority`, when present, orders source precedence — must be an integer.
+        if let Some(p) = table.get("priority") {
+            if !p.is_integer() {
+                report.violations.push(format!(
+                    "[sources].{src}.priority has wrong type — expected an integer precedence rank"
+                ));
+            }
+        }
+    }
 }
 
 /// Validate the `auth.toml` credential CONTRACT shipped next to a `jira`-kind
@@ -1846,16 +1999,35 @@ pub fn discover_plugin_dirs(root: &Path) -> Vec<std::path::PathBuf> {
     discover_module_dirs(root, "modules/plugins")
 }
 
+/// Discover module dirs under `<root>/<sub>` across BOTH layouts:
+///   - flat            `<sub>/<name>/manifest.toml`
+///   - kind-namespaced `<sub>/<kind>/<name>/manifest.toml`
+///
+/// A directory with no `manifest.toml` of its own is treated as a kind-group
+/// (e.g. `modules/plugins/workflow/`, which holds the `gcloud-*` plugins shipped
+/// by BWOC-53) and descended exactly ONE level. A real module dir always owns a
+/// manifest, so we never recurse into one — and one level matches the only
+/// namespacing the framework uses (mirrors `bwoc gcloud`'s two-layout discovery
+/// in gcloud.rs::candidate_plugin_dirs).
 fn discover_module_dirs(root: &Path, sub: &str) -> Vec<std::path::PathBuf> {
     let dir = root.join(sub);
     let Ok(read) = fs::read_dir(&dir) else {
         return Vec::new();
     };
-    let mut out: Vec<std::path::PathBuf> = read
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("manifest.toml").is_file())
-        .collect();
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for path in read.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        if path.join("manifest.toml").is_file() {
+            out.push(path);
+        } else if let Ok(inner) = fs::read_dir(&path) {
+            // Kind-group dir → collect its manifest-bearing children only.
+            out.extend(
+                inner
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir() && p.join("manifest.toml").is_file()),
+            );
+        }
+    }
     out.sort();
     out
 }
@@ -3600,6 +3772,250 @@ entry       = "bin"
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("with-manifest"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // ---- BWOC-55: kind-namespaced (workflow/) plugin discovery -------------
+
+    #[test]
+    fn discover_plugin_dirs_finds_kind_namespaced_layout() {
+        // BWOC-53 ships the gcloud plugins under modules/plugins/workflow/<name>/.
+        // Discovery must descend ONE level into a manifest-less kind-group dir so
+        // `bwoc check --all` audits them and the fleet tally grows.
+        let root =
+            std::env::temp_dir().join(format!("bwoc-discover-nested-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let plugins = root.join("modules/plugins");
+        // A flat plugin alongside the kind-group.
+        fs::create_dir_all(plugins.join("jira-cloud-rest")).unwrap();
+        fs::write(
+            plugins.join("jira-cloud-rest/manifest.toml"),
+            "[plugin]\nname = \"jira-cloud-rest\"\n",
+        )
+        .unwrap();
+        // Kind-namespaced plugins under workflow/ — the group dir has NO manifest.
+        fs::create_dir_all(plugins.join("workflow/gcloud-auth")).unwrap();
+        fs::create_dir_all(plugins.join("workflow/gcloud-project")).unwrap();
+        fs::write(
+            plugins.join("workflow/gcloud-auth/manifest.toml"),
+            "[plugin]\nname = \"gcloud-auth\"\n",
+        )
+        .unwrap();
+        fs::write(
+            plugins.join("workflow/gcloud-project/manifest.toml"),
+            "[plugin]\nname = \"gcloud-project\"\n",
+        )
+        .unwrap();
+        let names: Vec<String> = discover_plugin_dirs(&root)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.contains(&"jira-cloud-rest".to_string()),
+            "flat layout must still resolve: {names:?}"
+        );
+        assert!(
+            names.contains(&"gcloud-auth".to_string()),
+            "kind-namespaced plugin not discovered: {names:?}"
+        );
+        assert!(
+            names.contains(&"gcloud-project".to_string()),
+            "kind-namespaced plugin not discovered: {names:?}"
+        );
+        assert!(
+            !names.contains(&"workflow".to_string()),
+            "the kind-group dir is not itself a plugin: {names:?}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_gcloud_auth_reference_passes() {
+        // End-to-end (BWOC-55): audit the actual shipped workflow/gcloud-auth
+        // reference plugin — manifest + auth.toml — exactly as `bwoc check --all`
+        // does in an operator workspace.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../modules/plugins/workflow/gcloud-auth");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real gcloud-auth manifest + auth.toml must pass bwoc check, got: {:?}",
+            report.violations
+        );
+        // Confirm the workflow auth contract was actually exercised, not skipped.
+        assert!(
+            report.passes.iter().any(|p| p == "[sources] table present"),
+            "expected the workflow auth.toml shape to be validated, got: {:?}",
+            report.passes
+        );
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_gcloud_project_reference_passes() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../modules/plugins/workflow/gcloud-project");
+        if !dir.join("manifest.toml").is_file() {
+            return;
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real gcloud-project manifest + auth.toml must pass bwoc check, got: {:?}",
+            report.violations
+        );
+    }
+
+    #[test]
+    fn audit_skill_manifest_real_gcloud_ops_reference_passes() {
+        // The gcloud-ops skill is the framework's first skill-on-MULTIPLE-plugins
+        // (requires_plugins = ["workflow"], kind-level). Its manifest must pass
+        // and the workflow kind must validate as a real enum.
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/skills/gcloud-ops");
+        if !dir.join("manifest.toml").is_file() {
+            return;
+        }
+        let report = audit_skill_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real gcloud-ops manifest must pass bwoc check, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("requires_plugins 'workflow' is a valid plugin kind")),
+            "expected requires_plugins=[workflow] to validate as a real kind, got: {:?}",
+            report.passes
+        );
+    }
+
+    // ---- BWOC-55: workflow auth.toml contract validation -------------------
+
+    /// Minimal valid workflow-kind plugin manifest, reused by the auth.toml
+    /// fixtures below.
+    const WORKFLOW_MANIFEST: &str = r#"[plugin]
+name        = "gcloud-auth"
+kind        = "workflow"
+version     = "0.1.0"
+description = "gcloud credential-state adapter."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+"#;
+
+    /// The shipped [sources] shape — file paths + env-var NAMES, no values.
+    const WORKFLOW_AUTH_OK: &str = r#"[sources]
+adc             = { path = "~/.config/gcloud/application_default_credentials.json", priority = 1 }
+service_account = { path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }
+env             = { vars = ["BWOC_GCLOUD_ACCOUNT", "BWOC_GCLOUD_PROJECT"], priority = 3 }
+"#;
+
+    #[test]
+    fn audit_workflow_auth_shape_passes() {
+        let dir = write_plugin_manifest("wf-auth-ok", "gcloud-auth", WORKFLOW_MANIFEST);
+        fs::write(dir.join("auth.toml"), WORKFLOW_AUTH_OK).unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "well-formed [sources] auth.toml must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_auth_inline_secret_fails_and_redacts() {
+        // SECURITY: an inline credential value under a source is the worst
+        // outcome this guard prevents. An undeclared key MUST be a hard
+        // violation, and the value MUST NOT be echoed back into the report.
+        let leaked = "ya29.A0ARrda-super-secret-access-token";
+        let dir = write_plugin_manifest("wf-auth-leak", "gcloud-auth", WORKFLOW_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            format!(
+                r#"[sources]
+adc             = {{ path = "~/.config/gcloud/adc.json", priority = 1, token = "{leaked}" }}
+service_account = {{ path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }}
+env             = {{ vars = ["BWOC_GCLOUD_ACCOUNT"], priority = 3 }}
+"#
+            ),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[sources].adc.token") && v.contains("redacted")),
+            "an inline credential under a source must be a violation, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report.violations.iter().all(|v| !v.contains(leaked)),
+            "the secret value must be redacted from the report, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_auth_missing_sources_fails() {
+        let dir = write_plugin_manifest("wf-auth-nosrc", "gcloud-auth", WORKFLOW_MANIFEST);
+        fs::write(dir.join("auth.toml"), "# shape doc only, no [sources]\n").unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[sources] table missing")),
+            "missing [sources] must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_auth_missing_source_key_fails() {
+        // Drop the `env` source — the precedence contract is incomplete.
+        let dir = write_plugin_manifest("wf-auth-noenv", "gcloud-auth", WORKFLOW_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            r#"[sources]
+adc             = { path = "~/.config/gcloud/adc.json", priority = 1 }
+service_account = { path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }
+"#,
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[sources].env missing")),
+            "a missing source key must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_auth_absent_file_not_audited() {
+        // A workflow plugin need not carry credentials — no auth.toml means the
+        // contract is simply not audited (mirrors the BWOC-45 jira scope).
+        let dir = write_plugin_manifest("wf-auth-none", "gcloud-auth", WORKFLOW_MANIFEST);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a workflow plugin without auth.toml must still pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            !report.passes.iter().any(|p| p == "auth.toml present"),
+            "absent auth.toml must not be reported as present"
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
     }
 
     #[cfg(unix)]

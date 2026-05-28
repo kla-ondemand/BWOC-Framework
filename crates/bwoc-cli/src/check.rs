@@ -3,6 +3,7 @@
 //! Rust port of `modules/agent-template/scripts/check-agent-neutrality.sh`
 //! with feature parity. Pure-data audit + separate printer for testability.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -1039,6 +1040,17 @@ const SAMPLE_FIELDS: &[&str] = &[
 ];
 const SAMPLE_FLOOR: &[&str] = &["sampled_count", "sampled_of"];
 
+/// Closed `confidence` enum for an OKR key result. Source of truth:
+/// PLUGINS.en.md §"OKR Progress Schema" — a qualitative trajectory read,
+/// deliberately an enum rather than a numeric score (BWOC-46 §5): attainment
+/// carries the quantitative signal, `confidence` the qualitative one.
+const OKR_CONFIDENCE_LEVELS: &[&str] = &["high", "medium", "low"];
+
+/// Closed `unit` enum for an OKR key result. Source of truth:
+/// PLUGINS.en.md §"OKR Progress Schema" — how `target` / `current` are read
+/// (`boolean` uses `0`/`1`).
+const OKR_UNITS: &[&str] = &["count", "percent", "currency", "ratio", "boolean"];
+
 /// Maturity values accepted in a skill manifest (Ariya-dhana 7 scale).
 const MATURITY_LEVELS: &[&str] = &["L1", "L2", "L3", "L4", "L5", "L6", "L7"];
 
@@ -1344,7 +1356,421 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         audit_workflow_auth(plugin_dir, &mut report);
     }
 
+    // OKR data audit (BWOC-50). okr-kind plugins (the reference `workspace-okrs`)
+    // author their Objectives + Key Results in sibling `objectives.toml` /
+    // `key_results.toml`. Validate them against the OKR Progress Schema
+    // (PLUGINS.en.md §OKR Progress Schema): referential integrity (every
+    // key_result.objective_id resolves), the `unit` / `confidence` closed enums,
+    // and the reused audit Evidence-kind vocabulary — caught statically before
+    // any `bwoc okr` run.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("okr") {
+        audit_okr_data(plugin_dir, &mut report);
+    }
+
     report
+}
+
+/// Validate the operator-authored OKR data files shipped next to an `okr`-kind
+/// plugin's manifest (BWOC-50). Source of truth: PLUGINS.en.md §"OKR Progress
+/// Schema" + the `workspace-okrs` SPEC.md data-shape tables.
+///
+/// `bwoc check` is a static validator — it does not run the plugin. The `report`
+/// verb emits one progress entry per key result, derived field-for-field from
+/// `key_results.toml`, so validating the rows against the schema is equivalent
+/// to validating the emitted Progress entries, caught before any `bwoc okr` run
+/// rather than at emit time.
+///
+/// Two files, validated in dependency order:
+///   1. `objectives.toml` — the declared Objectives; collect their ids so the
+///      key-result referential check has a resolution set.
+///   2. `key_results.toml` — each `[[key_result]]` validated against the OKR
+///      Progress Schema: required fields + types, the `unit` / `confidence`
+///      closed enums, the reused audit Evidence-kind vocabulary, a unique
+///      `key_result_id`, and an `objective_id` that resolves to a declared
+///      objective (a dangling reference is a plugin bug, not operator state).
+///
+/// v1 okr plugins read these two siblings directly — there is no `data_dir`
+/// indirection yet (workspace-okrs/manifest.toml header) — so both files are the
+/// plugin's core contract and their absence is a violation.
+fn audit_okr_data(plugin_dir: &Path, report: &mut AuditReport) {
+    let objective_ids = audit_okr_objectives(plugin_dir, report);
+    audit_okr_key_results(plugin_dir, report, &objective_ids);
+}
+
+/// Validate `objectives.toml` and return the set of declared `objective_id`s
+/// for the key-result referential check. Each `[[objective]]` must carry the
+/// required string fields (`objective_id`, `title`, `owner`, `period`); the
+/// optional `parent` (objective-tree rollup is deferred — SPEC §Status) is not
+/// resolved here. Duplicate ids are a violation. On any structural failure the
+/// returned set is whatever resolved so far (an empty set cascades into
+/// referential violations on every key result, which is the correct signal).
+fn audit_okr_objectives(plugin_dir: &Path, report: &mut AuditReport) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let path = plugin_dir.join("objectives.toml");
+    let body = match fs::read_to_string(&path) {
+        Ok(s) => {
+            report.passes.push("objectives.toml present".to_string());
+            s
+        }
+        Err(e) => {
+            report.violations.push(format!(
+                "objectives.toml missing or unreadable: {e} — an okr plugin must author its Objectives"
+            ));
+            return ids;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("objectives.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("objectives.toml is not valid TOML: {e}"));
+            return ids;
+        }
+    };
+
+    let objectives = match raw.get("objective").and_then(|v| v.as_array()) {
+        Some(a) if !a.is_empty() => {
+            report
+                .passes
+                .push(format!("objectives.toml declares {} objective(s)", a.len()));
+            a
+        }
+        Some(_) => {
+            report.violations.push(
+                "objectives.toml [[objective]] array is empty — declare at least one Objective"
+                    .to_string(),
+            );
+            return ids;
+        }
+        None => {
+            report.violations.push(
+                "objectives.toml declares no [[objective]] entries — okr plugins must declare at least one"
+                    .to_string(),
+            );
+            return ids;
+        }
+    };
+
+    for (i, obj) in objectives.iter().enumerate() {
+        let pos = i + 1;
+        let table = match obj.as_table() {
+            Some(t) => t,
+            None => {
+                report.violations.push(format!(
+                    "objective #{pos} is not a table — expected [[objective]] with scalar fields"
+                ));
+                continue;
+            }
+        };
+        for field in &["objective_id", "title", "owner", "period"] {
+            match table.get(*field) {
+                Some(toml::Value::String(s)) if !s.is_empty() => {}
+                Some(toml::Value::String(_)) => report.violations.push(format!(
+                    "objective #{pos} {field} is empty — required field"
+                )),
+                Some(_) => report.violations.push(format!(
+                    "objective #{pos} {field} has wrong type — expected string"
+                )),
+                None => report
+                    .violations
+                    .push(format!("objective #{pos} missing required '{field}'")),
+            }
+        }
+        if let Some(id) = table.get("objective_id").and_then(|v| v.as_str()) {
+            if !id.is_empty() && !ids.insert(id.to_string()) {
+                report.violations.push(format!(
+                    "objective_id '{id}' declared more than once — ids must be unique"
+                ));
+            }
+        }
+    }
+    ids
+}
+
+/// Validate `key_results.toml` against the OKR Progress Schema (PLUGINS.en.md
+/// §"OKR Progress Schema"). Each `[[key_result]]` is one progress entry: a
+/// unique `key_result_id`; an `objective_id` that resolves to a declared
+/// objective (referential integrity); a non-empty `description`; numeric
+/// `target` / `current`; the closed `unit` / `confidence` enums; an `evidence`
+/// inline table over the reused audit Evidence-kind vocabulary; and an optional
+/// ISO-8601 `as_of`.
+fn audit_okr_key_results(
+    plugin_dir: &Path,
+    report: &mut AuditReport,
+    objective_ids: &HashSet<String>,
+) {
+    let path = plugin_dir.join("key_results.toml");
+    let body = match fs::read_to_string(&path) {
+        Ok(s) => {
+            report.passes.push("key_results.toml present".to_string());
+            s
+        }
+        Err(e) => {
+            report.violations.push(format!(
+                "key_results.toml missing or unreadable: {e} — an okr plugin must author its Key Results"
+            ));
+            return;
+        }
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report
+                .passes
+                .push("key_results.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("key_results.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    let krs = match raw.get("key_result").and_then(|v| v.as_array()) {
+        Some(a) if !a.is_empty() => {
+            report.passes.push(format!(
+                "key_results.toml declares {} key result(s)",
+                a.len()
+            ));
+            a
+        }
+        Some(_) => {
+            report.violations.push(
+                "key_results.toml [[key_result]] array is empty — declare at least one Key Result"
+                    .to_string(),
+            );
+            return;
+        }
+        None => {
+            report.violations.push(
+                "key_results.toml declares no [[key_result]] entries — okr plugins must declare at least one"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    let mut seen_ids: HashSet<String> = HashSet::new();
+    for (i, kr) in krs.iter().enumerate() {
+        let pos = i + 1;
+        let table = match kr.as_table() {
+            Some(t) => t,
+            None => {
+                report.violations.push(format!(
+                    "key result #{pos} is not a table — expected [[key_result]] with scalar fields"
+                ));
+                continue;
+            }
+        };
+        // A stable label for messages: the id when present, else the position.
+        let label = table
+            .get("key_result_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("'{s}'"))
+            .unwrap_or_else(|| format!("#{pos}"));
+
+        // key_result_id — required, non-empty, unique within the plugin.
+        match table.get("key_result_id") {
+            Some(toml::Value::String(s)) if !s.is_empty() => {
+                if !seen_ids.insert(s.clone()) {
+                    report.violations.push(format!(
+                        "key_result_id '{s}' declared more than once — ids must be unique within the plugin"
+                    ));
+                }
+            }
+            Some(toml::Value::String(_)) => report.violations.push(format!(
+                "key result {label} key_result_id is empty — required field"
+            )),
+            Some(_) => report.violations.push(format!(
+                "key result {label} key_result_id has wrong type — expected string"
+            )),
+            None => report.violations.push(format!(
+                "key result {label} missing required 'key_result_id'"
+            )),
+        }
+
+        // objective_id — required, non-empty, referential.
+        match table.get("objective_id").and_then(|v| v.as_str()) {
+            Some(oid) if !oid.is_empty() => {
+                if objective_ids.contains(oid) {
+                    report
+                        .passes
+                        .push(format!("key result {label} objective_id '{oid}' resolves"));
+                } else {
+                    report.violations.push(format!(
+                        "key result {label} objective_id '{oid}' does not resolve to a declared objective — dangling reference"
+                    ));
+                }
+            }
+            _ => report.violations.push(format!(
+                "key result {label} missing required 'objective_id' (string)"
+            )),
+        }
+
+        // description — required authoring field (SPEC data shape).
+        match table.get("description") {
+            Some(toml::Value::String(s)) if !s.is_empty() => {}
+            Some(_) => report.violations.push(format!(
+                "key result {label} description has wrong type or is empty — expected non-empty string"
+            )),
+            None => report
+                .violations
+                .push(format!("key result {label} missing required 'description'")),
+        }
+
+        // target / current — required numbers (integer or float).
+        for field in &["target", "current"] {
+            match table.get(*field) {
+                Some(v) if v.is_integer() || v.is_float() => {}
+                Some(_) => report.violations.push(format!(
+                    "key result {label} {field} has wrong type — expected a number"
+                )),
+                None => report.violations.push(format!(
+                    "key result {label} missing required '{field}' (number)"
+                )),
+            }
+        }
+
+        // unit — required, closed enum.
+        match table.get("unit") {
+            Some(toml::Value::String(s)) => {
+                if OKR_UNITS.contains(&s.as_str()) {
+                    report
+                        .passes
+                        .push(format!("key result {label} unit '{s}' in supported set"));
+                } else {
+                    report.violations.push(format!(
+                        "key result {label} unit '{s}' not in {{count, percent, currency, ratio, boolean}}"
+                    ));
+                }
+            }
+            Some(_) => report.violations.push(format!(
+                "key result {label} unit has wrong type — expected string"
+            )),
+            None => report
+                .violations
+                .push(format!("key result {label} missing required 'unit'")),
+        }
+
+        // confidence — required, closed enum.
+        match table.get("confidence") {
+            Some(toml::Value::String(s)) => {
+                if OKR_CONFIDENCE_LEVELS.contains(&s.as_str()) {
+                    report.passes.push(format!(
+                        "key result {label} confidence '{s}' in supported set"
+                    ));
+                } else {
+                    report.violations.push(format!(
+                        "key result {label} confidence '{s}' not in {{high, medium, low}}"
+                    ));
+                }
+            }
+            Some(_) => report.violations.push(format!(
+                "key result {label} confidence has wrong type — expected string"
+            )),
+            None => report
+                .violations
+                .push(format!("key result {label} missing required 'confidence'")),
+        }
+
+        // evidence — required inline table over the reused audit Evidence kinds.
+        check_okr_evidence(&label, table, report);
+
+        // as_of — optional ISO-8601 date; when present must be a string.
+        if let Some(v) = table.get("as_of") {
+            if !v.is_str() {
+                report.violations.push(format!(
+                    "key result {label} as_of has wrong type — expected an ISO-8601 date string"
+                ));
+            }
+        }
+    }
+}
+
+/// Validate an OKR key result's `evidence` inline table against the reused audit
+/// Evidence-kind vocabulary (PLUGINS.en.md §"Evidence kinds"; the okr kind
+/// introduces none of its own). The `report` verb emits `{ kind, value }`, so
+/// that is the shape validated: `kind` is the closed enum, `value` is a string,
+/// and the Musāvāda guard requires a non-empty referent for any kind but `none`
+/// (which conversely must carry an empty value — no claim without a referent).
+fn check_okr_evidence(
+    label: &str,
+    table: &toml::map::Map<String, toml::Value>,
+    report: &mut AuditReport,
+) {
+    let evidence = match table.get("evidence") {
+        Some(toml::Value::Table(t)) => t,
+        Some(_) => {
+            report.violations.push(format!(
+                "key result {label} evidence has wrong type — expected an inline table {{ kind, value }}"
+            ));
+            return;
+        }
+        None => {
+            report.violations.push(format!(
+                "key result {label} missing required 'evidence' {{ kind, value }}"
+            ));
+            return;
+        }
+    };
+    let kind = match evidence.get("kind") {
+        Some(toml::Value::String(s)) => s.as_str(),
+        Some(_) => {
+            report.violations.push(format!(
+                "key result {label} evidence.kind has wrong type — expected string"
+            ));
+            return;
+        }
+        None => {
+            report.violations.push(format!(
+                "key result {label} evidence.kind missing — required"
+            ));
+            return;
+        }
+    };
+    if !EVIDENCE_KINDS.contains(&kind) {
+        report.violations.push(format!(
+            "key result {label} evidence.kind '{kind}' not in {{file, content, command, attestation, sample, none}}"
+        ));
+        return;
+    }
+    match evidence.get("value") {
+        Some(toml::Value::String(s)) => {
+            if kind == "none" {
+                if s.is_empty() {
+                    report.passes.push(format!(
+                        "key result {label} evidence kind 'none' (no referent)"
+                    ));
+                } else {
+                    report.violations.push(format!(
+                        "key result {label} evidence.kind='none' but value is non-empty — 'none' carries no referent"
+                    ));
+                }
+            } else if s.is_empty() {
+                report.violations.push(format!(
+                    "key result {label} evidence.kind='{kind}' but value is empty — a tracked value must carry a reproducible referent (Musāvāda)"
+                ));
+            } else {
+                report.passes.push(format!(
+                    "key result {label} evidence '{kind}' carries a referent"
+                ));
+            }
+        }
+        Some(_) => report.violations.push(format!(
+            "key result {label} evidence.value has wrong type — expected string"
+        )),
+        None => report.violations.push(format!(
+            "key result {label} evidence.value missing — required (empty string when kind='none')"
+        )),
+    }
 }
 
 /// Validate the `auth.toml` credential CONTRACT shipped next to a
@@ -4026,6 +4452,320 @@ service_account = { path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }
             "absent auth.toml must not be reported as present"
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- BWOC-50: okr data validation (objectives + key_results) ----------
+
+    /// Minimal valid okr-kind plugin manifest, reused by the data fixtures.
+    const OKR_MANIFEST: &str = r#"[plugin]
+name        = "workspace-okrs"
+kind        = "okr"
+version     = "0.1.0"
+description = "Reference okr plugin tracking Objectives + Key Results."
+compat      = ">=2.9.0"
+entry       = "okr.sh"
+"#;
+
+    /// A well-formed objectives.toml — one top-level objective.
+    const OKR_OBJECTIVES_OK: &str = r#"[[objective]]
+objective_id = "O1"
+title        = "Ship the OKR plugin kind"
+owner        = "agent-jisoo"
+period       = "2026-Q2"
+parent       = ""
+"#;
+
+    /// A well-formed key_results.toml — two KRs, one tracked (file evidence),
+    /// one never tracked (none evidence, no as_of). Both reference O1.
+    const OKR_KEY_RESULTS_OK: &str = r#"[[key_result]]
+key_result_id = "O1-KR1"
+objective_id  = "O1"
+description   = "PLUGINS spec declares the okr kind"
+target        = 1
+current       = 1
+unit          = "count"
+confidence    = "high"
+evidence      = { kind = "file", value = "docs/en/PLUGINS.en.md" }
+as_of         = "2026-05-28"
+
+[[key_result]]
+key_result_id = "O1-KR2"
+objective_id  = "O1"
+description   = "bwoc okr CLI surface ships"
+target        = 4
+current       = 0
+unit          = "count"
+confidence    = "medium"
+evidence      = { kind = "none", value = "" }
+"#;
+
+    /// Write an okr-kind plugin with its two sibling data files. Either data
+    /// body may be `None` to exercise the missing-file paths.
+    fn write_okr_plugin(
+        label: &str,
+        objectives: Option<&str>,
+        key_results: Option<&str>,
+    ) -> std::path::PathBuf {
+        let dir = write_plugin_manifest(label, "workspace-okrs", OKR_MANIFEST);
+        if let Some(o) = objectives {
+            fs::write(dir.join("objectives.toml"), o).unwrap();
+        }
+        if let Some(k) = key_results {
+            fs::write(dir.join("key_results.toml"), k).unwrap();
+        }
+        dir
+    }
+
+    fn cleanup(dir: &Path) {
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_workspace_okrs_reference_passes() {
+        // End-to-end (BWOC-50): audit the actual shipped okr/workspace-okrs
+        // reference plugin — manifest + objectives.toml + key_results.toml —
+        // exactly as `bwoc check --all` does in an operator workspace.
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/plugins/okr/workspace-okrs");
+        if !dir.join("manifest.toml").is_file() {
+            return; // partial checkout without the plugin — nothing to assert.
+        }
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "real workspace-okrs manifest + data files must pass bwoc check, got: {:?}",
+            report.violations
+        );
+        // Confirm the okr data audit actually ran (not silently skipped) and that
+        // referential integrity was exercised against the real seed data.
+        assert!(
+            report.passes.iter().any(|p| p == "objectives.toml present"),
+            "expected the okr objectives.toml to be validated, got: {:?}",
+            report.passes
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.contains("objective_id 'O1' resolves")),
+            "expected a real key_result.objective_id to resolve, got: {:?}",
+            report.passes
+        );
+    }
+
+    #[test]
+    fn audit_okr_well_formed_data_passes() {
+        let dir = write_okr_plugin("okr-ok", Some(OKR_OBJECTIVES_OK), Some(OKR_KEY_RESULTS_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "well-formed okr data must pass, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_dangling_objective_id_fails() {
+        // Referential integrity: a key_result.objective_id with no matching
+        // objective is a plugin bug, not operator state.
+        let krs = OKR_KEY_RESULTS_OK.replace(r#"objective_id  = "O1""#, r#"objective_id  = "O9""#);
+        let dir = write_okr_plugin("okr-dangling", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'O9' does not resolve") && v.contains("dangling")),
+            "a dangling objective_id must fail referential integrity, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_bad_confidence_enum_fails() {
+        let krs =
+            OKR_KEY_RESULTS_OK.replace(r#"confidence    = "high""#, r#"confidence    = "certain""#);
+        let dir = write_okr_plugin("okr-conf", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("confidence 'certain' not in {high, medium, low}")),
+            "an out-of-enum confidence must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_bad_unit_enum_fails() {
+        let krs = OKR_KEY_RESULTS_OK
+            .replace(r#"unit          = "count""#, r#"unit          = "widgets""#);
+        let dir = write_okr_plugin("okr-unit", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("unit 'widgets' not in")),
+            "an out-of-enum unit must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_bad_evidence_kind_fails() {
+        let krs = OKR_KEY_RESULTS_OK.replace(
+            r#"evidence      = { kind = "file", value = "docs/en/PLUGINS.en.md" }"#,
+            r#"evidence      = { kind = "screenshot", value = "x.png" }"#,
+        );
+        let dir = write_okr_plugin("okr-evk", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("evidence.kind 'screenshot' not in")),
+            "an out-of-vocabulary evidence kind must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_evidence_none_with_value_fails() {
+        // Musāvāda: kind='none' carries no referent — a non-empty value is a lie.
+        let krs = OKR_KEY_RESULTS_OK.replace(
+            r#"evidence      = { kind = "none", value = "" }"#,
+            r#"evidence      = { kind = "none", value = "something" }"#,
+        );
+        let dir = write_okr_plugin("okr-none-val", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("kind='none' but value is non-empty")),
+            "kind=none with a value must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_evidence_referent_required_for_non_none() {
+        // Musāvāda: a file/content/command/etc. claim must carry a referent.
+        let krs = OKR_KEY_RESULTS_OK.replace(
+            r#"evidence      = { kind = "file", value = "docs/en/PLUGINS.en.md" }"#,
+            r#"evidence      = { kind = "file", value = "" }"#,
+        );
+        let dir = write_okr_plugin("okr-empty-ref", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("value is empty") && v.contains("Musāvāda")),
+            "a non-none evidence with an empty value must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_duplicate_key_result_id_fails() {
+        let krs = format!(
+            "{OKR_KEY_RESULTS_OK}\n[[key_result]]\nkey_result_id = \"O1-KR1\"\nobjective_id  = \"O1\"\ndescription   = \"dup\"\ntarget        = 1\ncurrent       = 0\nunit          = \"count\"\nconfidence    = \"low\"\nevidence      = {{ kind = \"none\", value = \"\" }}\n"
+        );
+        let dir = write_okr_plugin("okr-dup", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'O1-KR1' declared more than once")),
+            "a duplicate key_result_id must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_non_numeric_target_fails() {
+        let krs = OKR_KEY_RESULTS_OK.replace("target        = 1", r#"target        = "one""#);
+        let dir = write_okr_plugin("okr-target", Some(OKR_OBJECTIVES_OK), Some(&krs));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("target has wrong type — expected a number")),
+            "a non-numeric target must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_missing_objectives_fails_and_cascades() {
+        // No objectives.toml → the file is a violation AND every key_result's
+        // objective_id dangles (empty resolution set).
+        let dir = write_okr_plugin("okr-noobj", None, Some(OKR_KEY_RESULTS_OK));
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("objectives.toml missing or unreadable")),
+            "a missing objectives.toml must fail, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("does not resolve")),
+            "an empty objective set must cascade into referential failures, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_missing_key_results_fails() {
+        let dir = write_okr_plugin("okr-nokr", Some(OKR_OBJECTIVES_OK), None);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("key_results.toml missing or unreadable")),
+            "a missing key_results.toml must fail, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn audit_okr_never_tracked_omits_as_of_and_passes() {
+        // The schema says as_of is omitted (not null) when never tracked; the
+        // OK fixture's KR2 exercises exactly that — confirm it does not warn.
+        let dir = write_okr_plugin(
+            "okr-noas",
+            Some(OKR_OBJECTIVES_OK),
+            Some(OKR_KEY_RESULTS_OK),
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            !report.violations.iter().any(|v| v.contains("as_of")),
+            "a never-tracked KR (no as_of) must not raise an as_of violation, got: {:?}",
+            report.violations
+        );
+        cleanup(&dir);
     }
 
     #[cfg(unix)]

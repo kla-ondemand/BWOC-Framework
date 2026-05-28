@@ -33,7 +33,7 @@ Pick the layer that matches *who turns it on*. If an individual agent's logic ca
 
 ## Plugin Kinds
 
-Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Six kinds ship with this spec:
+Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework will call. Seven kinds ship with this spec:
 
 | Kind | What it extends | Lifecycle owner |
 |---|---|---|
@@ -43,6 +43,7 @@ Every plugin declares a `kind`. Kinds define the lifecycle hooks the framework w
 | `audit` | Inspection of the workspace against external standards (ISO/IEC 29110, ISO 9001, ISO 20000-1, ISO 27001) or operator-authored audits (license headers, doc parity, secret scans) | `bwoc audit` CLI |
 | `jira` | Bidirectional sync with an external issue tracker (Jira Cloud) — reads issues via JQL and **writes** status transitions, field updates, and sprint assignment back to the tracker | `bwoc jira` CLI |
 | `okr` | Tracking of operator-authored Objectives + Key Results — reads `objectives.toml` / `key_results.toml`, records progress, and emits a normative progress report | `bwoc okr` CLI |
+| `council` | A structured decision protocol among fleet agents — any agent opens a decision, participants discuss in rounds and vote, an outcome is recorded with evidence + dissent | `bwoc council` CLI |
 
 A plugin sets `kind` once. Cross-kind plugins are not supported — split them.
 
@@ -51,6 +52,8 @@ The `audit` kind was added in `BWOC-EPIC-2`; for the rationale (why `audit`, not
 The `jira` kind was added in `BWOC-EPIC-6` as the framework's **first write-capable plugin kind** — an *integration adapter*, not a reporting kind. Every kind above it (`audit`, plus the planned reporting kinds) only **reads** the workspace and emits a report; `jira` reads **and writes** an external system of record. That single property — durable, hard-to-reverse external side-effects on `invoke` — is what sets it apart: it persists a sync ledger (`.scrum/jira-sync.json`), gates its write verbs behind operator confirmation, and carries a normative [Jira Issue Mapping Schema](#jira-issue-mapping-schema). For why it is a distinct kind rather than a `workflow` plugin, the auth model, JQL and rate-limit bounds, and the bidirectional conflict policy, see the [BWOC-40 design note](../../notes/2026-05-27_jira-plugin-architecture.md) — this spec declares the kind and the mapping schema and does not duplicate that rationale.
 
 The `okr` kind was added in `BWOC-EPIC-4` as the framework's third **reporting** kind, alongside `audit`. Where `audit` checks the *workspace* against an external standard and emits findings, `okr` tracks *operator-authored* Objectives + Key Results (`objectives.toml` / `key_results.toml`) and emits progress. It is **not** a `workflow` kind: it reaches no external system, holds no credential, and its only write — `track`, which updates a key result's `current` value — touches the operator's own local TOML, not a system of record, so it carries **no** operator-confirmation gate. It carries a normative [OKR Progress Schema](#okr-progress-schema) and **reuses the audit [Evidence kinds](#evidence-kinds)** rather than inventing its own — one evidence vocabulary across the framework. For why `okr` is a distinct kind rather than an `audit` or `workflow` plugin, the data shape, the `track` / `check-progress` / `report` verb contracts, and the `confidence`-as-enum decision, see the [BWOC-46 design note](../../notes/2026-05-28_okr-plugin-architecture.md) — this spec declares the kind and the progress schema and does not duplicate that rationale.
+
+The `council` kind was added in `BWOC-EPIC-5` as the framework's first **coordination** kind — it acts neither outward to an external system (like `workflow`/`jira`) nor over the workspace as a report (like `audit`/`okr`), but **among the fleet's own agents**. A council decision follows a multi-step protocol — `propose` → `discuss` (rounds) → `vote` → `resolve` — with a quorum gate and a declared voting model (`simple-majority` / `consensus` / `weighted` / `sangha`); it draws participants from a `bwoc team`, routes discussion turns through `bwoc send`, and persists a normative [Council Decision Schema](#council-decision-schema) with the outcome and any dissent preserved. It **records** decisions, it does not execute them — a `binding` outcome emits a `bwoc task` rather than mutating anything itself. For the protocol detail, the voting models, quorum + tie-break rules, the binding-vs-advisory distinction, and the `council-sangha-7` reference (modelled on Aparihāniya-dhamma 7), see the [BWOC-56 design note](../../notes/2026-05-28_council-plugin-architecture.md) — this spec declares the kind and the decision schema and does not duplicate that rationale.
 
 ### What plugins are NOT
 
@@ -279,6 +282,54 @@ Optional fields are **omitted from the entry** when they have no value — a nev
   "confidence":    "high",
   "evidence":      { "kind": "file", "value": "docs/en/PLUGINS.en.md" },
   "as_of":         "2026-05-28"
+}
+```
+
+---
+
+## Council Decision Schema
+
+A `council` plugin records a fleet decision as a **decision entry**. The schema below is normative — the reference plugin's verbs (per `BWOC-59`) and the `bwoc council` output (per `BWOC-58`) alike MUST emit entries conforming to this shape, and `bwoc check` (per `BWOC-60`) validates it. This is the `council` kind's contract, the coordination analogue of the [Audit Findings Schema](#audit-findings-schema).
+
+The decision moves through the protocol `proposed → discussing → voting → resolved` (or `abandoned` if quorum fails); the protocol detail, voting models, and quorum/tie-break rules live in the [BWOC-56 design note](../../notes/2026-05-28_council-plugin-architecture.md) and are not duplicated here.
+
+### Fields
+
+| Field | Type | Required | Semantics |
+|---|---|---|---|
+| `decision_id` | string | yes | The stable key for the decision — the one field a consumer may treat as a durable identifier. |
+| `status` | enum | yes | `proposed` \| `discussing` \| `voting` \| `resolved` \| `abandoned`. The protocol state. |
+| `participants` | array of string | yes | Agent ids drawn from the referenced `bwoc team`. A participant outside the team is rejected. |
+| `options` | array of string | yes | The choices being decided among (≥2). |
+| `rounds` | array | yes | Ordered discussion rounds. Each round carries turns `{ participant, message_ref }`, where `message_ref` points at the `bwoc send` envelope that holds the turn — the inbox is the transport, the record references it, never copies it. Append-only. |
+| `votes` | array | yes | One `{ participant, option, abstain }` per voter. Append-only; a re-cast appends, never overwrites (the trail is the point). |
+| `outcome` | string | no | The resolved option. Omitted until `status = resolved`. |
+| `dissent` | array | no | Recorded minority positions `{ participant, option, rationale }`. Preserved, never discarded — recording dissent is a purpose of the council. |
+| `evidence_links` | array | no | **Reuses the audit [Evidence kinds](#evidence-kinds)** — `{ kind, value, ... }` referents backing the decision. No council-specific evidence kinds. |
+| `opened_at` | string (ISO 8601 datetime) | yes | When the decision was proposed. |
+| `closed_at` | string (ISO 8601 datetime) | no | When it resolved or was abandoned. Omitted while open. |
+
+Optional fields are **omitted from the entry** when absent — an unresolved decision carries no `outcome` / `closed_at` key — never serialized as `null`, per the Audit Findings / Jira / OKR conventions.
+
+### Field stability
+
+`decision_id` is the stable key. `status`, `rounds`, `votes`, `outcome`, `dissent`, and `closed_at` are mutable as the protocol advances (rounds + votes accumulate, status transitions, outcome/closed_at fill on resolve); never key on them. `participants` and `options` are fixed at propose time — a change to either is a new decision, not an edit.
+
+### Example
+
+```json
+{
+  "decision_id":  "D1",
+  "status":       "resolved",
+  "participants": ["agent-jisoo", "agent-jennie", "agent-lisa", "agent-rose"],
+  "options":      ["adopt", "defer"],
+  "rounds":       [{ "round": 1, "turns": [{ "participant": "agent-jisoo", "message_ref": "msg-20260528T120000Z-a1b2c" }] }],
+  "votes":        [{ "participant": "agent-jisoo", "option": "adopt", "abstain": false }],
+  "outcome":      "adopt",
+  "dissent":      [],
+  "evidence_links": [{ "kind": "file", "value": "notes/2026-05-28_council-plugin-architecture.md" }],
+  "opened_at":    "2026-05-28T12:00:00Z",
+  "closed_at":    "2026-05-28T12:30:00Z"
 }
 ```
 

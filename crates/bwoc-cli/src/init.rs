@@ -256,13 +256,15 @@ const GITIGNORE_REST: &str = "\
 #
 # Path convention for plugins that resolve credentials from disk —
 # e.g. workflow/gcloud-auth + workflow/gcloud-project read
-# `.bwoc/secrets/gcloud-sa.json`. Both the directory and the specific
-# file are listed so the intent is explicit at the exact path the
+# `.bwoc/secrets/gcloud-sa.json`, and gws/gws-auth reads
+# `.bwoc/secrets/gws-token.json`. Both the directory and the specific
+# files are listed so the intent is explicit at the exact path the
 # operator is told to drop credentials at. NEVER commit these files —
 # real values live only here; auth.toml in each plugin carries SHAPE
 # only (Sila — Adinnaadana).
 .bwoc/secrets/
 .bwoc/secrets/gcloud-sa.json
+.bwoc/secrets/gws-token.json
 
 # Figma export cache (BWOC-64)
 #

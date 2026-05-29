@@ -33,7 +33,7 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 
 ## ประเภทของปลั๊กอิน
 
-ปลั๊กอินทุกตัวประกาศ `kind` Kind กำหนด lifecycle hook ที่เฟรมเวิร์กจะเรียก spec นี้ส่งแปดประเภท:
+ปลั๊กอินทุกตัวประกาศ `kind` Kind กำหนด lifecycle hook ที่เฟรมเวิร์กจะเรียก spec นี้ส่งเก้าประเภท:
 
 | Kind | สิ่งที่ขยาย | ผู้รับ lifecycle |
 |---|---|---|
@@ -45,6 +45,7 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 | `okr` | ติดตาม Objectives + Key Results ที่ operator เขียนเอง — อ่าน `objectives.toml` / `key_results.toml`, บันทึกความคืบหน้า, และส่งรายงานความคืบหน้าที่เป็น normative | `bwoc okr` CLI |
 | `council` | decision protocol แบบมีโครงสร้างระหว่าง agent ในฟลีต — agent ใดก็เปิด decision ได้, ผู้ร่วมถกใน rounds และโหวต, บันทึก outcome พร้อม evidence + dissent | `bwoc council` CLI |
 | `figma` | Integration แบบอ่านเป็นหลักกับ Figma REST API — ดึง metadata ของ frame/node, export รูป, query component library, และ surface design token; เชื่อม design→dev | `bwoc figma` CLI |
+| `gws` | Integration แบบอ่านเป็นหลักกับ Google Workspace REST API (Drive / Gmail / Calendar) ผ่าน OAuth2 user scope — list/read ไฟล์, mail thread, และ calendar event | `bwoc gws` CLI |
 
 ปลั๊กอินตั้ง `kind` ครั้งเดียว ปลั๊กอินข้าม kind ไม่รองรับ — แยกออกเป็นหลายตัว
 
@@ -57,6 +58,21 @@ Skill กับ plugin ใช้ substrate ร่วมกัน (TOML manifest,
 ประเภท `council` เพิ่มเข้ามาใน `BWOC-EPIC-5` เป็น **coordination kind** ตัวแรกของเฟรมเวิร์ก — มันไม่ได้เอื้อมออกไประบบภายนอก (อย่าง `workflow`/`jira`) และไม่ได้รายงานเหนือ workspace (อย่าง `audit`/`okr`) แต่ทำงาน **ในหมู่ agent ของฟลีตเอง** decision ของ council เดินตาม protocol หลายขั้น — `propose` → `discuss` (rounds) → `vote` → `resolve` — มี quorum gate และ voting model ที่ประกาศ (`simple-majority` / `consensus` / `weighted` / `sangha`); ดึงผู้ร่วมจาก `bwoc team`, route discussion turn ผ่าน `bwoc send`, และเก็บ [สคีมา Council Decision](#สคีมา-council-decision) ที่เป็น normative พร้อม outcome และ dissent ที่ถูกรักษาไว้ มัน **บันทึก** decision ไม่ใช่ execute — outcome ที่ `binding` จะ emit `bwoc task` แทนที่จะไปแก้อะไรเอง รายละเอียด protocol, voting model, quorum + tie-break, ความต่าง binding-vs-advisory, และ reference `council-sangha-7` (โมเดลตาม Aparihaniya-dhamma 7) ดู [BWOC-56 design note](../../notes/2026-05-28_council-plugin-architecture.md) — spec นี้ประกาศ kind และ decision schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
 
 ประเภท `figma` เพิ่มเข้ามาใน `BWOC-EPIC-7` เป็น integration แบบ **อ่านเป็นหลัก (read-mostly)** กับ Figma REST API เช่นเดียวกับ `jira` (และต่างจาก `gcloud` ที่ reuse `workflow`) มันได้ kind ของตัวเองเพราะพก [สคีมา Figma Asset Mapping](#สคีมา-figma-asset-mapping) ที่เป็น normative — ความสัมพันธ์ที่ BWOC เป็นเจ้าของ ผูก Figma node กับ artifact ที่ export + design token; กฎคือ **ได้ kind ของตัวเองเมื่อ BWOC นิยาม normative schema เหนือ integration, reuse `workflow` เมื่อเป็น passthrough ที่ไม่มี shape ที่ BWOC เป็นเจ้าของ** ต่างจาก `jira`, `figma` ไม่เคยเขียนกลับไประบบภายนอก: ทุก verb อ่าน Figma (`fetch` / `tokens` / `status`) หรือเขียน **ในเครื่อง** (`export` วางรูป content-addressable ใต้ `figma/exports/`) จึงพกวินัย schema ของ jira แต่ไม่มี bidirectional-sync machinery — ไม่มี ledger, conflict policy, operator-confirm gate Auth เป็น personal access token ของ operator (`BWOC_FIGMA_TOKEN` env / `.bwoc/secrets.toml`, shape-only ใน `auth.toml`, ไม่เคย commit) auth model, ขอบเขต file-vs-team-library, การจัดการ REST rate-limit, และกลยุทธ์ export caching ดู [BWOC-61 design note](../../notes/2026-05-28_figma-plugin-architecture.md) — spec นี้ประกาศ kind และ asset schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
+
+ประเภท `gws` เพิ่มเข้ามาใน `BWOC-EPIC-13` เป็น integration แบบ **อ่านเป็นหลัก (read-mostly)** กับ Google Workspace REST API (Drive / Gmail / Calendar) เช่นเดียวกับ `figma` มันได้ kind ของตัวเองเพราะพก [สคีมา Workspace Resource](#สคีมา-workspace-resource) ที่เป็น normative (Drive file, Gmail thread, Calendar event) + OAuth scope model มัน**ไม่ใช่**ส่วนหนึ่งของ `gcloud`: gcloud เอื้อมถึง GCP *infrastructure* ผ่าน `gcloud` CLI ในเครื่องด้วย ADC/service-account; `gws` เอื้อมถึง *apps* แบบ productivity ผ่าน Workspace REST API ด้วย **OAuth2 user-consent scope** (`drive.readonly` / `gmail.readonly` / `calendar.readonly`) — auth family และ surface คนละแบบ มันมี plugin credential-foundation (`gws-auth`) ที่ per-service plugin (`gws-drive` / `gws-gmail` / `gws-calendar`) source — รูปแบบ family เดียวกับ gcloud-* อ่านเป็นหลัก: write verb (ส่งเมล, สร้าง event, upload ไฟล์) ถูก defer ไป slice ถัดไป แต่ละตัวสืบทอด [write-verb operator-confirm gate](#write-verb-operator-confirm-gate-normative) OAuth token ผ่าน `BWOC_GWS_TOKEN` env / `.bwoc/secrets/gws-token.json` (shape-only ใน `auth.toml`, ไม่เคย commit) OAuth model, per-service scope, pagination, และการจัดการ rate-limit ดู [BWOC-72 design note](../../notes/2026-05-28_google-workspace-plugin-architecture.md) — spec นี้ประกาศ kind และ resource schema เท่านั้น ไม่ทำซ้ำ rationale นั้น
+
+### Write verb — operator-confirm gate (normative)
+
+verb ส่วนใหญ่อ่าน **write verb** — verb ที่ `invoke` แล้วเกิด side-effect ที่ durable นอก address space ของ plugin เอง — พก **operator-confirm gate ที่เป็น normative** pattern นี้ใช้ร่วมกันทุก write-capable plugin ไม่ว่า kind ไหน: `jira` (`transition` / `sync`), `workflow/gcloud-project` (`set-default`, config ในเครื่อง), และ instance lifecycle ของ `workflow/gcloud-compute` (`start` / `stop`, เพิ่มใน `BWOC-EPIC-9`, ตาม [bemindlabs#96])
+
+สัญญาของ gate:
+
+1. **gate อยู่ที่ operator boundary — คำสั่ง `bwoc <cli>` ไม่ใช่ plugin** confirmation จุดเดียวต่อ write; plugin execute ตอนถูก invoke ไม่ re-implement (และไม่ bypass) gate
+2. **แสดง effect ที่แน่นอนก่อนทำ** — target, สถานะปัจจุบัน, และคำสั่งภายนอกตามจริงที่จะรัน (สำหรับ plugin ที่ shell-out ใช้ `--` separator เพื่อให้ค่าจาก user ไม่ถูกตีความเป็น flag)
+3. **default คือ No** operator แบบ interactive ตอบ prompt `y/N` context แบบ non-interactive (headless agent) ต้องส่ง `--yes` ชัดเจน ซึ่ง agent ตั้ง **เฉพาะ** เมื่อ operator authorize action นั้น — ไม่เคย auto-set
+4. **write ที่ถูกปฏิเสธ/ยังไม่ confirm รายงาน "no change" พร้อมเหตุผล** (Dhammānupassanā) ไม่ใช่ bare failure หรือ silent write
+
+read verb **ไม่มี** gate — ฟรี **verb ที่ destructive + irreversible** (เช่น `delete`) ถูกถือมาตรฐานสูงกว่า start/stop และ introduce แบบจงใจ per-slice พร้อม gate ที่แข็งแกร่งกว่า — ไม่ ship แค่เพราะอยู่ติดกับ reversible write ดู risk matrix ของ verb แต่ละชุดใน design note (เช่น [BWOC-66 gcloud-compute note](../../notes/2026-05-28_gcloud-compute-write-verbs.md))
 
 ### สิ่งที่ Plugin ไม่ใช่
 
@@ -374,6 +390,57 @@ auth model, ขอบเขต file-vs-team-library, การจัดการ
   "last_modified": "2026-05-27T09:00:00Z",
   "exported_path": "figma/exports/9f86d081884c7d65.png",
   "design_tokens": { "color/primary": "#2D7FF9", "radius/sm": "4px" }
+}
+```
+
+---
+
+## สคีมา Workspace Resource
+
+ปลั๊กอิน `gws` surface ทรัพยากร Google Workspace แบบอ่านเป็นหลัก แต่ละ service emit **resource entry** ในรูปแบบ normative ของตัวเอง — สัญญาของ kind `gws`, validate โดย `bwoc check` (ตาม `BWOC-77`) และ emit โดย verb ของ `bwoc gws` (ตาม `BWOC-74`) OAuth model, per-service scope, pagination, และการจัดการ rate-limit อยู่ใน [BWOC-72 design note](../../notes/2026-05-28_google-workspace-plugin-architecture.md) ไม่ทำซ้ำที่นี่ ทั้งสามรูปตาม convention ของเฟรมเวิร์ก: key id ที่เสถียร, projection ที่เปลี่ยนได้รีเฟรชทุกการอ่าน, ฟิลด์ไม่บังคับตัดออก (ไม่ใช่ `null`)
+
+### Drive file
+
+| ฟิลด์ | ชนิด | บังคับ | ความหมาย |
+|---|---|---|---|
+| `file_id` | string | ใช่ | **key เสถียร** — Drive file id |
+| `name` | string | ใช่ | ชื่อไฟล์ (projection เปลี่ยนได้) |
+| `mime_type` | string | ใช่ | เช่น `application/vnd.google-apps.document` |
+| `modified_time` | string (ISO 8601) | ใช่ | last-modified; สัญญาณ cache-invalidation |
+| `owners` | array of string | ไม่ | อีเมลเจ้าของ ตัดออกเมื่อไม่ส่งคืน |
+| `web_view_link` | string | ไม่ | URL เปิดไฟล์ในเบราว์เซอร์ ตัดออกเมื่อไม่มี |
+
+### Gmail thread
+
+| ฟิลด์ | ชนิด | บังคับ | ความหมาย |
+|---|---|---|---|
+| `thread_id` | string | ใช่ | **key เสถียร** — Gmail thread id |
+| `subject` | string | ใช่ | หัวข้อ thread |
+| `from` | string | ใช่ | ผู้ส่งข้อความล่าสุด |
+| `snippet` | string | ไม่ | preview สั้น ตัดออกเมื่อว่าง |
+| `labels` | array of string | ไม่ | label id/ชื่อ ตัดออกเมื่อไม่มี |
+| `last_message_time` | string (ISO 8601) | ใช่ | เวลาข้อความล่าสุด |
+
+### Calendar event
+
+| ฟิลด์ | ชนิด | บังคับ | ความหมาย |
+|---|---|---|---|
+| `event_id` | string | ใช่ | **key เสถียร** — Calendar event id |
+| `calendar_id` | string | ใช่ | calendar ที่ event อยู่ |
+| `summary` | string | ใช่ | ชื่อ event |
+| `start` | string (ISO 8601) | ใช่ | เวลาเริ่ม (หรือวันที่สำหรับ all-day) |
+| `end` | string (ISO 8601) | ใช่ | เวลาจบ |
+| `attendees_count` | number | ไม่ | จำนวนผู้เข้าร่วม ตัดออกเมื่อไม่มี |
+
+### ตัวอย่าง (Drive file)
+
+```json
+{
+  "file_id":       "1AbC_dEfGhIjKlMnOpQrStUvWxYz",
+  "name":          "BWOC Architecture.gdoc",
+  "mime_type":     "application/vnd.google-apps.document",
+  "modified_time": "2026-05-27T09:00:00Z",
+  "web_view_link": "https://docs.google.com/document/d/1AbC_dEfGhIjKlMnOpQrStUvWxYz/edit"
 }
 ```
 

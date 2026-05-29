@@ -1000,6 +1000,11 @@ const BACKEND_NAMES: &[&str] = &["claude", "antigravity", "codex", "kimi", "olla
 /// reference `figma/figma-rest` plugin (BWOC-64) passes basic well-formedness.
 /// The figma `auth.toml` secret-leak guard + Asset Mapping Schema validation
 /// land in BWOC-65 (`audit_figma_auth` / `audit_figma_assets`).
+/// `gws` (BWOC-73) is the ninth kind — a read-mostly Google Workspace
+/// integration, declared in the PLUGINS.en.md enum; recognized here so the
+/// reference `gws/gws-auth` + `gws/gws-drive` plugins (BWOC-75) pass basic
+/// well-formedness. The gws `auth.toml` secret-leak guard + Workspace Resource
+/// Schema validation land in BWOC-77 (`audit_gws_auth`).
 const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
@@ -1009,6 +1014,7 @@ const PLUGIN_KINDS: &[&str] = &[
     "okr",
     "council",
     "figma",
+    "gws",
 ];
 
 /// Closed severity enum for declared criteria. Source of truth:
@@ -1334,7 +1340,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}.
+    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}.
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1342,7 +1348,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}}"
+                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}}"
             ));
         }
     }
@@ -1370,8 +1376,16 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     // with the same fail-closed secret-leak guard jira uses, adapted to the
     // `[sources]` shape (notes/2026-05-28_gcloud-workflow-plugin-architecture.md
     // §Decision 3). Workflow plugins without an auth.toml are not audited.
+    //
+    // Write-verb gate metadata audit (BWOC-70). A write-capable workflow plugin
+    // (the EPIC-9 `gcloud-compute` lifecycle slice) declares one `[[verb]]` table
+    // per verb with its `write` classification + the operator-confirm gate, so
+    // the CLI gate (BWOC-68) and this audit can tell a remote-mutating verb from
+    // a free read. Validate the metadata is declared + well-formed. Read-only
+    // workflow plugins declare no `[[verb]]` array and are not audited here.
     if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("workflow") {
         audit_workflow_auth(plugin_dir, &mut report);
+        audit_workflow_verbs(&raw, &mut report);
     }
 
     // OKR data audit (BWOC-50). okr-kind plugins (the reference `workspace-okrs`)
@@ -1406,6 +1420,21 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
     if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("figma") {
         audit_figma_auth(plugin_dir, &mut report);
         audit_figma_assets(plugin_dir, &mut report);
+    }
+
+    // GWS resource audit (BWOC-77). gws-kind plugins (the read-mostly Google
+    // Workspace adapters) carry an OAuth2 credential contract in a sibling
+    // `auth.toml` — only the `gws-auth` foundation ships one; the drive/gmail/
+    // calendar siblings source the token from it — and emit resource entries
+    // conforming to the Workspace Resource Schema (PLUGINS.en.md). Validate the
+    // auth.toml with the same fail-closed secret-leak guard jira (BWOC-45) /
+    // gcloud (BWOC-55) / figma (BWOC-65) use, and validate any plugin-local
+    // captured resource entries against the per-service shape. The `gws.sh` entry
+    // path-traversal safety is already covered by the base `validate_plugin_entry`
+    // check above (BWOC-36) — not re-done here.
+    if plugin_table.get("kind").and_then(|v| v.as_str()) == Some("gws") {
+        audit_gws_auth(plugin_dir, &mut report);
+        audit_gws_resources(plugin_dir, &mut report);
     }
 
     report
@@ -2609,6 +2638,140 @@ fn audit_workflow_auth(plugin_dir: &Path, report: &mut AuditReport) {
     }
 }
 
+/// Validate the write-verb gate metadata declared in a `workflow`-kind plugin's
+/// manifest (BWOC-70). Source of truth: PLUGINS.en.md §"Write verbs — the
+/// operator-confirm gate" (BWOC-67) + the BWOC-66 gcloud-compute risk matrix
+/// (notes/2026-05-28_gcloud-compute-write-verbs.md).
+///
+/// A write-capable workflow plugin (the EPIC-9 `gcloud-compute` lifecycle slice)
+/// declares one `[[verb]]` table per verb so the `bwoc <cli>` gate (BWOC-68) and
+/// `bwoc check` (this audit) can see which verbs mutate external state. The
+/// metadata is the static contract; this audit confirms it is declared and
+/// well-formed before any `invoke`:
+///
+///   1. `name`  — non-empty string, unique across the verb set.
+///   2. `write` — boolean; the write classification itself. Its absence is the
+///      gap this audit closes — an undeclared classification means the CLI gate
+///      cannot tell a remote-mutating verb from a free read.
+///   3. `confirm` — required `"operator"` on every `write = true` verb (the
+///      normative operator-confirm gate). A write verb missing it would be
+///      reachable without the documented confirmation. Read verbs (`write =
+///      false`) carry no gate — a `confirm` on one is contradictory metadata
+///      (warned, not failed; read verbs are free).
+///
+/// Read-only workflow plugins (the EPIC-8 `gcloud-auth` / `gcloud-project`)
+/// declare no `[[verb]]` array; their absence is not audited (mirrors
+/// `audit_workflow_auth`'s treatment of a missing `auth.toml`).
+fn audit_workflow_verbs(raw: &toml::Value, report: &mut AuditReport) {
+    let verbs = match raw.get("verb") {
+        Some(toml::Value::Array(a)) => a,
+        // A workflow plugin may be read-only — no verb metadata to validate.
+        None => return,
+        Some(_) => {
+            report
+                .violations
+                .push("[[verb]] has wrong type — expected an array of verb tables".to_string());
+            return;
+        }
+    };
+    if verbs.is_empty() {
+        report.violations.push(
+            "[[verb]] declared but empty — verb metadata must name at least one verb".to_string(),
+        );
+        return;
+    }
+    report.passes.push(format!(
+        "[[verb]] write-gate metadata declared ({} verbs)",
+        verbs.len()
+    ));
+
+    let mut seen: HashSet<String> = HashSet::new();
+    for (i, verb) in verbs.iter().enumerate() {
+        let table = match verb.as_table() {
+            Some(t) => t,
+            None => {
+                report
+                    .violations
+                    .push(format!("[[verb]] entry #{} is not a table", i + 1));
+                continue;
+            }
+        };
+
+        // name — non-empty string, unique across the verb set.
+        let name = match table.get("name") {
+            Some(toml::Value::String(s)) if !s.is_empty() => {
+                if !seen.insert(s.clone()) {
+                    report
+                        .violations
+                        .push(format!("[[verb]].name '{s}' is declared more than once"));
+                }
+                s.clone()
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "[[verb]] entry #{} has an empty or non-string 'name'",
+                    i + 1
+                ));
+                continue;
+            }
+            None => {
+                report
+                    .violations
+                    .push(format!("[[verb]] entry #{} missing required 'name'", i + 1));
+                continue;
+            }
+        };
+
+        // write — the classification boolean. Its presence is the whole point of
+        // the gate metadata; without it the CLI cannot gate the verb.
+        let is_write = match table.get("write") {
+            Some(toml::Value::Boolean(b)) => {
+                report
+                    .passes
+                    .push(format!("[[verb]] '{name}' declares write = {b}"));
+                *b
+            }
+            Some(_) => {
+                report.violations.push(format!(
+                    "[[verb]] '{name}'.write has wrong type — expected a boolean write classification"
+                ));
+                continue;
+            }
+            None => {
+                report.violations.push(format!(
+                    "[[verb]] '{name}' missing 'write' — every workflow verb must declare its write \
+                     classification (PLUGINS.en.md §Write verbs)"
+                ));
+                continue;
+            }
+        };
+
+        // confirm — required "operator" on writes; forbidden (redundant) on reads.
+        match (is_write, table.get("confirm")) {
+            (true, Some(toml::Value::String(s))) if s == "operator" => report.passes.push(format!(
+                "[[verb]] '{name}' write carries the operator-confirm gate"
+            )),
+            (true, Some(toml::Value::String(s))) => report.violations.push(format!(
+                "[[verb]] '{name}'.confirm '{s}' is not 'operator' — a write verb's only gate mode \
+                 is operator-confirm (PLUGINS.en.md §Write verbs)"
+            )),
+            (true, Some(_)) => report.violations.push(format!(
+                "[[verb]] '{name}'.confirm has wrong type — expected the string \"operator\""
+            )),
+            (true, None) => report.violations.push(format!(
+                "[[verb]] '{name}' is a write but declares no confirm gate — write verbs MUST carry \
+                 confirm = \"operator\" (PLUGINS.en.md §Write verbs)"
+            )),
+            (false, Some(_)) => report.warnings.push(format!(
+                "[[verb]] '{name}' is a read (write = false) but declares a confirm gate — read \
+                 verbs are free; the gate is redundant"
+            )),
+            // Read verb, no gate — correct and frictionless.
+            (false, None) => {}
+        }
+    }
+}
+
 /// Validate the `auth.toml` credential CONTRACT shipped next to a `jira`-kind
 /// plugin's manifest (BWOC-45). Source of truth: the jira-cloud-rest SPEC.md
 /// §Authentication + the `auth.toml` header — the file declares the SHAPE only.
@@ -2994,6 +3157,378 @@ fn validate_figma_asset(label: &str, value: &serde_json::Value, report: &mut Aud
         Some(_) => report.violations.push(format!(
             "asset {label} 'design_tokens' has wrong type — expected a {{ name: value }} object"
         )),
+    }
+}
+
+/// Validate the `auth.toml` credential CONTRACT shipped next to a `gws`-kind
+/// plugin's manifest (BWOC-77). Source of truth: the gws-auth SPEC.md
+/// §Authentication + the shipped `auth.toml` header — the file declares the
+/// credential SHAPE only. The real OAuth2 access token resolves at runtime from
+/// `BWOC_GWS_TOKEN` env (or a gitignored, owner-only `.bwoc/secrets/gws-token.json`)
+/// and MUST NEVER appear in this tracked file.
+///
+/// Only the `gws-auth` foundation ships an `auth.toml`; the drive/gmail/calendar
+/// siblings source the token from it and carry no `auth.toml` of their own, so an
+/// absent file is not audited (same scope as jira/gcloud/figma).
+///
+/// Two concerns, in order of severity (mirrors `audit_figma_auth`, BWOC-65):
+///   1. SECURITY (fail-closed) — the `[gws.auth]` `token` placeholder must be an
+///      EMPTY string. A non-empty value is a committed OAuth token, the single
+///      worst outcome this check exists to prevent, so it is a hard violation.
+///      The value is NEVER echoed back.
+///   2. SHAPE — `[gws.auth.env].token` binds to a non-empty `var`, so the runtime
+///      resolution map is present and well-formed.
+///
+/// The `[gws.auth.secrets_file]` and `[gws.auth.scopes]` sub-tables carry only
+/// path / field / scope NAMES (never a credential value), so they are not
+/// secret-leak surfaces and are not policed here.
+fn audit_gws_auth(plugin_dir: &Path, report: &mut AuditReport) {
+    let auth_path = plugin_dir.join("auth.toml");
+    let body = match fs::read_to_string(&auth_path) {
+        Ok(s) => {
+            report.passes.push("auth.toml present".to_string());
+            s
+        }
+        // No auth.toml → nothing to validate here (the credential-less siblings).
+        Err(_) => return,
+    };
+    let raw: toml::Value = match toml::from_str(&body) {
+        Ok(v) => {
+            report.passes.push("auth.toml is valid TOML".to_string());
+            v
+        }
+        Err(e) => {
+            report
+                .violations
+                .push(format!("auth.toml is not valid TOML: {e}"));
+            return;
+        }
+    };
+
+    // [gws.auth] — the placeholder contract table.
+    let auth = match raw
+        .get("gws")
+        .and_then(|g| g.get("auth"))
+        .and_then(|a| a.as_table())
+    {
+        Some(t) => {
+            report.passes.push("[gws.auth] table present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[gws.auth] table missing — auth.toml must declare the credential contract"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+
+    // token: present, a string, and EMPTY. A non-empty value is a committed OAuth
+    // token — fail closed, and never echo the value.
+    match auth.get("token") {
+        Some(toml::Value::String(s)) if s.is_empty() => report
+            .passes
+            .push("[gws.auth].token is an empty placeholder".to_string()),
+        Some(toml::Value::String(_)) => report.violations.push(
+            "[gws.auth].token has a non-empty value — an OAuth token MUST NOT be committed; \
+             leave it empty and set BWOC_GWS_TOKEN (value redacted)"
+                .to_string(),
+        ),
+        Some(_) => report.violations.push(
+            "[gws.auth].token has wrong type — expected an (empty) string placeholder".to_string(),
+        ),
+        None => report
+            .violations
+            .push("[gws.auth].token missing — required placeholder key".to_string()),
+    }
+
+    // [gws.auth.env].token — the runtime env-var binding. The token must name the
+    // environment variable it resolves from.
+    let env = match auth.get("env").and_then(|e| e.as_table()) {
+        Some(t) => {
+            report
+                .passes
+                .push("[gws.auth.env] binding map present".to_string());
+            t
+        }
+        None => {
+            report.violations.push(
+                "[gws.auth.env] binding map missing — auth.toml must declare how the token \
+                 resolves from the environment"
+                    .to_string(),
+            );
+            return;
+        }
+    };
+    match env.get("token").and_then(|v| v.as_table()) {
+        Some(binding) => match binding.get("var").and_then(|v| v.as_str()) {
+            Some(var) if !var.is_empty() => report
+                .passes
+                .push(format!("[gws.auth.env].token binds to ${var}")),
+            _ => report.violations.push(
+                "[gws.auth.env].token missing a non-empty 'var' — the binding must name its \
+                 environment variable"
+                    .to_string(),
+            ),
+        },
+        None => report.violations.push(
+            "[gws.auth.env].token missing or not a table — expected \
+             { var = \"BWOC_GWS_TOKEN\", required = true, secret = true }"
+                .to_string(),
+        ),
+    }
+}
+
+/// The three Google Workspace services a `gws` plugin can surface, each with its
+/// own normative resource shape under the Workspace Resource Schema (PLUGINS.en.md).
+#[derive(Clone, Copy)]
+enum GwsService {
+    Drive,
+    Gmail,
+    Calendar,
+}
+
+impl GwsService {
+    /// Resolve the resource shape a gws plugin emits from its directory basename.
+    /// The reference plugins are 1:1 with a Google service; `gws-auth` is the
+    /// credential foundation and emits only `status` metadata (no resource entry),
+    /// so it — and any gws plugin not bound to a known service — has no shape.
+    fn from_plugin_name(name: &str) -> Option<Self> {
+        match name {
+            "gws-drive" => Some(Self::Drive),
+            "gws-gmail" => Some(Self::Gmail),
+            "gws-calendar" => Some(Self::Calendar),
+            _ => None,
+        }
+    }
+
+    /// The envelope key under which the `list` / `search` / `events` verbs nest
+    /// their resource-entry array.
+    fn array_key(self) -> &'static str {
+        match self {
+            Self::Drive => "files",
+            Self::Gmail => "threads",
+            Self::Calendar => "events",
+        }
+    }
+}
+
+/// Validate any plugin-local captured Workspace resource entries against the
+/// Workspace Resource Schema (BWOC-77). The `gws` kind is read-mostly: the
+/// `list` / `get` / `search` / `show` / `events` verbs emit resource entries at
+/// runtime — they are never persisted as tracked plugin files. So like figma's
+/// `mappings/` (BWOC-65) and council's `records/` (BWOC-60), an optional
+/// plugin-local `resources/` directory holds captured `bwoc gws` output for
+/// hand-invocation / smoke tests; when present every `*.json` in it is validated,
+/// when absent (the shipped reference plugins ship none) there is nothing to
+/// audit.
+///
+/// The shape to validate against is fixed by the plugin's service: a file under
+/// `gws-drive/resources/` is a Drive file, `gws-gmail/` a Gmail thread,
+/// `gws-calendar/` a Calendar event. `gws-auth` emits no resource entry, so its
+/// `resources/` (if any) is not policed. Only the resource-bearing verbs' output
+/// belongs here — the `labels` / `calendars` list verbs emit label / calendar
+/// objects that are not part of the schema.
+///
+/// Each file may be a captured verb envelope — `{ "files": [ … ] }` (list),
+/// `{ "file": { … } }` (get) and likewise for threads/events, the `show` /
+/// `get` envelope that spreads a single entry into itself, a bare array of
+/// entries, or a single entry; every entry it carries is validated.
+fn audit_gws_resources(plugin_dir: &Path, report: &mut AuditReport) {
+    let service = match plugin_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(GwsService::from_plugin_name)
+    {
+        Some(s) => s,
+        // gws-auth (credential foundation) or any gws plugin not bound to a known
+        // service emits no Workspace resource entry — nothing to validate here.
+        None => return,
+    };
+
+    let resources_dir = plugin_dir.join("resources");
+    let read = match fs::read_dir(&resources_dir) {
+        Ok(r) => r,
+        // No plugin-local captures — resource entries are emitted at runtime.
+        Err(_) => return,
+    };
+    let mut json_paths: Vec<std::path::PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+        .collect();
+    json_paths.sort();
+    for path in json_paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let body = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("resources/{name} unreadable: {e}"));
+                continue;
+            }
+        };
+        let value: serde_json::Value = match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => {
+                report
+                    .violations
+                    .push(format!("resources/{name} is not valid JSON: {e}"));
+                continue;
+            }
+        };
+        // Unwrap the verb envelope to the resource entries it carries: a
+        // list / search / events body nests them under the service array key; a
+        // get / show body spreads a single entry into the envelope (the extra
+        // envelope fields are additive and ignored by the per-field validator); a
+        // bare array or single object is taken directly.
+        let entries: Vec<&serde_json::Value> =
+            if let Some(arr) = value.get(service.array_key()).and_then(|a| a.as_array()) {
+                arr.iter().collect()
+            } else if let Some(arr) = value.as_array() {
+                arr.iter().collect()
+            } else {
+                vec![&value]
+            };
+        for (i, entry) in entries.iter().enumerate() {
+            let label = format!("resources/{name}[{i}]");
+            validate_gws_resource(&label, service, entry, report);
+        }
+    }
+}
+
+/// Validate one resource entry against its service's shape in the Workspace
+/// Resource Schema (PLUGINS.en.md §"Workspace Resource Schema", BWOC-73). `label`
+/// identifies the entry in messages. Each shape has a stable id key plus mutable
+/// projections (all required, non-empty strings) and a few optional fields.
+/// Optional fields are validated only when present and MUST be omitted (never
+/// serialized as `null`) when absent — per the schema's omit-don't-null
+/// convention. Additive fields beyond the schema's named set (e.g. the `ok` /
+/// `plugin` / `operation` envelope keys on a spread entry) are ignored, not
+/// rejected.
+fn validate_gws_resource(
+    label: &str,
+    service: GwsService,
+    value: &serde_json::Value,
+    report: &mut AuditReport,
+) {
+    let obj = match value.as_object() {
+        Some(o) => o,
+        None => {
+            report.violations.push(format!(
+                "resource {label} is not a JSON object — expected a Workspace resource entry"
+            ));
+            return;
+        }
+    };
+
+    // Per-service field sets: required non-empty strings, optional strings,
+    // optional string-arrays, optional numbers.
+    let (required, opt_strings, opt_string_arrays, opt_numbers): (
+        &[&str],
+        &[&str],
+        &[&str],
+        &[&str],
+    ) = match service {
+        GwsService::Drive => (
+            &["file_id", "name", "mime_type", "modified_time"],
+            &["web_view_link"],
+            &["owners"],
+            &[],
+        ),
+        GwsService::Gmail => (
+            &["thread_id", "subject", "from", "last_message_time"],
+            &["snippet"],
+            &["labels"],
+            &[],
+        ),
+        GwsService::Calendar => (
+            &["event_id", "calendar_id", "summary", "start", "end"],
+            &[],
+            &[],
+            &["attendees_count"],
+        ),
+    };
+
+    // Required non-empty string fields — the stable key + the mutable projections.
+    for field in required {
+        match obj.get(*field) {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => report
+                .passes
+                .push(format!("resource {label} {field} present")),
+            Some(serde_json::Value::String(_)) => report.violations.push(format!(
+                "resource {label} '{field}' is empty — required non-empty string"
+            )),
+            _ => report.violations.push(format!(
+                "resource {label} missing required '{field}' (non-empty string)"
+            )),
+        }
+    }
+
+    // Optional string fields: validated only when present; explicit null is a
+    // violation (the schema omits absent fields, never serializes them as null).
+    for field in opt_strings {
+        match obj.get(*field) {
+            None => {}
+            Some(serde_json::Value::String(s)) if !s.is_empty() => report
+                .passes
+                .push(format!("resource {label} {field} well-formed")),
+            Some(serde_json::Value::Null) => report.violations.push(format!(
+                "resource {label} '{field}' is null — optional fields MUST be omitted, not null"
+            )),
+            Some(_) => report.violations.push(format!(
+                "resource {label} '{field}' has wrong type — expected a non-empty string when present"
+            )),
+        }
+    }
+
+    // Optional string-array fields (owners / labels): each element a non-empty
+    // string.
+    for field in opt_string_arrays {
+        match obj.get(*field) {
+            None => {}
+            Some(serde_json::Value::Array(arr)) => {
+                if arr
+                    .iter()
+                    .all(|v| matches!(v, serde_json::Value::String(s) if !s.is_empty()))
+                {
+                    report
+                        .passes
+                        .push(format!("resource {label} {field} well-formed"));
+                } else {
+                    report.violations.push(format!(
+                        "resource {label} '{field}' must be an array of non-empty strings"
+                    ));
+                }
+            }
+            Some(serde_json::Value::Null) => report.violations.push(format!(
+                "resource {label} '{field}' is null — optional fields MUST be omitted, not null"
+            )),
+            Some(_) => report.violations.push(format!(
+                "resource {label} '{field}' has wrong type — expected an array of strings when present"
+            )),
+        }
+    }
+
+    // Optional number fields (attendees_count): a number when present.
+    for field in opt_numbers {
+        match obj.get(*field) {
+            None => {}
+            Some(serde_json::Value::Number(_)) => report
+                .passes
+                .push(format!("resource {label} {field} well-formed")),
+            Some(serde_json::Value::Null) => report.violations.push(format!(
+                "resource {label} '{field}' is null — optional fields MUST be omitted, not null"
+            )),
+            Some(_) => report.violations.push(format!(
+                "resource {label} '{field}' has wrong type — expected a number when present"
+            )),
+        }
     }
 }
 
@@ -4273,6 +4808,428 @@ token = ""
         assert!(
             report.violations.is_empty(),
             "a well-formed export envelope must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- BWOC-77: gws auth.toml + Workspace Resource Schema ----------------
+
+    /// Body of a minimal valid gws-kind plugin manifest, reused by the auth.toml
+    /// / resources fixtures below.
+    const GWS_MANIFEST: &str = r#"[plugin]
+name        = "gws-auth"
+kind        = "gws"
+version     = "0.1.0"
+description = "Google Workspace OAuth2 credential foundation."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+"#;
+
+    /// A minimal valid gws-kind plugin manifest for `name`, so a resources/
+    /// fixture written into the `name` directory satisfies the base name-matches-
+    /// directory check.
+    fn gws_manifest(name: &str) -> String {
+        format!(
+            r#"[plugin]
+name        = "{name}"
+kind        = "gws"
+version     = "0.1.0"
+description = "Read-mostly Google Workspace adapter."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+"#
+        )
+    }
+
+    /// The shipped auth.toml contract shape: an EMPTY token placeholder plus the
+    /// env binding map and the (non-secret) secrets_file / scopes sub-tables.
+    /// Mirrors modules/plugins/gws/gws-auth/auth.toml.
+    const GWS_AUTH_OK: &str = r#"[gws.auth]
+token = ""
+
+[gws.auth.env]
+token = { var = "BWOC_GWS_TOKEN", required = true, secret = true }
+
+[gws.auth.secrets_file]
+path = ".bwoc/secrets/gws-token.json"
+fields = ["access_token", "refresh_token"]
+
+[gws.auth.scopes]
+drive    = ["https://www.googleapis.com/auth/drive.readonly"]
+gmail    = ["https://www.googleapis.com/auth/gmail.readonly"]
+calendar = ["https://www.googleapis.com/auth/calendar.readonly"]
+"#;
+
+    #[test]
+    fn audit_plugin_manifest_gws_kind_accepted() {
+        // The 'gws' kind (the ninth) is declared in the PLUGINS.en.md enum
+        // (BWOC-73); the validator must accept it so the reference gws plugins
+        // pass their own `bwoc check`. This fixture ships no auth.toml / resources,
+        // so the BWOC-77 gws audit is a no-op here — the manifest passes clean.
+        let dir = write_plugin_manifest(
+            "gws-kind",
+            "gws-drive",
+            r#"[plugin]
+name        = "gws-drive"
+kind        = "gws"
+version     = "0.1.0"
+description = "Read-mostly Google Drive adapter."
+compat      = ">=2.10.0"
+entry       = "gws.sh"
+"#,
+        );
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "expected 'gws' kind to be accepted, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_plugin_manifest_real_gws_references_pass() {
+        // End-to-end (BWOC-77): audit the actual shipped reference plugins
+        // (modules/plugins/gws/{gws-auth,gws-drive,gws-gmail,gws-calendar}/) —
+        // manifest + auth.toml secret-leak guard + resource schema — exactly as
+        // `bwoc check --all` does in an operator workspace.
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../modules/plugins/gws");
+        for name in &["gws-auth", "gws-drive", "gws-gmail", "gws-calendar"] {
+            let dir = base.join(name);
+            if !dir.join("manifest.toml").is_file() {
+                continue; // partial checkout without the plugin — nothing to assert.
+            }
+            let report = audit_plugin_manifest(&dir);
+            assert!(
+                report.violations.is_empty(),
+                "real {name} manifest must pass bwoc check, got: {:?}",
+                report.violations
+            );
+        }
+        // Confirm the gws auth guard actually ran on the foundation (not silently
+        // skipped) — only gws-auth ships an auth.toml with the empty placeholder.
+        let auth_dir = base.join("gws-auth");
+        if auth_dir.join("auth.toml").is_file() {
+            let report = audit_plugin_manifest(&auth_dir);
+            assert!(
+                report
+                    .passes
+                    .iter()
+                    .any(|p| p == "[gws.auth].token is an empty placeholder"),
+                "expected the gws auth.toml token placeholder to be validated, got: {:?}",
+                report.passes
+            );
+        }
+    }
+
+    #[test]
+    fn audit_gws_auth_empty_placeholder_passes() {
+        // A gws plugin whose auth.toml holds only an EMPTY token placeholder plus
+        // the env binding map is the shipped contract shape — and the secrets_file
+        // / scopes sub-tables (path / field / scope NAMES, not values) must NOT be
+        // policed as leaks. Passes clean.
+        let dir = write_plugin_manifest("gws-auth-ok", "gws-auth", GWS_MANIFEST);
+        fs::write(dir.join("auth.toml"), GWS_AUTH_OK).unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "empty-placeholder gws auth.toml must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_gws_auth_real_token_fails_and_redacts() {
+        // SECURITY: a committed OAuth token is the worst outcome this check exists
+        // to prevent. A non-empty token MUST be a hard violation, and the leaked
+        // value MUST NOT be echoed into the report (that would re-leak the secret
+        // into whatever consumes `bwoc check` output).
+        let leaked = "ya29.super-secret-google-oauth-access-token";
+        let dir = write_plugin_manifest("gws-auth-leak", "gws-auth", GWS_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            format!(
+                r#"[gws.auth]
+token = "{leaked}"
+
+[gws.auth.env]
+token = {{ var = "BWOC_GWS_TOKEN", required = true, secret = true }}
+"#
+            ),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[gws.auth].token") && v.contains("MUST NOT be committed")),
+            "a committed token must be a violation, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report.violations.iter().all(|v| !v.contains(leaked)),
+            "the secret value must be redacted from the report, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_gws_auth_missing_env_binding_fails() {
+        // The token placeholder is empty (good) but the [gws.auth.env] binding map
+        // is absent — the runtime resolution contract is incomplete.
+        let dir = write_plugin_manifest("gws-auth-noenv", "gws-auth", GWS_MANIFEST);
+        fs::write(
+            dir.join("auth.toml"),
+            r#"[gws.auth]
+token = ""
+"#,
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("[gws.auth.env] binding map missing")),
+            "a missing env binding map must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- BWOC-77: Workspace Resource Schema (Drive / Gmail / Calendar) ------
+
+    /// A schema-conforming Drive file entry, with every optional field populated.
+    fn gws_drive_ok() -> serde_json::Value {
+        serde_json::json!({
+            "file_id": "1AbC_dEfGhIjKlMnOpQrStUvWxYz",
+            "name": "BWOC Architecture.gdoc",
+            "mime_type": "application/vnd.google-apps.document",
+            "modified_time": "2026-05-27T09:00:00Z",
+            "owners": ["me@example.com"],
+            "web_view_link": "https://docs.google.com/document/d/1AbC/edit"
+        })
+    }
+
+    /// A schema-conforming Gmail thread entry, every optional field populated.
+    fn gws_gmail_ok() -> serde_json::Value {
+        serde_json::json!({
+            "thread_id": "18ab12cd34ef5678",
+            "subject": "Sprint 13 review",
+            "from": "jisoo@example.com",
+            "snippet": "Closing EPIC-13…",
+            "labels": ["INBOX", "IMPORTANT"],
+            "last_message_time": "2026-05-28T09:00:00Z"
+        })
+    }
+
+    /// A schema-conforming Calendar event entry, every optional field populated.
+    fn gws_calendar_ok() -> serde_json::Value {
+        serde_json::json!({
+            "event_id": "abc123def456",
+            "calendar_id": "primary",
+            "summary": "Sprint 13 review",
+            "start": "2026-05-28T09:00:00Z",
+            "end": "2026-05-28T10:00:00Z",
+            "attendees_count": 4
+        })
+    }
+
+    fn gws_resource_violations(service: GwsService, value: &serde_json::Value) -> Vec<String> {
+        let mut report = AuditReport {
+            target: "test".to_string(),
+            passes: Vec::new(),
+            warnings: Vec::new(),
+            violations: Vec::new(),
+        };
+        validate_gws_resource("resource.json", service, value, &mut report);
+        report.violations
+    }
+
+    #[test]
+    fn gws_resources_well_formed_pass() {
+        assert!(
+            gws_resource_violations(GwsService::Drive, &gws_drive_ok()).is_empty(),
+            "a schema-conforming Drive file must pass"
+        );
+        assert!(
+            gws_resource_violations(GwsService::Gmail, &gws_gmail_ok()).is_empty(),
+            "a schema-conforming Gmail thread must pass"
+        );
+        assert!(
+            gws_resource_violations(GwsService::Calendar, &gws_calendar_ok()).is_empty(),
+            "a schema-conforming Calendar event must pass"
+        );
+    }
+
+    #[test]
+    fn gws_resource_minimal_required_only_passes() {
+        // Optional fields omitted across all three shapes — still schema-conforming
+        // on the required-field floor.
+        let drive = serde_json::json!({
+            "file_id": "1A", "name": "f", "mime_type": "application/pdf",
+            "modified_time": "2026-05-27T09:00:00Z"
+        });
+        let gmail = serde_json::json!({
+            "thread_id": "18", "subject": "s", "from": "a@b.c",
+            "last_message_time": "2026-05-28T09:00:00Z"
+        });
+        let cal = serde_json::json!({
+            "event_id": "e", "calendar_id": "primary", "summary": "s",
+            "start": "2026-06-01", "end": "2026-06-02"
+        });
+        assert!(gws_resource_violations(GwsService::Drive, &drive).is_empty());
+        assert!(gws_resource_violations(GwsService::Gmail, &gmail).is_empty());
+        assert!(gws_resource_violations(GwsService::Calendar, &cal).is_empty());
+    }
+
+    #[test]
+    fn gws_resource_missing_required_field_fails() {
+        let mut drive = gws_drive_ok();
+        drive.as_object_mut().unwrap().remove("file_id");
+        assert!(
+            gws_resource_violations(GwsService::Drive, &drive)
+                .iter()
+                .any(|v| v.contains("missing required 'file_id'")),
+            "a Drive file without the stable key must fail"
+        );
+    }
+
+    #[test]
+    fn gws_resource_empty_required_field_fails() {
+        let mut gmail = gws_gmail_ok();
+        gmail.as_object_mut().unwrap()["subject"] = serde_json::json!("");
+        assert!(
+            gws_resource_violations(GwsService::Gmail, &gmail)
+                .iter()
+                .any(|v| v.contains("'subject'") && v.contains("empty")),
+            "an empty required string must fail"
+        );
+    }
+
+    #[test]
+    fn gws_resource_null_optional_field_fails() {
+        // owners present-but-null violates the omit-don't-null convention.
+        let mut drive = gws_drive_ok();
+        drive.as_object_mut().unwrap()["owners"] = serde_json::Value::Null;
+        assert!(
+            gws_resource_violations(GwsService::Drive, &drive)
+                .iter()
+                .any(|v| v.contains("'owners'") && v.contains("null")),
+            "a null optional field must fail"
+        );
+    }
+
+    #[test]
+    fn gws_resource_wrong_type_optional_fails() {
+        // attendees_count must be a number, not a string.
+        let mut cal = gws_calendar_ok();
+        cal.as_object_mut().unwrap()["attendees_count"] = serde_json::json!("four");
+        assert!(
+            gws_resource_violations(GwsService::Calendar, &cal)
+                .iter()
+                .any(|v| v.contains("'attendees_count'") && v.contains("number")),
+            "a non-number attendees_count must fail"
+        );
+        // labels must be an array of non-empty strings.
+        let mut gmail = gws_gmail_ok();
+        gmail.as_object_mut().unwrap()["labels"] = serde_json::json!(["INBOX", ""]);
+        assert!(
+            gws_resource_violations(GwsService::Gmail, &gmail)
+                .iter()
+                .any(|v| v.contains("'labels'") && v.contains("non-empty strings")),
+            "a labels array with an empty element must fail"
+        );
+    }
+
+    #[test]
+    fn gws_resource_non_object_fails() {
+        assert!(
+            gws_resource_violations(GwsService::Drive, &serde_json::json!("not-an-object"))
+                .iter()
+                .any(|v| v.contains("not a JSON object")),
+            "a non-object entry must fail"
+        );
+    }
+
+    #[test]
+    fn audit_gws_resources_list_envelope_validates_entries() {
+        // A captured `list` body nests entries under the service array key
+        // (`files`); every entry is unwrapped and validated.
+        let dir = write_plugin_manifest("gws-res-list", "gws-drive", &gws_manifest("gws-drive"));
+        fs::create_dir_all(dir.join("resources")).unwrap();
+        let body = serde_json::json!({
+            "ok": true, "plugin": "gws-drive", "operation": "list", "total": 1,
+            "files": [ gws_drive_ok() ]
+        });
+        fs::write(
+            dir.join("resources/list.json"),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a well-formed list envelope must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_gws_resources_show_spread_envelope_passes() {
+        // The Gmail `show` / Drive `get` envelope spreads a single entry into
+        // itself alongside `ok` / `plugin` / `operation`; those additive envelope
+        // keys are ignored and the spread entry validates clean.
+        let dir = write_plugin_manifest("gws-res-show", "gws-gmail", &gws_manifest("gws-gmail"));
+        fs::create_dir_all(dir.join("resources")).unwrap();
+        let mut body = gws_gmail_ok();
+        let obj = body.as_object_mut().unwrap();
+        obj.insert("ok".to_string(), serde_json::json!(true));
+        obj.insert("plugin".to_string(), serde_json::json!("gws-gmail"));
+        obj.insert("operation".to_string(), serde_json::json!("show"));
+        fs::write(
+            dir.join("resources/show.json"),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a well-formed show spread envelope must pass, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_gws_resources_bad_entry_in_envelope_fails() {
+        // A malformed entry inside a captured `events` envelope is surfaced with
+        // its file + index label.
+        let dir =
+            write_plugin_manifest("gws-res-bad", "gws-calendar", &gws_manifest("gws-calendar"));
+        fs::create_dir_all(dir.join("resources")).unwrap();
+        let mut bad = gws_calendar_ok();
+        bad.as_object_mut().unwrap().remove("event_id");
+        let body = serde_json::json!({
+            "ok": true, "operation": "events", "events": [ gws_calendar_ok(), bad ]
+        });
+        fs::write(
+            dir.join("resources/events.json"),
+            serde_json::to_string_pretty(&body).unwrap(),
+        )
+        .unwrap();
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("resources/events.json[1]") && v.contains("event_id")),
+            "the malformed entry must be flagged by file + index, got: {:?}",
             report.violations
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
@@ -5633,22 +6590,48 @@ entry       = "bin"
 
     #[test]
     fn audit_plugin_manifest_real_gcloud_compute_reference_passes() {
-        // EPIC-9: the first write-capable slice. Same audit bar as the
-        // foundation plugins — manifest entry + auth.toml shape (no values).
+        // End-to-end (BWOC-70): audit the actual shipped workflow/gcloud-compute
+        // reference plugin — the first write-capable gcloud slice (EPIC-9) —
+        // exactly as `bwoc check --all` does in an operator workspace.
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../modules/plugins/workflow/gcloud-compute");
         if !dir.join("manifest.toml").is_file() {
-            return;
+            return; // partial checkout without the plugin — nothing to assert.
         }
         let report = audit_plugin_manifest(&dir);
         assert!(
             report.violations.is_empty(),
-            "real gcloud-compute manifest + auth.toml must pass bwoc check, got: {:?}",
+            "real gcloud-compute manifest must pass bwoc check, got: {:?}",
             report.violations
         );
+        // The write-verb gate metadata must have actually been exercised, not
+        // skipped: the verb array is declared and the two write verbs carry the
+        // operator-confirm gate.
         assert!(
-            report.passes.iter().any(|p| p == "[sources] table present"),
-            "expected the workflow auth.toml shape to be validated, got: {:?}",
+            report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "expected the gcloud-compute verb metadata to be validated, got: {:?}",
+            report.passes
+        );
+        for verb in ["start", "stop"] {
+            assert!(
+                report
+                    .passes
+                    .iter()
+                    .any(|p| p
+                        == &format!("[[verb]] '{verb}' write carries the operator-confirm gate")),
+                "expected write verb '{verb}' to carry the operator-confirm gate, got: {:?}",
+                report.passes
+            );
+        }
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p == "[[verb]] 'list' declares write = false"),
+            "expected read verb 'list' to declare write = false, got: {:?}",
             report.passes
         );
     }
@@ -5800,6 +6783,208 @@ service_account = { path = ".bwoc/secrets/gcloud-sa.json", priority = 2 }
         assert!(
             !report.passes.iter().any(|p| p == "auth.toml present"),
             "absent auth.toml must not be reported as present"
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    // ---- BWOC-70: workflow write-verb gate metadata validation -------------
+
+    /// A write-capable workflow plugin manifest header (the gcloud-compute
+    /// shape), reused by the verb-metadata fixtures below. Tests append their
+    /// own `[[verb]]` tables.
+    const COMPUTE_MANIFEST_HEADER: &str = r#"[plugin]
+name        = "gcloud-compute"
+kind        = "workflow"
+version     = "0.1.0"
+description = "gcloud Compute Engine instance-lifecycle adapter."
+compat      = ">=2.9.0"
+entry       = "gcloud.sh"
+"#;
+
+    fn compute_manifest_with(verbs: &str) -> String {
+        format!("{COMPUTE_MANIFEST_HEADER}{verbs}")
+    }
+
+    #[test]
+    fn audit_workflow_verbs_well_formed_passes() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "list"
+write = false
+
+[[verb]]
+name    = "start"
+write   = true
+confirm = "operator"
+
+[[verb]]
+name    = "stop"
+write   = true
+confirm = "operator"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-ok", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "well-formed verb metadata must pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "expected the verb metadata to be reported as declared, got: {:?}",
+            report.passes
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_missing_write_classification_fails() {
+        // The whole point of the gate metadata: a verb that omits its write
+        // classification cannot be gated by the CLI — fail closed.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name = "start"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-no-write", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start' missing 'write'")),
+            "a verb without a write classification must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_write_without_confirm_gate_fails() {
+        // A write verb that declares no operator-confirm gate would be reachable
+        // without the documented confirmation — the core BWOC-67 violation.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "start"
+write = true
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-no-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start' is a write but declares no confirm gate")),
+            "a write verb without a confirm gate must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_non_operator_confirm_fails() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name    = "start"
+write   = true
+confirm = "auto"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-bad-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'start'.confirm 'auto' is not 'operator'")),
+            "a non-operator confirm mode on a write verb must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_read_with_confirm_warns_not_fails() {
+        // Read verbs are free; a confirm gate on one is contradictory metadata
+        // but not a security risk — warn, do not fail.
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name    = "list"
+write   = false
+confirm = "operator"
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-read-confirm", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a read verb with a redundant gate must not fail, got: {:?}",
+            report.violations
+        );
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w.contains("'list' is a read") && w.contains("redundant")),
+            "expected a redundant-gate warning on the read verb, got: {:?}",
+            report.warnings
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_duplicate_name_fails() {
+        let body = compute_manifest_with(
+            r#"
+[[verb]]
+name  = "list"
+write = false
+
+[[verb]]
+name  = "list"
+write = false
+"#,
+        );
+        let dir = write_plugin_manifest("wf-verbs-dup", "gcloud-compute", &body);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.contains("'list' is declared more than once")),
+            "a duplicate verb name must be a violation, got: {:?}",
+            report.violations
+        );
+        let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn audit_workflow_verbs_absent_array_not_audited() {
+        // A read-only workflow plugin (gcloud-auth / gcloud-project) declares no
+        // verb metadata — its absence is not a violation (mirrors absent auth.toml).
+        let dir = write_plugin_manifest("wf-verbs-none", "gcloud-auth", WORKFLOW_MANIFEST);
+        let report = audit_plugin_manifest(&dir);
+        assert!(
+            report.violations.is_empty(),
+            "a workflow plugin without verb metadata must still pass, got: {:?}",
+            report.violations
+        );
+        assert!(
+            !report
+                .passes
+                .iter()
+                .any(|p| p.starts_with("[[verb]] write-gate metadata declared")),
+            "absent verb metadata must not be reported as declared"
         );
         let _ = fs::remove_dir_all(dir.parent().unwrap().parent().unwrap().parent().unwrap());
     }

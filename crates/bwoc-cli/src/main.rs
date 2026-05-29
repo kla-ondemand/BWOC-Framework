@@ -24,6 +24,7 @@ mod figma;
 mod fleet;
 mod gcloud;
 mod git_worktree;
+mod gws;
 mod help;
 mod i18n;
 mod inbox;
@@ -263,6 +264,22 @@ enum Commands {
     /// `notes/2026-05-28_figma-plugin-architecture.md`.
     #[command(name = "figma", subcommand)]
     Figma(figma::FigmaCommand),
+
+    /// Operate the `gws` plugin kind (BWOC-EPIC-13): a read-mostly Google
+    /// Workspace integration. `auth status` reports OAuth token presence + granted
+    /// scopes + account (never the token value); `drive list`/`show` read Drive
+    /// files; `gmail search`/`show`/`labels` read mail threads + labels;
+    /// `calendar list`/`events` read calendars + events. Resources follow the
+    /// Workspace Resource Schema. Live verbs dispatch to the per-service
+    /// `gws-{drive,gmail,calendar}` plugins (sourcing the `gws-auth` foundation,
+    /// BWOC-75/76); a missing plugin exits 4. Auth resolves from the
+    /// `BWOC_GWS_TOKEN` env or `.bwoc/secrets/gws-token.json` (the CLI only checks
+    /// presence, never logs or serializes it); the read verbs exit 2 when no token
+    /// is present. `--max` caps an otherwise unbounded list. Every verb has a
+    /// `--json` twin. See `docs/en/PLUGINS.en.md` §Workspace Resource Schema +
+    /// `notes/2026-05-28_google-workspace-plugin-architecture.md`.
+    #[command(name = "gws", subcommand)]
+    Gws(gws::GwsCommand),
 
     /// Expose a local agent over the A2A (Agent2Agent) protocol — print its
     /// Agent Card or run the JSON-RPC HTTP listener (loopback-only by default;
@@ -1764,10 +1781,20 @@ struct InitArgs {
     /// Overwrite an existing workspace.toml.
     #[arg(long)]
     force: bool,
-    /// Emit JSON `{ workspace, name, version, defaults, files_created }`
-    /// instead of the human-readable creation report.
+    /// Emit JSON `{ workspace, name, version, defaults, runtime, profile,
+    /// files_created }` instead of the human-readable creation report.
     #[arg(long)]
     json: bool,
+    /// Scaffold without agent runtime/daemon provisioning — for CI,
+    /// read-only, or inspection workspaces that never spawn agents. The
+    /// workspace is still valid (`bwoc check` passes); the daemon-ephemeral
+    /// `.gitignore` patterns are simply omitted.
+    #[arg(long = "no-runtime")]
+    no_runtime: bool,
+    /// Initialize a single-agent workspace (one agent slot) instead of the
+    /// multi-agent fleet default. Scaffolds single-agent-oriented guidance.
+    #[arg(long = "single-agent")]
+    single_agent: bool,
 }
 
 impl InitArgs {
@@ -1777,6 +1804,8 @@ impl InitArgs {
             force: self.force,
             lang,
             json: self.json,
+            no_runtime: self.no_runtime,
+            single_agent: self.single_agent,
         }
     }
 }
@@ -2467,6 +2496,12 @@ fn main() -> ExitCode {
             // figma mirrors okr's dispatch — own arg structs in figma.rs;
             // exit-code convention there (0/1/2/4/255).
             let code = figma::run(sub);
+            ExitCode::from(u8::try_from(code).unwrap_or(1))
+        }
+        Some(Commands::Gws(sub)) => {
+            // gws mirrors gcloud's dispatch — own arg structs in gws.rs;
+            // exit-code convention there (0/1/2/4/255).
+            let code = gws::run(sub);
             ExitCode::from(u8::try_from(code).unwrap_or(1))
         }
         Some(Commands::A2a(sub)) => {

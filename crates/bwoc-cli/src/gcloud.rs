@@ -25,22 +25,6 @@
 //! | `project set-default --project <id>` | `gcloud-project` | **Write** to local `gcloud` config. Gated.                  |
 //! | `status`                      | both, but degrades | Combined auth + project view, never fails when plugins are absent. |
 //!
-//! ## Verb table (EPIC-9 compute slice — first write-capable verbs)
-//!
-//! | Verb                                | Needs plugin    | Gate | Notes                                          |
-//! |---|---|---|---|
-//! | `compute list [--project] [--zone]` | `gcloud-compute`| none | Read-only instance listing.                    |
-//! | `compute start --instance --zone`   | `gcloud-compute`| **operator-confirm** | Boots a VM (cost). `--yes` for headless. |
-//! | `compute stop --instance --zone`    | `gcloud-compute`| **operator-confirm** | Halts a VM (interrupts workloads). `--yes`. |
-//!
-//! The write gate lives **here in the CLI**, not the plugin (BWOC-66 §3 /
-//! BWOC-67): it shows the exact effect + the literal `gcloud` command, defaults
-//! to No, accepts `--yes` for non-interactive use, and reports a refused write
-//! as "no change" with a reason — never a bare failure. `delete` is **out of
-//! scope** for EPIC-9 (irreversible; deferred to a stronger gate). The write
-//! request carries `confirmed: true` so the plugin can refuse a gate-bypassing
-//! direct invoke.
-//!
 //! ## Auth model — operator credentials, never echoed
 //!
 //! Credential resolution shape (precedence order, decision 3 in the design note):
@@ -92,6 +76,7 @@ const EXIT_PLUGIN_ERROR: i32 = 255;
 const PLUGIN_AUTH: &str = "gcloud-auth";
 const PLUGIN_PROJECT: &str = "gcloud-project";
 const PLUGIN_COMPUTE: &str = "gcloud-compute";
+const PLUGIN_STORAGE: &str = "gcloud-storage";
 const PLUGIN_KIND: &str = "workflow";
 
 const ENV_ACCOUNT: &str = "BWOC_GCLOUD_ACCOUNT";
@@ -114,11 +99,38 @@ pub enum GcloudCommand {
     /// Project context operations (gcloud-project plugin).
     #[command(subcommand)]
     Project(ProjectCommand),
-    /// Compute instance lifecycle operations (gcloud-compute plugin, EPIC-9).
+    /// Compute instance lifecycle (gcloud-compute plugin, EPIC-9).
     #[command(subcommand)]
     Compute(ComputeCommand),
+    /// Cloud Storage objects (gcloud-storage plugin, EPIC-10).
+    #[command(subcommand)]
+    Storage(StorageCommand),
     /// Combined auth + project view. Degrades cleanly when plugins are missing.
     Status(StatusArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum StorageCommand {
+    /// List objects under a bucket (optionally a prefix).
+    List(StorageListArgs),
+    /// Stat one object (reports `exists: false` for a missing object).
+    Stat(StorageObjectArgs),
+    /// Upload a local file to an object. WRITE — T1 (new) / T2 (overwrite).
+    Put(StoragePutArgs),
+    /// Delete an object. WRITE (irreversible) — T3, typed-name confirmation.
+    Delete(StorageDeleteArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ComputeCommand {
+    /// List compute instances (optionally scoped to a zone).
+    List(ComputeListArgs),
+    /// Describe one instance.
+    Describe(ComputeTargetArgs),
+    /// Start a stopped instance. WRITE (T1) — gated behind confirmation.
+    Start(ComputeWriteArgs),
+    /// Stop a running instance. WRITE (T2) — gated behind confirmation + target echo.
+    Stop(ComputeWriteArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -205,24 +217,17 @@ pub struct ProjectSetDefaultArgs {
     json: bool,
 }
 
-#[derive(Subcommand, Debug)]
-pub enum ComputeCommand {
-    /// List compute instances the active credential can see. Read — no gate.
-    List(ComputeListArgs),
-    /// Start a stopped instance. **Write** — operator-confirm gated.
-    Start(ComputeStartArgs),
-    /// Stop a running instance. **Write** — operator-confirm gated.
-    Stop(ComputeStopArgs),
-}
-
 #[derive(Args, Debug)]
-pub struct ComputeListArgs {
-    /// Project id to list instances from (default: active gcloud project).
+pub struct StorageListArgs {
+    /// Bucket name. Required.
+    #[arg(long)]
+    bucket: String,
+    /// Restrict to keys under this prefix.
+    #[arg(long)]
+    prefix: Option<String>,
+    /// Project id. Default: the local `gcloud config` project.
     #[arg(long = "project")]
     project: Option<String>,
-    /// Restrict the listing to a single zone.
-    #[arg(long = "zone")]
-    zone: Option<String>,
     /// Workspace root.
     #[arg(long = "workspace")]
     workspace: Option<PathBuf>,
@@ -232,18 +237,39 @@ pub struct ComputeListArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct ComputeStartArgs {
-    /// Instance name to start. Required.
-    #[arg(long = "instance")]
-    instance: String,
-    /// Zone the instance lives in. Required.
-    #[arg(long = "zone")]
-    zone: String,
-    /// Project id (default: active gcloud project). Shown in the gate.
+pub struct StorageObjectArgs {
+    /// Bucket name. Required.
+    #[arg(long)]
+    bucket: String,
+    /// Object name (key within the bucket). Required.
+    #[arg(long)]
+    object: String,
+    /// Project id. Default: the local `gcloud config` project.
     #[arg(long = "project")]
     project: Option<String>,
-    /// Acknowledge the write up front (required in --json mode). An agent sets
-    /// this ONLY when the operator authorized this specific action.
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StoragePutArgs {
+    /// Bucket name. Required.
+    #[arg(long)]
+    bucket: String,
+    /// Destination object name (key within the bucket). Required.
+    #[arg(long)]
+    object: String,
+    /// Local source file to upload. Required.
+    #[arg(long = "local")]
+    local: String,
+    /// Project id. Default: the local `gcloud config` project.
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Acknowledge the write up front (required in --json mode).
     #[arg(long)]
     yes: bool,
     /// Workspace root.
@@ -255,18 +281,18 @@ pub struct ComputeStartArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct ComputeStopArgs {
-    /// Instance name to stop. Required.
-    #[arg(long = "instance")]
-    instance: String,
-    /// Zone the instance lives in. Required.
-    #[arg(long = "zone")]
-    zone: String,
-    /// Project id (default: active gcloud project). Shown in the gate.
+pub struct StorageDeleteArgs {
+    /// Bucket name. Required.
+    #[arg(long)]
+    bucket: String,
+    /// Object name (key within the bucket) to delete. Required.
+    #[arg(long)]
+    object: String,
+    /// Project id. Default: the local `gcloud config` project.
     #[arg(long = "project")]
     project: Option<String>,
-    /// Acknowledge the write up front (required in --json mode). An agent sets
-    /// this ONLY when the operator authorized this specific action.
+    /// Acknowledge the irreversible delete up front (required in --json mode;
+    /// skips the typed-name confirmation).
     #[arg(long)]
     yes: bool,
     /// Workspace root.
@@ -287,6 +313,63 @@ pub struct StatusArgs {
     json: bool,
 }
 
+#[derive(Args, Debug)]
+pub struct ComputeListArgs {
+    /// Restrict to one zone (e.g. `us-central1-a`). Default: all zones.
+    #[arg(long)]
+    zone: Option<String>,
+    /// Project id. Default: the local `gcloud config` project.
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable table.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ComputeTargetArgs {
+    /// Instance name. Required.
+    #[arg(long)]
+    instance: String,
+    /// Zone the instance is in (e.g. `us-central1-a`). Required.
+    #[arg(long)]
+    zone: String,
+    /// Project id. Default: the local `gcloud config` project.
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ComputeWriteArgs {
+    /// Instance name to start/stop. Required.
+    #[arg(long)]
+    instance: String,
+    /// Zone the instance is in (e.g. `us-central1-a`). Required.
+    #[arg(long)]
+    zone: String,
+    /// Project id. Default: the local `gcloud config` project (echoed in the prompt).
+    #[arg(long = "project")]
+    project: Option<String>,
+    /// Acknowledge the write up front (required in --json mode).
+    #[arg(long)]
+    yes: bool,
+    /// Workspace root.
+    #[arg(long = "workspace")]
+    workspace: Option<PathBuf>,
+    /// Emit the structured envelope instead of the human-readable summary.
+    #[arg(long)]
+    json: bool,
+}
+
 /// Dispatch a parsed `GcloudCommand`. Returns the process exit code.
 pub fn run(cmd: GcloudCommand) -> i32 {
     match cmd {
@@ -296,8 +379,13 @@ pub fn run(cmd: GcloudCommand) -> i32 {
         GcloudCommand::Project(ProjectCommand::Show(a)) => run_project_show(a),
         GcloudCommand::Project(ProjectCommand::SetDefault(a)) => run_project_set_default(a),
         GcloudCommand::Compute(ComputeCommand::List(a)) => run_compute_list(a),
-        GcloudCommand::Compute(ComputeCommand::Start(a)) => run_compute_start(a),
-        GcloudCommand::Compute(ComputeCommand::Stop(a)) => run_compute_stop(a),
+        GcloudCommand::Compute(ComputeCommand::Describe(a)) => run_compute_describe(a),
+        GcloudCommand::Compute(ComputeCommand::Start(a)) => run_compute_lifecycle(a, "start"),
+        GcloudCommand::Compute(ComputeCommand::Stop(a)) => run_compute_lifecycle(a, "stop"),
+        GcloudCommand::Storage(StorageCommand::List(a)) => run_storage_list(a),
+        GcloudCommand::Storage(StorageCommand::Stat(a)) => run_storage_stat(a),
+        GcloudCommand::Storage(StorageCommand::Put(a)) => run_storage_put(a),
+        GcloudCommand::Storage(StorageCommand::Delete(a)) => run_storage_delete(a),
         GcloudCommand::Status(a) => run_combined_status(a),
     }
 }
@@ -663,38 +751,87 @@ fn project_set_default_request(
 fn compute_list_request(
     workspace: &Path,
     plugin_dir: &Path,
-    project: Option<&str>,
     zone: Option<&str>,
+    project: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
         "operation": "list",
         "workspace": workspace.display().to_string(),
         "plugin_dir": plugin_dir.display().to_string(),
-        "project": project,
         "zone": zone,
+        "project": project,
     })
 }
 
-/// Write request for `start` / `stop`. Carries `confirmed: true` — the
-/// CLI-set marker the plugin's write verbs check for, so a direct plugin
-/// invoke that bypasses the CLI gate can be refused (BWOC-66 §3 / BWOC-67).
-/// The CLI only builds this after the operator-confirm gate has passed.
-fn compute_write_request(
+fn compute_target_request(
+    operation: &str,
     workspace: &Path,
     plugin_dir: &Path,
-    verb: &str,
     instance: &str,
     zone: &str,
     project: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
-        "operation": verb,
+        "operation": operation,
         "workspace": workspace.display().to_string(),
         "plugin_dir": plugin_dir.display().to_string(),
         "instance": instance,
         "zone": zone,
         "project": project,
-        "confirmed": true,
+    })
+}
+
+fn storage_list_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    bucket: &str,
+    prefix: Option<&str>,
+    project: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "list",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "bucket": bucket,
+        "prefix": prefix,
+        "project": project,
+    })
+}
+
+fn storage_object_request(
+    operation: &str,
+    workspace: &Path,
+    plugin_dir: &Path,
+    bucket: &str,
+    object: &str,
+    project: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": operation,
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "bucket": bucket,
+        "object": object,
+        "project": project,
+    })
+}
+
+fn storage_put_request(
+    workspace: &Path,
+    plugin_dir: &Path,
+    bucket: &str,
+    object: &str,
+    local: &str,
+    project: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operation": "put",
+        "workspace": workspace.display().to_string(),
+        "plugin_dir": plugin_dir.display().to_string(),
+        "bucket": bucket,
+        "object": object,
+        "local": local,
+        "project": project,
     })
 }
 
@@ -730,6 +867,19 @@ fn confirm(prompt: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// T3 confirmation (irreversible writes): the operator must re-type `expected`
+/// exactly — a bare `y` is not enough. The friction is proportionate to "gone
+/// forever". The full prompt (including what to type) is the caller's.
+fn confirm_typed(expected: &str, prompt: &str) -> bool {
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    line.trim() == expected
+}
+
 fn emit_error_json(verb: &str, code: &str, message: &str) {
     let value = serde_json::json!({
         "ok": false,
@@ -757,14 +907,13 @@ fn is_valid_project_id(id: &str) -> bool {
         .all(|&b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-/// GCE instance name: 1–30 chars (RFC1035-ish; gcloud caps at 63 but the
-/// shorter cap is harmless here), lowercase letter first, then lowercase
-/// letters / digits / hyphens, not ending in a hyphen. Local pre-check — its
-/// primary job is to reject `-`-leading option-injection before we ever spawn
-/// the plugin; the live API re-validates.
-fn is_valid_instance_name(name: &str) -> bool {
-    let b = name.as_bytes();
-    if !(1..=63).contains(&b.len()) {
+/// GCE resource names (instance, zone): RFC 1035 label — 1–63 chars, lowercase
+/// letter first, then lowercase/digit/hyphen, no trailing hyphen. Rejects any
+/// `-`-leading value before it can reach `gcloud` (the `--` guard in the plugin
+/// is the second layer). Used for `--instance` and `--zone`.
+fn is_valid_gce_name(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.is_empty() || b.len() > 63 {
         return false;
     }
     if !b[0].is_ascii_lowercase() {
@@ -777,102 +926,28 @@ fn is_valid_instance_name(name: &str) -> bool {
         .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
-/// GCE zone: lowercase letter first, lowercase letters/digits/hyphens, not
-/// ending in a hyphen, 3–63 chars (e.g. `us-central1-a`). Same `-`-leading
-/// injection guard as the instance/project pre-checks.
-fn is_valid_zone(zone: &str) -> bool {
-    let b = zone.as_bytes();
+/// GCS bucket names (looser pre-check than the full GCS rules): 3–63 chars,
+/// lowercase letters/digits/hyphens/underscores/dots, starting and ending
+/// alphanumeric. Rejects junk + `-`-leading values before dispatch.
+fn is_valid_bucket_name(s: &str) -> bool {
+    let b = s.as_bytes();
     if !(3..=63).contains(&b.len()) {
         return false;
     }
-    if !b[0].is_ascii_lowercase() {
-        return false;
-    }
-    if *b.last().unwrap() == b'-' {
+    let alnum = |c: u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+    if !alnum(b[0]) || !alnum(*b.last().unwrap()) {
         return false;
     }
     b.iter()
-        .all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+        .all(|&c| alnum(c) || c == b'-' || c == b'_' || c == b'.')
 }
 
-/// The literal `gcloud` command a compute write verb will run, shown verbatim
-/// in the confirmation gate. The user-supplied positional (instance) goes after
-/// the `--` separator so it can never be parsed as a flag; flag values use the
-/// `--flag=value` form for the same reason (#92 / #91 option-injection guard).
-fn gcloud_compute_command(verb: &str, instance: &str, zone: &str, project: Option<&str>) -> String {
-    let mut s = format!("gcloud compute instances {verb} --zone={zone}");
-    if let Some(p) = project {
-        s.push_str(&format!(" --project={p}"));
-    }
-    s.push_str(&format!(" -- {instance}"));
-    s
-}
-
-/// One-line description of the remote effect, surfaced in the gate so the
-/// operator confirms against the consequence, not just the verb name.
-fn compute_write_effect(verb: &str) -> &'static str {
-    match verb {
-        "start" => "boots the instance (incurs compute cost)",
-        "stop" => "halts the instance (interrupts running workloads)",
-        _ => "changes instance state",
-    }
-}
-
-/// Outcome of the operator-confirm gate. Pure so it is unit-testable away from
-/// the stdin/stderr of the actual prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GateOutcome {
-    /// Confirmed (or `--yes`) — perform the write.
-    Proceed,
-    /// `--json` cannot prompt and `--yes` was not passed.
-    BlockedJsonNeedsYes,
-    /// Interactive operator answered No (or stdin was unreadable).
-    Declined,
-}
-
-/// Decide the gate outcome. `interactive_confirm` is the y/N answer when a
-/// prompt was shown (`Some`), or `None` when no prompt happened (`--yes` or
-/// `--json` mode).
-fn gate_decision(yes: bool, json: bool, interactive_confirm: Option<bool>) -> GateOutcome {
-    if yes {
-        return GateOutcome::Proceed;
-    }
-    if json {
-        return GateOutcome::BlockedJsonNeedsYes;
-    }
-    match interactive_confirm {
-        Some(true) => GateOutcome::Proceed,
-        _ => GateOutcome::Declined,
-    }
-}
-
-/// Report a write that did not happen — "no change" with a reason, never a bare
-/// failure (BWOC-67 gate contract point 4 / BWOC-66 §3).
-fn emit_compute_no_change(
-    label: &str,
-    instance: &str,
-    zone: &str,
-    code: &str,
-    reason: &str,
-    json: bool,
-) {
-    if json {
-        let value = serde_json::json!({
-            "ok": false,
-            "verb": label,
-            "changed": false,
-            "instance": instance,
-            "zone": zone,
-            "error": code,
-            "reason": reason,
-        });
-        print_json(&value);
-    } else {
-        eprintln!(
-            "bwoc gcloud {label}: no change — {reason} \
-             (instance '{instance}' in zone '{zone}' unchanged)"
-        );
-    }
+/// GCS object names are permissive (almost any UTF-8), so we guard only the
+/// shapes that would break the request or be unsafe: empty, > 1024 bytes,
+/// control characters, or a leading `-` (option-injection shape — rejected at
+/// the door even though the plugin's `--` guard is the second layer).
+fn is_valid_object_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 1024 && !s.starts_with('-') && !s.chars().any(|c| c.is_control())
 }
 
 /// Stub-error envelope for the missing-plugin path. Names the exact plugin and
@@ -1216,9 +1291,47 @@ fn run_project_set_default(args: ProjectSetDefaultArgs) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Compute verbs (EPIC-9) — `list` reads (no gate); `start`/`stop` write
-// (operator-confirm gated in the CLI, never the plugin).
+// Compute (EPIC-9) — instance lifecycle. Reads are T0; start=T1, stop=T2.
 // ---------------------------------------------------------------------------
+
+/// Validate the compute target before dispatch: instance + zone are RFC 1035
+/// labels; an explicit project is a valid project id. Pre-check so the plugin
+/// is never spawned for obviously-bad input (the `--` guard is the second layer).
+fn validate_compute_target(
+    instance: &str,
+    zone: &str,
+    project: Option<&str>,
+) -> Result<(), String> {
+    if !is_valid_gce_name(instance) {
+        return Err(format!(
+            "invalid instance name '{instance}' — expected an RFC 1035 label \
+             (1–63 chars, lowercase letter first, then [a-z0-9-], no trailing hyphen)"
+        ));
+    }
+    if !is_valid_gce_name(zone) {
+        return Err(format!(
+            "invalid zone '{zone}' — expected an RFC 1035 label (e.g. us-central1-a)"
+        ));
+    }
+    if let Some(p) = project {
+        if !is_valid_project_id(p) {
+            return Err(format!(
+                "invalid project id '{p}' — 6–30 chars, lowercase letters/digits/hyphens, \
+                 starting with a letter"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// How the project is shown in a confirmation prompt — the explicit value, or a
+/// clear marker that the local `gcloud config` default will be used.
+fn project_echo(project: Option<&str>) -> String {
+    match project {
+        Some(p) => format!("project '{p}'"),
+        None => "project (gcloud config default)".to_string(),
+    }
+}
 
 fn run_compute_list(args: ComputeListArgs) -> i32 {
     let root = match resolve_workspace(args.workspace) {
@@ -1228,28 +1341,23 @@ fn run_compute_list(args: ComputeListArgs) -> i32 {
             return EXIT_USAGE;
         }
     };
-    if let Some(p) = &args.project {
-        if !is_valid_project_id(p) {
-            let msg = format!(
-                "invalid project id '{p}' — expected 6–30 chars, lowercase \
-                 letters/digits/hyphens, starting with a letter"
-            );
+    if let Some(z) = &args.zone {
+        if !is_valid_gce_name(z) {
+            let msg =
+                format!("invalid zone '{z}' — expected an RFC 1035 label (e.g. us-central1-a)");
             if args.json {
-                emit_error_json("compute list", "bad_project_id", &msg);
+                emit_error_json("compute list", "bad_zone", &msg);
             } else {
                 eprintln!("bwoc gcloud compute list: {msg}");
             }
             return EXIT_USAGE;
         }
     }
-    if let Some(z) = &args.zone {
-        if !is_valid_zone(z) {
-            let msg = format!(
-                "invalid zone '{z}' — expected lowercase letters/digits/hyphens, \
-                 starting with a letter (e.g. us-central1-a)"
-            );
+    if let Some(p) = &args.project {
+        if !is_valid_project_id(p) {
+            let msg = format!("invalid project id '{p}'");
             if args.json {
-                emit_error_json("compute list", "bad_zone", &msg);
+                emit_error_json("compute list", "bad_project_id", &msg);
             } else {
                 eprintln!("bwoc gcloud compute list: {msg}");
             }
@@ -1263,36 +1371,33 @@ fn run_compute_list(args: ComputeListArgs) -> i32 {
     let request = compute_list_request(
         &root,
         &plugin.dir,
-        args.project.as_deref(),
         args.zone.as_deref(),
+        args.project.as_deref(),
     );
     match invoke_plugin(&plugin, &root, &request) {
         Ok(value) => {
             if args.json {
-                if print_json(&value) {
+                return if print_json(&value) {
                     EXIT_OK
                 } else {
                     EXIT_PLUGIN_ERROR
-                }
-            } else {
-                // The plugin returns gcloud's JSON, surfaced through; accept
-                // either a `{ instances: [...] }` envelope or a bare array.
-                let instances = value
-                    .get("instances")
-                    .and_then(|v| v.as_array())
-                    .or_else(|| value.as_array());
-                let total = instances.map(|a| a.len()).unwrap_or(0);
-                println!("bwoc gcloud compute list: {total} instance(s)");
-                if let Some(arr) = instances {
-                    for inst in arr {
-                        let name = inst.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                        let zone = inst.get("zone").and_then(|v| v.as_str()).unwrap_or("?");
-                        let status = inst.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                        println!("  {name} [{zone}] — {status}");
-                    }
-                }
-                EXIT_OK
+                };
             }
+            let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            println!("bwoc gcloud compute list: {total} instance(s)");
+            if let Some(arr) = value.get("instances").and_then(|v| v.as_array()) {
+                for i in arr {
+                    let name = i.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let zone = i.get("zone").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = i.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+                    let mt = i
+                        .get("machine_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    println!("  {name} [{status}] {zone} ({mt})");
+                }
+            }
+            EXIT_OK
         }
         Err(e) => {
             if args.json {
@@ -1305,164 +1410,504 @@ fn run_compute_list(args: ComputeListArgs) -> i32 {
     }
 }
 
-fn run_compute_start(args: ComputeStartArgs) -> i32 {
-    run_compute_write(
-        "start",
+fn run_compute_describe(args: ComputeTargetArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud compute describe: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if let Err(msg) = validate_compute_target(&args.instance, &args.zone, args.project.as_deref()) {
+        if args.json {
+            emit_error_json("compute describe", "bad_target", &msg);
+        } else {
+            eprintln!("bwoc gcloud compute describe: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    let plugin = match require_plugin(&root, PLUGIN_COMPUTE, "compute describe", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = compute_target_request(
+        "describe",
+        &root,
+        &plugin.dir,
         &args.instance,
         &args.zone,
         args.project.as_deref(),
-        args.yes,
-        args.json,
-        args.workspace,
-    )
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                return if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                };
+            }
+            let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let zone = value.get("zone").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            let mt = value
+                .get("machine_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            println!("bwoc gcloud compute describe: {name} [{status}] {zone} ({mt})");
+            EXIT_OK
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("compute describe", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud compute describe: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
 }
 
-fn run_compute_stop(args: ComputeStopArgs) -> i32 {
-    run_compute_write(
-        "stop",
-        &args.instance,
-        &args.zone,
-        args.project.as_deref(),
-        args.yes,
-        args.json,
-        args.workspace,
-    )
-}
-
-/// Shared body for the two gated write verbs. The gate lives here (the operator
-/// boundary), not in the plugin: show the exact effect + the literal `gcloud`
-/// command, default No, `--yes` to bypass, refused → "no change" with a reason.
-fn run_compute_write(
-    verb: &str,
-    instance: &str,
-    zone: &str,
-    project: Option<&str>,
-    yes: bool,
-    json: bool,
-    workspace: Option<PathBuf>,
-) -> i32 {
+/// `start` (T1) / `stop` (T2). Both are confirmation-gated (`--json` ⇒ `--yes`);
+/// the prompt echoes the resolved `project / zone / instance` so the operator
+/// confirms *which* resource — the dominant compute footgun is wrong-target.
+fn run_compute_lifecycle(args: ComputeWriteArgs, verb: &str) -> i32 {
     let label = format!("compute {verb}");
-    let root = match resolve_workspace(workspace) {
+    let root = match resolve_workspace(args.workspace) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("bwoc gcloud {label}: {e}");
             return EXIT_USAGE;
         }
     };
-    if !is_valid_instance_name(instance) {
-        let msg = format!(
-            "invalid instance name '{instance}' — expected 1–63 chars, lowercase \
-             letter first, then lowercase letters/digits/hyphens, no trailing hyphen"
-        );
-        if json {
-            emit_error_json(&label, "bad_instance", &msg);
+    if let Err(msg) = validate_compute_target(&args.instance, &args.zone, args.project.as_deref()) {
+        if args.json {
+            emit_error_json(&label, "bad_target", &msg);
         } else {
             eprintln!("bwoc gcloud {label}: {msg}");
         }
         return EXIT_USAGE;
     }
-    if !is_valid_zone(zone) {
-        let msg = format!(
-            "invalid zone '{zone}' — expected lowercase letters/digits/hyphens, \
-             starting with a letter (e.g. us-central1-a)"
+
+    // Write gate (T1/T2): echo the full resolved target in the prompt.
+    if !args.yes {
+        if json_write_blocked(args.json, args.yes) {
+            eprintln!("bwoc gcloud {label}: --json requires --yes (a write needs explicit ack)");
+            return EXIT_USAGE;
+        }
+        let target = format!(
+            "instance '{}' in zone '{}' ({})",
+            args.instance,
+            args.zone,
+            project_echo(args.project.as_deref())
         );
-        if json {
-            emit_error_json(&label, "bad_zone", &msg);
+        let prompt = if verb == "stop" {
+            format!(
+                "Stop {target}? This interrupts any running workload (reversible with `start`)."
+            )
         } else {
-            eprintln!("bwoc gcloud {label}: {msg}");
-        }
-        return EXIT_USAGE;
-    }
-    if let Some(p) = project {
-        if !is_valid_project_id(p) {
-            let msg = format!(
-                "invalid project id '{p}' — expected 6–30 chars, lowercase \
-                 letters/digits/hyphens, starting with a letter"
-            );
-            if json {
-                emit_error_json(&label, "bad_project_id", &msg);
-            } else {
-                eprintln!("bwoc gcloud {label}: {msg}");
-            }
+            format!("Start {target}?")
+        };
+        if !confirm(&prompt) {
+            eprintln!("bwoc gcloud {label}: aborted (no write performed)");
             return EXIT_USAGE;
         }
     }
 
-    let command = gcloud_compute_command(verb, instance, zone, project);
-
-    // Operator-confirm gate. Show the exact effect + literal command, then
-    // prompt (interactive only). `--json` cannot prompt, so it needs `--yes`.
-    let interactive_confirm = if !yes && !json {
-        eprintln!("bwoc gcloud {label}: operator confirmation required (write verb).");
-        eprintln!("  instance: {instance}");
-        eprintln!("  zone:     {zone}");
-        if let Some(p) = project {
-            eprintln!("  project:  {p}");
-        }
-        eprintln!("  effect:   {}", compute_write_effect(verb));
-        eprintln!("  command:  {command}");
-        Some(confirm(&format!(
-            "Proceed to {verb} instance '{instance}' in zone '{zone}'?"
-        )))
-    } else {
-        None
-    };
-
-    match gate_decision(yes, json, interactive_confirm) {
-        GateOutcome::BlockedJsonNeedsYes => {
-            emit_compute_no_change(
-                &label,
-                instance,
-                zone,
-                "confirmation_required",
-                "--json mode cannot prompt; pass --yes only when the operator \
-                 authorized this specific action",
-                json,
-            );
-            return EXIT_USAGE;
-        }
-        GateOutcome::Declined => {
-            emit_compute_no_change(
-                &label,
-                instance,
-                zone,
-                "declined",
-                "operator declined confirmation",
-                json,
-            );
-            return EXIT_USAGE;
-        }
-        GateOutcome::Proceed => {}
-    }
-
-    let plugin = match require_plugin(&root, PLUGIN_COMPUTE, &label, json) {
+    let plugin = match require_plugin(&root, PLUGIN_COMPUTE, &label, args.json) {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let request = compute_write_request(&root, &plugin.dir, verb, instance, zone, project);
+    let request = compute_target_request(
+        verb,
+        &root,
+        &plugin.dir,
+        &args.instance,
+        &args.zone,
+        args.project.as_deref(),
+    );
     match invoke_plugin(&plugin, &root, &request) {
         Ok(value) => {
-            if json {
-                if print_json(&value) {
+            if args.json {
+                return if print_json(&value) {
                     EXIT_OK
                 } else {
                     EXIT_PLUGIN_ERROR
-                }
-            } else {
-                let status = value
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| value.get("current_status").and_then(|v| v.as_str()))
-                    .unwrap_or("done");
-                println!("bwoc gcloud {label}: instance '{instance}' in zone '{zone}' — {status}");
-                EXIT_OK
+                };
             }
+            let inst = value
+                .get("instance")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&args.instance);
+            let zone = value
+                .get("zone")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&args.zone);
+            let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("?");
+            println!("bwoc gcloud {label}: {inst} in {zone} → status {status}");
+            EXIT_OK
         }
         Err(e) => {
-            if json {
+            if args.json {
                 emit_error_json(&label, "plugin_error", &e);
             } else {
                 eprintln!("bwoc gcloud {label}: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Storage (EPIC-10) — object operations. Reads T0; put T1/T2 (stat-first),
+// delete T3 (typed-name confirm, irreversible).
+// ---------------------------------------------------------------------------
+
+fn validate_storage_object(
+    bucket: &str,
+    object: &str,
+    project: Option<&str>,
+) -> Result<(), String> {
+    if !is_valid_bucket_name(bucket) {
+        return Err(format!(
+            "invalid bucket '{bucket}' — 3–63 chars, lowercase letters/digits/._- , \
+             starting and ending alphanumeric"
+        ));
+    }
+    if !is_valid_object_name(object) {
+        return Err(format!(
+            "invalid object name '{object}' — must be non-empty, ≤1024 bytes, no control \
+             chars, and not start with '-'"
+        ));
+    }
+    if let Some(p) = project {
+        if !is_valid_project_id(p) {
+            return Err(format!("invalid project id '{p}'"));
+        }
+    }
+    Ok(())
+}
+
+fn run_storage_list(args: StorageListArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud storage list: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if !is_valid_bucket_name(&args.bucket) {
+        let msg = format!("invalid bucket '{}'", args.bucket);
+        if args.json {
+            emit_error_json("storage list", "bad_bucket", &msg);
+        } else {
+            eprintln!("bwoc gcloud storage list: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    if let Some(p) = &args.project {
+        if !is_valid_project_id(p) {
+            let msg = format!("invalid project id '{p}'");
+            if args.json {
+                emit_error_json("storage list", "bad_project_id", &msg);
+            } else {
+                eprintln!("bwoc gcloud storage list: {msg}");
+            }
+            return EXIT_USAGE;
+        }
+    }
+    let plugin = match require_plugin(&root, PLUGIN_STORAGE, "storage list", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = storage_list_request(
+        &root,
+        &plugin.dir,
+        &args.bucket,
+        args.prefix.as_deref(),
+        args.project.as_deref(),
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                return if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                };
+            }
+            let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+            println!(
+                "bwoc gcloud storage list: {total} object(s) under gs://{}",
+                args.bucket
+            );
+            if let Some(arr) = value.get("objects").and_then(|v| v.as_array()) {
+                for o in arr {
+                    let url = o.get("url").and_then(|v| v.as_str()).unwrap_or("?");
+                    println!("  {url}");
+                }
+            }
+            EXIT_OK
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("storage list", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud storage list: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+fn run_storage_stat(args: StorageObjectArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud storage stat: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if let Err(msg) = validate_storage_object(&args.bucket, &args.object, args.project.as_deref()) {
+        if args.json {
+            emit_error_json("storage stat", "bad_target", &msg);
+        } else {
+            eprintln!("bwoc gcloud storage stat: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    let plugin = match require_plugin(&root, PLUGIN_STORAGE, "storage stat", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = storage_object_request(
+        "stat",
+        &root,
+        &plugin.dir,
+        &args.bucket,
+        &args.object,
+        args.project.as_deref(),
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                return if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                };
+            }
+            let exists = value
+                .get("exists")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if exists {
+                let size = value
+                    .get("size")
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into());
+                println!(
+                    "bwoc gcloud storage stat: gs://{}/{} exists ({size} bytes)",
+                    args.bucket, args.object
+                );
+            } else {
+                println!(
+                    "bwoc gcloud storage stat: gs://{}/{} does not exist",
+                    args.bucket, args.object
+                );
+            }
+            EXIT_OK
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("storage stat", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud storage stat: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+fn run_storage_put(args: StoragePutArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud storage put: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if let Err(msg) = validate_storage_object(&args.bucket, &args.object, args.project.as_deref()) {
+        if args.json {
+            emit_error_json("storage put", "bad_target", &msg);
+        } else {
+            eprintln!("bwoc gcloud storage put: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    if !Path::new(&args.local).is_file() {
+        let msg = format!("local source '{}' not found", args.local);
+        if args.json {
+            emit_error_json("storage put", "bad_source", &msg);
+        } else {
+            eprintln!("bwoc gcloud storage put: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+    let plugin = match require_plugin(&root, PLUGIN_STORAGE, "storage put", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+
+    // Write gate — stat-first: T1 for a new object, T2 (echo existing) on overwrite.
+    if !args.yes {
+        if json_write_blocked(args.json, args.yes) {
+            eprintln!(
+                "bwoc gcloud storage put: --json requires --yes (a write needs explicit ack)"
+            );
+            return EXIT_USAGE;
+        }
+        let stat = invoke_plugin(
+            &plugin,
+            &root,
+            &storage_object_request(
+                "stat",
+                &root,
+                &plugin.dir,
+                &args.bucket,
+                &args.object,
+                args.project.as_deref(),
+            ),
+        )
+        .ok();
+        let exists = stat
+            .as_ref()
+            .and_then(|v| v.get("exists"))
+            .and_then(|e| e.as_bool());
+        let dest = format!("gs://{}/{}", args.bucket, args.object);
+        let prompt = match exists {
+            Some(true) => {
+                let size = stat
+                    .as_ref()
+                    .and_then(|v| v.get("size"))
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into());
+                format!(
+                    "OVERWRITE {dest} (existing object, {size} bytes) with '{}'? This replaces the current bytes.",
+                    args.local
+                )
+            }
+            Some(false) => format!("Upload '{}' to {dest} (new object)?", args.local),
+            None => format!(
+                "Upload '{}' to {dest}? (could not check for an existing object — this may overwrite)",
+                args.local
+            ),
+        };
+        if !confirm(&prompt) {
+            eprintln!("bwoc gcloud storage put: aborted (no write performed)");
+            return EXIT_USAGE;
+        }
+    }
+
+    let request = storage_put_request(
+        &root,
+        &plugin.dir,
+        &args.bucket,
+        &args.object,
+        &args.local,
+        args.project.as_deref(),
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                return if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                };
+            }
+            println!(
+                "bwoc gcloud storage put: uploaded '{}' → gs://{}/{}",
+                args.local, args.bucket, args.object
+            );
+            EXIT_OK
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("storage put", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud storage put: {e}");
+            }
+            EXIT_PLUGIN_ERROR
+        }
+    }
+}
+
+fn run_storage_delete(args: StorageDeleteArgs) -> i32 {
+    let root = match resolve_workspace(args.workspace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("bwoc gcloud storage delete: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    if let Err(msg) = validate_storage_object(&args.bucket, &args.object, args.project.as_deref()) {
+        if args.json {
+            emit_error_json("storage delete", "bad_target", &msg);
+        } else {
+            eprintln!("bwoc gcloud storage delete: {msg}");
+        }
+        return EXIT_USAGE;
+    }
+
+    // T3 write gate — irreversible: require the operator to re-type the path.
+    let target = format!("gs://{}/{}", args.bucket, args.object);
+    if !args.yes {
+        if json_write_blocked(args.json, args.yes) {
+            eprintln!(
+                "bwoc gcloud storage delete: --json requires --yes (an irreversible delete needs explicit ack)"
+            );
+            return EXIT_USAGE;
+        }
+        let prompt = format!(
+            "This PERMANENTLY deletes {target} (irreversible unless the bucket has versioning).\n\
+             Re-type the full path to confirm: "
+        );
+        if !confirm_typed(&target, &prompt) {
+            eprintln!("bwoc gcloud storage delete: aborted (path did not match; nothing deleted)");
+            return EXIT_USAGE;
+        }
+    }
+
+    let plugin = match require_plugin(&root, PLUGIN_STORAGE, "storage delete", args.json) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let request = storage_object_request(
+        "delete",
+        &root,
+        &plugin.dir,
+        &args.bucket,
+        &args.object,
+        args.project.as_deref(),
+    );
+    match invoke_plugin(&plugin, &root, &request) {
+        Ok(value) => {
+            if args.json {
+                return if print_json(&value) {
+                    EXIT_OK
+                } else {
+                    EXIT_PLUGIN_ERROR
+                };
+            }
+            println!("bwoc gcloud storage delete: deleted {target}");
+            EXIT_OK
+        }
+        Err(e) => {
+            if args.json {
+                emit_error_json("storage delete", "plugin_error", &e);
+            } else {
+                eprintln!("bwoc gcloud storage delete: {e}");
             }
             EXIT_PLUGIN_ERROR
         }
@@ -1696,6 +2141,150 @@ mod tests {
         assert!(!is_valid_project_id(&"a".repeat(31)));
     }
 
+    // --- compute (EPIC-9) --------------------------------------------------
+
+    #[test]
+    fn parses_compute_list_describe() {
+        match parse(&["compute", "list", "--zone", "us-central1-a", "--json"]).unwrap() {
+            GcloudCommand::Compute(ComputeCommand::List(a)) => {
+                assert_eq!(a.zone.as_deref(), Some("us-central1-a"));
+                assert!(a.json);
+            }
+            other => panic!("expected Compute::List, got {other:?}"),
+        }
+        match parse(&[
+            "compute",
+            "describe",
+            "--instance",
+            "web-1",
+            "--zone",
+            "us-central1-a",
+        ])
+        .unwrap()
+        {
+            GcloudCommand::Compute(ComputeCommand::Describe(a)) => {
+                assert_eq!(a.instance, "web-1");
+                assert_eq!(a.zone, "us-central1-a");
+            }
+            other => panic!("expected Compute::Describe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_compute_start_stop() {
+        match parse(&[
+            "compute",
+            "stop",
+            "--instance",
+            "web-1",
+            "--zone",
+            "us-central1-a",
+            "--yes",
+        ])
+        .unwrap()
+        {
+            GcloudCommand::Compute(ComputeCommand::Stop(a)) => {
+                assert_eq!(a.instance, "web-1");
+                assert!(a.yes);
+            }
+            other => panic!("expected Compute::Stop, got {other:?}"),
+        }
+        assert!(matches!(
+            parse(&["compute", "start", "--instance", "web-1", "--zone", "z-a-1"]).unwrap(),
+            GcloudCommand::Compute(ComputeCommand::Start(_))
+        ));
+    }
+
+    #[test]
+    fn compute_write_verbs_require_instance_and_zone() {
+        assert!(parse(&["compute", "stop", "--zone", "us-central1-a"]).is_err());
+        assert!(parse(&["compute", "stop", "--instance", "web-1"]).is_err());
+        assert!(parse(&["compute", "describe", "--instance", "web-1"]).is_err());
+    }
+
+    #[test]
+    fn gce_name_validation() {
+        assert!(is_valid_gce_name("web-1"));
+        assert!(is_valid_gce_name("us-central1-a"));
+        assert!(is_valid_gce_name("a"));
+        assert!(!is_valid_gce_name("")); // empty
+        assert!(!is_valid_gce_name("1web")); // digit first
+        assert!(!is_valid_gce_name("-web")); // hyphen first (option-injection shape)
+        assert!(!is_valid_gce_name("web-")); // trailing hyphen
+        assert!(!is_valid_gce_name("Web")); // uppercase
+        assert!(!is_valid_gce_name("web_1")); // underscore
+        assert!(!is_valid_gce_name(&"a".repeat(64))); // > 63
+    }
+
+    #[test]
+    fn project_echo_marks_config_default() {
+        assert_eq!(project_echo(Some("my-proj-1")), "project 'my-proj-1'");
+        assert_eq!(project_echo(None), "project (gcloud config default)");
+    }
+
+    // --- storage (EPIC-10) -------------------------------------------------
+
+    #[test]
+    fn parses_storage_verbs() {
+        match parse(&["storage", "list", "--bucket", "my-bkt", "--prefix", "logs/"]).unwrap() {
+            GcloudCommand::Storage(StorageCommand::List(a)) => {
+                assert_eq!(a.bucket, "my-bkt");
+                assert_eq!(a.prefix.as_deref(), Some("logs/"));
+            }
+            other => panic!("expected Storage::List, got {other:?}"),
+        }
+        match parse(&["storage", "stat", "--bucket", "b", "--object", "a.txt"]).unwrap() {
+            GcloudCommand::Storage(StorageCommand::Stat(a)) => assert_eq!(a.object, "a.txt"),
+            other => panic!("expected Storage::Stat, got {other:?}"),
+        }
+        match parse(&[
+            "storage", "put", "--bucket", "b", "--object", "a.txt", "--local", "./a.txt", "--yes",
+        ])
+        .unwrap()
+        {
+            GcloudCommand::Storage(StorageCommand::Put(a)) => {
+                assert_eq!(a.local, "./a.txt");
+                assert!(a.yes);
+            }
+            other => panic!("expected Storage::Put, got {other:?}"),
+        }
+        assert!(matches!(
+            parse(&["storage", "delete", "--bucket", "b", "--object", "a.txt"]).unwrap(),
+            GcloudCommand::Storage(StorageCommand::Delete(_))
+        ));
+    }
+
+    #[test]
+    fn storage_verbs_require_their_flags() {
+        assert!(parse(&["storage", "list"]).is_err()); // no --bucket
+        assert!(parse(&["storage", "stat", "--bucket", "b"]).is_err()); // no --object
+        assert!(parse(&["storage", "put", "--bucket", "b", "--object", "a"]).is_err()); // no --local
+        assert!(parse(&["storage", "delete", "--bucket", "b"]).is_err()); // no --object
+    }
+
+    #[test]
+    fn bucket_name_validation() {
+        assert!(is_valid_bucket_name("my-bucket"));
+        assert!(is_valid_bucket_name("a1b"));
+        assert!(is_valid_bucket_name("my.bucket_name-1"));
+        assert!(!is_valid_bucket_name("ab")); // < 3
+        assert!(!is_valid_bucket_name("-startshyphen"));
+        assert!(!is_valid_bucket_name("endshyphen-"));
+        assert!(!is_valid_bucket_name("UPPER"));
+        assert!(!is_valid_bucket_name(&"a".repeat(64))); // > 63
+    }
+
+    #[test]
+    fn object_name_validation() {
+        assert!(is_valid_object_name("a.txt"));
+        assert!(is_valid_object_name("logs/2026/app.log")); // slashes ok
+        assert!(is_valid_object_name("name with spaces.txt")); // spaces ok in GCS
+        assert!(!is_valid_object_name("")); // empty
+        assert!(!is_valid_object_name("-leading")); // option-injection shape
+        assert!(!is_valid_object_name("has\nnewline")); // control char
+        assert!(!is_valid_object_name(&"a".repeat(1025))); // > 1024
+    }
+
     // --- auth-shape probe (file + env, no network) -------------------------
 
     #[test]
@@ -1813,188 +2402,6 @@ mod tests {
         assert!(json_write_blocked(true, false));
         assert!(!json_write_blocked(true, true));
         assert!(!json_write_blocked(false, false));
-    }
-
-    // --- compute: arg parsing ---------------------------------------------
-
-    #[test]
-    fn parses_compute_list() {
-        match parse(&["compute", "list", "--zone", "us-central1-a", "--json"]).unwrap() {
-            GcloudCommand::Compute(ComputeCommand::List(a)) => {
-                assert_eq!(a.zone.as_deref(), Some("us-central1-a"));
-                assert!(a.json);
-            }
-            other => panic!("expected Compute::List, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parses_compute_start_and_stop() {
-        match parse(&[
-            "compute",
-            "start",
-            "--instance",
-            "web-1",
-            "--zone",
-            "us-central1-a",
-            "--yes",
-        ])
-        .unwrap()
-        {
-            GcloudCommand::Compute(ComputeCommand::Start(a)) => {
-                assert_eq!(a.instance, "web-1");
-                assert_eq!(a.zone, "us-central1-a");
-                assert!(a.yes);
-            }
-            other => panic!("expected Compute::Start, got {other:?}"),
-        }
-        match parse(&[
-            "compute",
-            "stop",
-            "--instance",
-            "web-1",
-            "--zone",
-            "us-central1-a",
-        ])
-        .unwrap()
-        {
-            GcloudCommand::Compute(ComputeCommand::Stop(a)) => {
-                assert_eq!(a.instance, "web-1");
-                assert!(!a.yes);
-            }
-            other => panic!("expected Compute::Stop, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn compute_write_requires_instance_and_zone() {
-        assert!(parse(&["compute", "start"]).is_err());
-        assert!(parse(&["compute", "start", "--instance", "web-1"]).is_err());
-        assert!(parse(&["compute", "start", "--zone", "us-central1-a"]).is_err());
-        assert!(parse(&["compute", "stop", "--instance", "web-1"]).is_err());
-    }
-
-    // --- compute: gate decision (confirm required / --yes bypass / refused) -
-
-    #[test]
-    fn gate_yes_bypasses_prompt() {
-        // --yes proceeds regardless of json or a (never-shown) prompt answer.
-        assert_eq!(gate_decision(true, false, None), GateOutcome::Proceed);
-        assert_eq!(gate_decision(true, true, None), GateOutcome::Proceed);
-    }
-
-    #[test]
-    fn gate_json_without_yes_is_blocked() {
-        assert_eq!(
-            gate_decision(false, true, None),
-            GateOutcome::BlockedJsonNeedsYes
-        );
-    }
-
-    #[test]
-    fn gate_interactive_confirm_proceeds() {
-        assert_eq!(
-            gate_decision(false, false, Some(true)),
-            GateOutcome::Proceed
-        );
-    }
-
-    #[test]
-    fn gate_refused_is_no_change() {
-        // Operator said No → declined (no change).
-        assert_eq!(
-            gate_decision(false, false, Some(false)),
-            GateOutcome::Declined
-        );
-        // Unreadable stdin (None while interactive) is treated as a decline too.
-        assert_eq!(gate_decision(false, false, None), GateOutcome::Declined);
-    }
-
-    // --- compute: instance / zone validation -------------------------------
-
-    #[test]
-    fn accepts_valid_instance_names_and_zones() {
-        assert!(is_valid_instance_name("web-1"));
-        assert!(is_valid_instance_name("a"));
-        assert!(is_valid_instance_name("instance-with-many-parts-9"));
-        assert!(is_valid_zone("us-central1-a"));
-        assert!(is_valid_zone("europe-west4-b"));
-    }
-
-    #[test]
-    fn rejects_invalid_instance_names_and_zones() {
-        assert!(!is_valid_instance_name("")); // empty
-        assert!(!is_valid_instance_name("-leading-hyphen")); // option-injection guard
-        assert!(!is_valid_instance_name("1-digit-first"));
-        assert!(!is_valid_instance_name("UPPER"));
-        assert!(!is_valid_instance_name("trailing-")); // trailing hyphen
-        assert!(!is_valid_instance_name(&"a".repeat(64))); // too long
-        assert!(!is_valid_zone("--inject")); // option-injection guard
-        assert!(!is_valid_zone("Us-Central")); // uppercase
-        assert!(!is_valid_zone("ab")); // too short
-        assert!(!is_valid_zone("zone-")); // trailing hyphen
-    }
-
-    // --- compute: literal command + request shapes -------------------------
-
-    #[test]
-    fn compute_command_puts_instance_after_separator() {
-        let cmd = gcloud_compute_command("start", "web-1", "us-central1-a", None);
-        assert_eq!(
-            cmd,
-            "gcloud compute instances start --zone=us-central1-a -- web-1"
-        );
-        // `--` precedes the positional so a `-`-leading value can't be a flag.
-        assert!(cmd.contains(" -- web-1"));
-    }
-
-    #[test]
-    fn compute_command_includes_project_when_set() {
-        let cmd = gcloud_compute_command("stop", "web-1", "us-central1-a", Some("my-proj-123"));
-        assert_eq!(
-            cmd,
-            "gcloud compute instances stop --zone=us-central1-a --project=my-proj-123 -- web-1"
-        );
-    }
-
-    #[test]
-    fn compute_list_request_carries_optional_filters() {
-        let v = compute_list_request(
-            Path::new("/ws"),
-            Path::new("/p"),
-            Some("my-proj-123"),
-            Some("us-central1-a"),
-        );
-        assert_eq!(v["operation"], "list");
-        assert_eq!(v["project"], "my-proj-123");
-        assert_eq!(v["zone"], "us-central1-a");
-        // Omitted filters serialize as null, not missing.
-        let bare = compute_list_request(Path::new("/ws"), Path::new("/p"), None, None);
-        assert!(bare["project"].is_null());
-        assert!(bare["zone"].is_null());
-    }
-
-    #[test]
-    fn compute_write_request_carries_confirmed_marker() {
-        let v = compute_write_request(
-            Path::new("/ws"),
-            Path::new("/p"),
-            "start",
-            "web-1",
-            "us-central1-a",
-            None,
-        );
-        assert_eq!(v["operation"], "start");
-        assert_eq!(v["instance"], "web-1");
-        assert_eq!(v["zone"], "us-central1-a");
-        // The CLI-set gate marker the plugin checks for (BWOC-66 §3).
-        assert_eq!(v["confirmed"], true);
-    }
-
-    #[test]
-    fn compute_write_effect_names_consequence() {
-        assert!(compute_write_effect("start").contains("cost"));
-        assert!(compute_write_effect("stop").contains("workloads"));
     }
 
     // --- plugin discovery / stub-error path --------------------------------

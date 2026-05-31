@@ -1438,9 +1438,11 @@ fn run_project_list(args: ProjectListArgs) -> i32 {
                     EXIT_PLUGIN_ERROR
                 }
             } else {
-                let total = value.as_array().map(|a| a.len()).unwrap_or(0);
+                // The plugin returns an object {ok, operation, total, projects:[…]},
+                // not a bare array — mirror the compute/storage/run list renderers.
+                let total = value.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
                 println!("bwoc gcloud project list: {total} project(s)");
-                if let Some(arr) = value.as_array() {
+                if let Some(arr) = value.get("projects").and_then(|v| v.as_array()) {
                     for p in arr {
                         let id = p.get("project_id").and_then(|v| v.as_str()).unwrap_or("?");
                         let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("?");

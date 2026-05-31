@@ -25,7 +25,7 @@ The `bwoc jira` CLI delegates exactly three live verbs to this adapter; the offl
 
 | Operation | Direction | Auth | HTTP | Gate |
 |---|---|---|---|---|
-| `query` | read | required | `GET /rest/api/3/search` (project-scoped JQL, bounded paging) | none — reads are free |
+| `query` | read | required | `GET /rest/api/3/search/jql` (project-scoped JQL, token-paginated) | none — reads are free |
 | `transition` | **write** | required | `GET …/transitions` then `POST …/transitions` | operator confirmation (in the CLI) |
 | `sync` | read/**write** | required | reads the ledger; `--dry-run` previews | apply is gated (in the CLI) |
 
@@ -71,7 +71,7 @@ If any of the three is missing, the adapter fails fast with a clear `auth_missin
 `query` accepts JQL but the adapter bounds it (**Mattaññutā** at the API boundary):
 
 - **Project-scoped.** When `BWOC_JIRA_PROJECT` is set and the JQL does not already constrain a project, the adapter wraps it as `project = "<P>" AND (<jql>)` — no accidental cross-project reads. In v0.1.0 this is best-effort env-driven scoping; richer config-driven scoping lands once the CLI forwards the resolved `[plugins.jira-cloud-rest].project` config.
-- **Bounded result sets.** `maxResults` is clamped to ≤ 100 and `startAt` is honored — the adapter never issues an unbounded fetch. This is the first defense against rate limits.
+- **Bounded result sets.** `maxResults` is clamped to ≤ 100 and a single page is fetched (`/search/jql` is token-paginated via `nextPageToken`/`isLast`, surfaced in the response for a future paging loop) — the adapter never issues an unbounded fetch. This is the first defense against rate limits.
 - **Read-only by nature.** JQL is never a write path; writes go through the typed `transition` verb.
 
 ## Rate limiting & error classes

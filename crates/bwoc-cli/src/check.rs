@@ -1013,7 +1013,7 @@ const BACKEND_NAMES: &[&str] = &[
 /// reference `gws/gws-auth` + `gws/gws-drive` plugins (BWOC-75) pass basic
 /// well-formedness. The gws `auth.toml` secret-leak guard + Workspace Resource
 /// Schema validation land in BWOC-77 (`audit_gws_auth`).
-const PLUGIN_KINDS: &[&str] = &[
+pub(crate) const PLUGIN_KINDS: &[&str] = &[
     "memory-backend",
     "llm-backend",
     "workflow",
@@ -1239,7 +1239,8 @@ pub fn audit_skill_manifest(skill_dir: &Path) -> AuditReport {
                     } else {
                         report.violations.push(format!(
                             "[contract].requires_plugins '{kind}' is not a valid plugin kind \
-                             (expected one of {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma}})"
+                             (expected one of {{{}}})",
+                            PLUGIN_KINDS.join(", ")
                         ));
                     }
                 }
@@ -1348,7 +1349,7 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
         }
     }
 
-    // Kind ∈ {memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}.
+    // Kind ∈ PLUGIN_KINDS (the shared canonical list).
     if let Some(kind) = plugin_table.get("kind").and_then(|v| v.as_str()) {
         if PLUGIN_KINDS.contains(&kind) {
             report
@@ -1356,7 +1357,8 @@ pub fn audit_plugin_manifest(plugin_dir: &Path) -> AuditReport {
                 .push(format!("[plugin].kind '{kind}' in supported set"));
         } else {
             report.violations.push(format!(
-                "[plugin].kind '{kind}' not in {{memory-backend, llm-backend, workflow, audit, jira, okr, council, figma, gws}}"
+                "[plugin].kind '{kind}' not in {{{}}}",
+                PLUGIN_KINDS.join(", ")
             ));
         }
     }

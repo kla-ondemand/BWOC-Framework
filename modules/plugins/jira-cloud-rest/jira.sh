@@ -150,13 +150,15 @@ classify_status() {
   esac
 }
 
-# ── Verb: query — project-scoped JQL read (GET /rest/api/3/search) ─────────
+# ── Verb: query — project-scoped JQL read (GET /rest/api/3/search/jql) ─────
+# Enhanced search (the legacy GET /rest/api/3/search was removed → HTTP 410).
+# Token-paginated: no startAt offset, and the response omits total/startAt/
+# maxResults (use nextPageToken / isLast). See Atlassian CHANGE-2046.
 
 do_query() {
   require_auth
-  local jql start_at max_results
+  local jql max_results
   jql="$(printf '%s' "$REQUEST" | jq -r '.jql // empty')"
-  start_at="$(printf '%s' "$REQUEST" | jq -r '.start_at // 0')"
   max_results="$(printf '%s' "$REQUEST" | jq -r '.max_results // 50')"
 
   if [[ -z "$jql" ]]; then
@@ -164,30 +166,52 @@ do_query() {
     emit_error_json "bad_args" "empty JQL"
     exit 2
   fi
-  [[ "$start_at"    =~ ^[0-9]+$ ]] || start_at=0
+  # startAt offset is gone with /search/jql (token pagination); .start_at in the
+  # request envelope is accepted but ignored — the projection's start_at stays 0.
   [[ "$max_results" =~ ^[0-9]+$ ]] || max_results=50
   if (( max_results > MAX_PAGE )); then max_results=$MAX_PAGE; fi # never unbounded
 
   # Project scoping (least-leakage): if a project is configured and the JQL does
-  # not already constrain one, wrap it. Best-effort in v0.1.0 — see SPEC §JQL.
+  # not already constrain one, wrap the WHERE clause. The trailing ORDER BY must
+  # stay outside the parenthesised predicate — wrapping the whole string (incl.
+  # ORDER BY) is a JQL syntax error. Best-effort in v0.1.0 — see SPEC §JQL.
   if [[ -n "${BWOC_JIRA_PROJECT:-}" ]] && ! printf '%s' "$jql" | grep -qiE 'project[[:space:]]*='; then
-    jql="project = \"${BWOC_JIRA_PROJECT}\" AND (${jql})"
+    local where order_by
+    if printf '%s' "$jql" | grep -qiE '(^|[[:space:]])ORDER[[:space:]]+BY[[:space:]]'; then
+      where="$(printf '%s' "$jql" | sed -E 's/(^|[[:space:]])[Oo][Rr][Dd][Ee][Rr][[:space:]]+[Bb][Yy][[:space:]].*$//')"
+      order_by="$(printf '%s' "$jql" | grep -oiE '(^|[[:space:]])ORDER[[:space:]]+BY[[:space:]].*$' | sed -E 's/^[[:space:]]+//')"
+    else
+      where="$jql"; order_by=""
+    fi
+    where="$(printf '%s' "$where" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    if [[ -n "$where" ]]; then
+      jql="project = \"${BWOC_JIRA_PROJECT}\" AND (${where})"
+    else
+      jql="project = \"${BWOC_JIRA_PROJECT}\""
+    fi
+    [[ -n "$order_by" ]] && jql="${jql} ${order_by}"
   fi
 
-  _curl_retry -G "${BASE_URL}${API_BASE}/search" \
+  # Enhanced search is token-paginated (no startAt offset). v0.1.0 reads a
+  # single page, so we fetch the first page; nextPageToken/isLast are surfaced
+  # in the projection below for a future paging loop.
+  _curl_retry -G "${BASE_URL}${API_BASE}/search/jql" \
     --data-urlencode "jql=${jql}" \
-    --data-urlencode "startAt=${start_at}" \
     --data-urlencode "maxResults=${max_results}" \
     --data-urlencode "fields=summary,status,assignee"
   classify_status "query"
 
   # Project the response into the Issue Mapping shape (PLUGINS.en.md).
-  printf '%s' "$HTTP_BODY" | jq '{
+  # /search/jql omits total/startAt/maxResults; keep the keys for schema
+  # stability (total ← page count) and surface token pagination additively.
+  printf '%s' "$HTTP_BODY" | jq --argjson mr "$max_results" '{
     ok: true,
     operation: "query",
-    total: (.total // 0),
+    total: (.total // (.issues | length)),
     start_at: (.startAt // 0),
-    max_results: (.maxResults // 0),
+    max_results: (.maxResults // $mr),
+    next_page_token: (.nextPageToken // null),
+    is_last: (.isLast // true),
     issues: [ .issues[]? | {
       issue_key: .key,
       project: ((.key | split("-"))[0]),

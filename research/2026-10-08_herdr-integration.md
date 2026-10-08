@@ -12,7 +12,7 @@ herdr is a background server that owns terminal panes and classifies the agent i
 
 Adopt in two phases, both **opt-in, off by default, no new crate deps**:
 
-1. **Phase 1 — read-only state provider.** When enabled and a herdr socket answers, `bwoc sessions` / `bwoc fleet status` take each matched agent's state from herdr. No process-ownership change.
+1. **Phase 1 — read-only state provider.** When enabled and a herdr socket answers, `bwoc sessions` (and the `bwoc dashboard` agents pane, which reads the same sessions) take each matched agent's state from herdr. `bwoc fleet status` is unchanged — its `online` column is a pid-liveness check, not a session state. No process-ownership change.
 2. **Phase 2 — `PaneBackend` adapter.** Extract the tmux calls in `fleet_term.rs` / `send.rs` / `chat.rs` behind a trait; add a herdr impl so `bwoc fleet term --backend herdr` lays the fleet out with `layout.apply` and `bwoc send` wakes via `agent.prompt` instead of `tmux send-keys`.
 
 Explicitly **not** adopted: replacing the in-process TUI panes (`/agents`, `/layout`, 3.11) with herdr, and a herdr-side plugin (deferred; revisit after Phase 2).
@@ -40,7 +40,7 @@ Explicitly **not** adopted: replacing the in-process TUI panes (`/agents`, `/lay
 
 **Opt-in.** `[integrations.herdr] enabled = true` in `.bwoc/workspace.toml`. Optional `socket = "<path>"`; otherwise the herdr resolution order above.
 
-**Probe.** One `agent.list` round-trip per `bwoc sessions` call, hard timeout ~300 ms, over the `interprocess` dep `bwoc-cli` already carries. Any failure → provider returns nothing, no warning on the default output (one line under `--verbose`).
+**Probe.** One `agent.list` round-trip per `bwoc sessions` call, one shared ~300 ms budget for all herdr calls in a command (fail-fast after the first failure), over `std::os::unix::net::UnixStream` — no new dep. Any failure → provider returns nothing, silently (`bwoc sessions` has no `--verbose` flag).
 
 **Matching a herdr agent to a BWOC agent**, first hit wins:
 1. `foreground_cwd` is `agents/<id>/` (or inside it) of this workspace — `bwoc spawn`/`chat` run there.
@@ -49,7 +49,7 @@ Explicitly **not** adopted: replacing the in-process TUI panes (`/agents`, `/lay
 
 **State precedence.** Dead pid → `stale` (unchanged, BWOC's own liveness check wins). Otherwise a matched herdr status overrides the tmux heuristic. `SessionState` gains `Blocked` and `Done`; `unknown` maps to the existing `Running`.
 
-**Output.** `--json` gains `"state": "blocked"|"done"` values and a `"stateSource": "herdr"|"tmux"|"marker"` field; table output unchanged except the new values. Additive — no existing field changes meaning.
+**Output.** `--json` gains `"state": "blocked"|"done"` values and a `"stateSource": "herdr"|"tmux"|"marker"|null` field (`null` when no activity signal was used — stale and scan-only sessions); table output unchanged except the new values. Additive — no existing field changes meaning.
 
 **Tests.** A fake socket server in-test (no herdr binary in CI): happy path, timeout, `protocol_mismatch`, unknown fields, unmatched cwd.
 

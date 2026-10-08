@@ -640,7 +640,7 @@ fn apply_herdr_states(workspace: &Path, socket: &Path, sessions: &mut [Session])
 /// reports through resolved symlinks (`/private/var/…` on macOS) still
 /// matches. A herdr agent inside a registered agent's dir belongs to that
 /// agent even when it holds no marker — it is then simply not shown.
-fn agent_dirs<'a>(
+pub(crate) fn agent_dirs<'a>(
     workspace: &Path,
     marker_ids: impl Iterator<Item = &'a str>,
 ) -> Vec<(String, PathBuf)> {
@@ -671,7 +671,7 @@ fn agent_dirs<'a>(
 
 /// The agent whose directory equals or contains `cwd` (component-wise, so
 /// `agents/a` never claims `agents/ab`); the deepest directory wins.
-fn agent_for_cwd(cwd: &Path, dirs: &[(String, PathBuf)]) -> Option<String> {
+pub(crate) fn agent_for_cwd(cwd: &Path, dirs: &[(String, PathBuf)]) -> Option<String> {
     dirs.iter()
         .filter(|(_, dir)| cwd.starts_with(dir))
         .max_by_key(|(_, dir)| dir.components().count())

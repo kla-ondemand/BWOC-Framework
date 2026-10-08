@@ -7,9 +7,10 @@
 //! agent gets its own pane running `bwoc spawn` in the agent's directory, with
 //! the pane border titled by the agent id so the grid stays legible.
 //!
-//! The tmux calls themselves live behind [`crate::pane_backend::PaneBackend`]
-//! ([`TmuxBackend`]); this module owns workspace/registry resolution and the
-//! open-or-attach policy.
+//! The multiplexer calls live behind [`crate::pane_backend::PaneBackend`] —
+//! tmux by default, herdr with `--backend herdr` or `[fleet] pane_backend =
+//! "herdr"`; this module owns workspace/registry resolution, backend choice,
+//! and the open-or-attach policy.
 //!
 //! OS-native window tiling (separate Ghostty / Terminal.app windows positioned
 //! on the desktop) is a mac-only follow-up — deliberately not this command.
@@ -20,13 +21,14 @@ use std::path::PathBuf;
 use bwoc_core::workspace::AgentsRegistry;
 
 use crate::chat::resolve_workspace;
-use crate::pane_backend::{FleetAgent, PaneBackend, TmuxBackend};
+use crate::pane_backend::{FleetAgent, PaneBackend, PaneBackendKind};
 use crate::spawn;
 
-/// The pane arrangement. Each maps to a built-in tmux layout so the choice is
-/// applied with a single `select-layout`.
+/// The pane arrangement, backend-neutral. Each maps to a built-in tmux layout
+/// (one `select-layout`) and to a herdr split tree
+/// (`crate::herdr_backend::layout_tree`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum TmuxLayout {
+pub enum PaneLayout {
     /// Equal tiles in a grid — tmux `tiled`. The default; scales best past ~4 agents.
     Grid,
     /// One column per agent, side by side — tmux `even-horizontal`.
@@ -39,21 +41,23 @@ pub enum TmuxLayout {
     MainHorizontal,
 }
 
-impl TmuxLayout {
+impl PaneLayout {
     pub(crate) fn tmux_name(self) -> &'static str {
         match self {
-            TmuxLayout::Grid => "tiled",
-            TmuxLayout::Columns => "even-horizontal",
-            TmuxLayout::Rows => "even-vertical",
-            TmuxLayout::MainVertical => "main-vertical",
-            TmuxLayout::MainHorizontal => "main-horizontal",
+            PaneLayout::Grid => "tiled",
+            PaneLayout::Columns => "even-horizontal",
+            PaneLayout::Rows => "even-vertical",
+            PaneLayout::MainVertical => "main-vertical",
+            PaneLayout::MainHorizontal => "main-horizontal",
         }
     }
 }
 
 pub struct FleetTermArgs {
     pub workspace: Option<PathBuf>,
-    pub layout: TmuxLayout,
+    pub layout: PaneLayout,
+    /// `--backend`; `None` → the workspace's `[fleet] pane_backend`, else tmux.
+    pub backend: Option<PaneBackendKind>,
     /// tmux session name. `None` → a per-workspace default
     /// (`default_session_name`) so concurrent fleets don't collide.
     pub session: Option<String>,
@@ -167,8 +171,11 @@ pub fn run(args: FleetTermArgs) -> i32 {
         })
         .collect();
 
+    let kind = resolve_kind(args.backend, &workspace);
+    let backend =
+        crate::pane_backend::backend_for(kind, &workspace, crate::herdr_backend::FLEET_BUDGET);
     open_with(
-        &TmuxBackend,
+        backend.as_ref(),
         &session,
         args.session.is_some(),
         &agents,
@@ -178,6 +185,12 @@ pub fn run(args: FleetTermArgs) -> i32 {
     )
 }
 
+/// The `--backend` flag when given, else the workspace's `[fleet] pane_backend`
+/// (tmux when absent or unrecognised).
+fn resolve_kind(flag: Option<PaneBackendKind>, workspace: &std::path::Path) -> PaneBackendKind {
+    flag.unwrap_or_else(|| crate::pane_backend::configured_kind(workspace, "fleet term"))
+}
+
 /// Open (or re-attach) the fleet through `backend`. Split from [`run`] so the
 /// call sequence is testable against a recording backend.
 fn open_with(
@@ -185,7 +198,7 @@ fn open_with(
     session: &str,
     explicit_session: bool,
     agents: &[FleetAgent],
-    layout: TmuxLayout,
+    layout: PaneLayout,
     bwoc_exe: &str,
     print: bool,
 ) -> i32 {
@@ -230,10 +243,10 @@ mod tests {
 
     #[test]
     fn layout_names_map_to_tmux() {
-        assert_eq!(TmuxLayout::Grid.tmux_name(), "tiled");
-        assert_eq!(TmuxLayout::Rows.tmux_name(), "even-vertical");
-        assert_eq!(TmuxLayout::MainVertical.tmux_name(), "main-vertical");
-        assert_eq!(TmuxLayout::MainHorizontal.tmux_name(), "main-horizontal");
+        assert_eq!(PaneLayout::Grid.tmux_name(), "tiled");
+        assert_eq!(PaneLayout::Rows.tmux_name(), "even-vertical");
+        assert_eq!(PaneLayout::MainVertical.tmux_name(), "main-vertical");
+        assert_eq!(PaneLayout::MainHorizontal.tmux_name(), "main-horizontal");
     }
 
     #[test]
@@ -276,6 +289,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn backend_flag_overrides_the_workspace_key() {
+        let ws = std::env::temp_dir().join(format!("bwoc-ftkind-{}", std::process::id()));
+        std::fs::create_dir_all(ws.join(".bwoc")).unwrap();
+        let toml = |extra: &str| {
+            std::fs::write(
+                ws.join(".bwoc/workspace.toml"),
+                format!("[workspace]\nname = 'd'\nversion = '0'\ncreated = 'x'\n{extra}"),
+            )
+            .unwrap();
+        };
+        toml("");
+        assert_eq!(resolve_kind(None, &ws), PaneBackendKind::Tmux, "default");
+        toml("[fleet]\npane_backend = 'herdr'\n");
+        assert_eq!(
+            resolve_kind(None, &ws),
+            PaneBackendKind::Herdr,
+            "from config"
+        );
+        assert_eq!(
+            resolve_kind(Some(PaneBackendKind::Tmux), &ws),
+            PaneBackendKind::Tmux,
+            "flag beats config"
+        );
+        toml("[fleet]\npane_backend = 'screen'\n");
+        assert_eq!(
+            resolve_kind(None, &ws),
+            PaneBackendKind::Tmux,
+            "unknown → tmux"
+        );
+        assert_eq!(
+            resolve_kind(Some(PaneBackendKind::Herdr), &ws),
+            PaneBackendKind::Herdr
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     // --- call sequence through the PaneBackend trait (recording fake) ---
 
     use crate::pane_backend::fake::FakeBackend;
@@ -303,7 +353,7 @@ mod tests {
             "s1",
             false,
             &fleet(),
-            TmuxLayout::Rows,
+            PaneLayout::Rows,
             "/bin/bwoc",
             true,
         );
@@ -327,7 +377,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            open_with(&b, "s1", false, &fleet(), TmuxLayout::Grid, "bwoc", true),
+            open_with(&b, "s1", false, &fleet(), PaneLayout::Grid, "bwoc", true),
             2
         );
         assert_eq!(b.calls(), vec!["check_available"]);
@@ -340,7 +390,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            open_with(&b, "mine", true, &fleet(), TmuxLayout::Grid, "bwoc", true),
+            open_with(&b, "mine", true, &fleet(), PaneLayout::Grid, "bwoc", true),
             2
         );
         let calls = b.calls();
@@ -358,7 +408,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            open_with(&b, "auto", false, &fleet(), TmuxLayout::Grid, "bwoc", true),
+            open_with(&b, "auto", false, &fleet(), PaneLayout::Grid, "bwoc", true),
             0
         );
         assert_eq!(
@@ -374,7 +424,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            open_with(&b, "s1", false, &fleet(), TmuxLayout::Grid, "bwoc", true),
+            open_with(&b, "s1", false, &fleet(), PaneLayout::Grid, "bwoc", true),
             1
         );
         let calls = b.calls();

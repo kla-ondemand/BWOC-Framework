@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bwoc_core::routing::{RouteTarget, Routes};
 use bwoc_core::workspace::AgentsRegistry;
 
-use crate::pane_backend::{PaneBackend, TmuxBackend};
+use crate::pane_backend::{PaneBackend, PaneBackendKind, TmuxBackend};
 
 /// Where a resolved `bwoc send` delivers the envelope.
 enum Target {
@@ -507,7 +507,7 @@ fn deliver(
             // peer can't be poked from here, and a duplicate shouldn't re-poke a
             // session). Suppressed via --no-wakeup / BWOC_DISABLE_TMUX_WAKEUP.
             if !duplicate && !no_wakeup && std::env::var("BWOC_DISABLE_TMUX_WAKEUP").is_err() {
-                notify_pane(&TmuxBackend, recipient_id, from, message_id, message);
+                wake_recipient(&inbox_path, recipient_id, from, message_id, message);
             }
 
             Ok(Delivered::LocalInbox {
@@ -656,6 +656,25 @@ pub(crate) fn redeliver(
         true, // no wakeup on a background flush
         sender_bwoc_dir.as_deref(),
     )
+}
+
+/// Wake `to` through the pane backend its own workspace names in
+/// `[fleet] pane_backend` (tmux when absent/unknown, or when the workspace
+/// cannot be found from `inbox_path`). The recipient's workspace — not the
+/// sender's — because a local-FS peer may run a different multiplexer.
+fn wake_recipient(inbox_path: &std::path::Path, to: &str, from: &str, msg_id: &str, message: &str) {
+    let workspace = inbox_path
+        .ancestors()
+        .skip(1)
+        .find(|d| d.join(".bwoc/workspace.toml").is_file());
+    match workspace {
+        Some(ws) if crate::pane_backend::configured_kind(ws, "send") == PaneBackendKind::Herdr => {
+            let herdr =
+                crate::herdr_backend::HerdrBackend::for_workspace(ws, crate::herdr::DEFAULT_BUDGET);
+            notify_pane(&herdr, to, from, msg_id, message);
+        }
+        _ => notify_pane(&TmuxBackend, to, from, msg_id, message),
+    }
 }
 
 /// Best-effort wakeup ping that wakes a recipient TUI session.
@@ -938,6 +957,57 @@ mod tests {
         let b = crate::pane_backend::fake::FakeBackend::default();
         notify_pane(&b, "agent-ji", "user", "msg-1", "hello");
         assert_eq!(b.calls(), vec!["locate_agent agent-ji"]);
+    }
+
+    /// `pane_backend = "herdr"` with no herdr answering: the wakeup gives up
+    /// within the read budget and touches nothing — `bwoc send` stays silent
+    /// (`HerdrBackend` never prints) and its delivery is unaffected.
+    #[cfg(unix)]
+    #[test]
+    fn herdr_wakeup_with_herdr_down_is_a_quick_no_op() {
+        let gone = PathBuf::from("/nonexistent/bwoc-send-herdr.sock");
+        let b = crate::herdr_backend::HerdrBackend::new(
+            Some(gone),
+            false,
+            None,
+            crate::herdr::DEFAULT_BUDGET,
+        );
+        let t = std::time::Instant::now();
+        notify_pane(&b, "agent-ji", "agent-pi", "msg-1", "hello");
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    /// herdr up: the wakeup finds the agent's pane by label and types the
+    /// marked text, then Enter.
+    #[cfg(unix)]
+    #[test]
+    fn herdr_wakeup_locates_and_submits_over_the_socket() {
+        use std::sync::{Arc, Mutex};
+        let log: Arc<Mutex<Vec<(String, serde_json::Value)>>> = Arc::default();
+        let rec = log.clone();
+        let (_d, sock) = crate::herdr::tests::fake_server(move |method, params, id| {
+            rec.lock()
+                .unwrap()
+                .push((method.to_string(), params.clone()));
+            let result = match method {
+                "pane.list" => serde_json::json!({"type":"pane_list","panes":[
+                    {"pane_id":"w2:p3","label":"agent-ji"}]}),
+                _ => serde_json::json!({"type":"ok"}),
+            };
+            Some(serde_json::json!({"id": id, "result": result}).to_string())
+        });
+        let b = crate::herdr_backend::HerdrBackend::new(
+            Some(sock),
+            false,
+            None,
+            std::time::Duration::from_secs(2),
+        );
+        notify_pane(&b, "agent-ji", "agent-pi", "msg-1", "hello");
+        let log = log.lock().unwrap();
+        let methods: Vec<&str> = log.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["pane.list", "pane.send_text", "pane.send_keys"]);
+        assert_eq!(log[1].1["pane_id"], "w2:p3");
+        assert_eq!(log[1].1["text"], "[bwoc inbox msg-1 from agent-pi] hello");
     }
 
     #[test]

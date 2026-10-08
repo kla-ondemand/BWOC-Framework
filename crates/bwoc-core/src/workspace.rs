@@ -103,6 +103,44 @@ impl Integrations {
     }
 }
 
+/// Optional `[fleet]` table of `.bwoc/workspace.toml` — read on its own like
+/// [`Integrations`], for the same reasons.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FleetSettings {
+    /// `pane_backend` as written (`"tmux"` / `"herdr"` are the known values).
+    /// `None` when the key is absent. A non-string value is kept as its TOML
+    /// rendering so the caller can name it in an "unknown value" warning.
+    /// Interpreting it (and the `"tmux"` default) is the caller's job.
+    pub pane_backend: Option<String>,
+}
+
+impl FleetSettings {
+    /// Read `[fleet]` from `<root>/.bwoc/workspace.toml`. Best-effort, like
+    /// [`Integrations::load`]: anything missing or unparseable yields the
+    /// default.
+    pub fn load(root: &Path) -> Self {
+        #[derive(Deserialize, Default)]
+        struct Fleet {
+            #[serde(default)]
+            pane_backend: Option<toml::Value>,
+        }
+        #[derive(Deserialize)]
+        struct Doc {
+            #[serde(default)]
+            fleet: Fleet,
+        }
+        let pane_backend = fs::read_to_string(root.join(".bwoc/workspace.toml"))
+            .ok()
+            .and_then(|s| toml::from_str::<Doc>(&s).ok())
+            .and_then(|d| d.fleet.pane_backend)
+            .map(|v| match v {
+                toml::Value::String(s) => s,
+                other => other.to_string(),
+            });
+        Self { pane_backend }
+    }
+}
+
 /// Top-level structure of `.bwoc/agents.toml`.
 ///
 /// Field order matters for the same reason it does on [`Workspace`]: the
@@ -428,6 +466,32 @@ mod tests {
         let i = Integrations::load(&dir);
         assert!(i.herdr.enabled);
         assert!(i.herdr.socket.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fleet_pane_backend_absent_set_and_odd_values() {
+        let dir = fresh_temp_dir("fleet-pane");
+        fs::create_dir_all(dir.join(".bwoc")).unwrap();
+        let head = "[workspace]\nname = 'd'\nversion = '0'\ncreated = 'x'\n";
+        fs::write(dir.join(".bwoc/workspace.toml"), head).unwrap();
+        assert_eq!(FleetSettings::load(&dir), FleetSettings::default());
+        // Missing file → default.
+        assert_eq!(FleetSettings::load(&dir.join("nope")).pane_backend, None);
+
+        let set = format!("{head}[fleet]\npane_backend = 'herdr'\nfuture = 1\n");
+        fs::write(dir.join(".bwoc/workspace.toml"), set).unwrap();
+        assert_eq!(
+            FleetSettings::load(&dir).pane_backend.as_deref(),
+            Some("herdr")
+        );
+        // The existing Workspace model still loads a file carrying the table.
+        assert_eq!(Workspace::load(&dir).unwrap().workspace.name, "d");
+
+        // A non-string value is surfaced (for the caller's warning), not dropped.
+        let odd = format!("{head}[fleet]\npane_backend = 3\n");
+        fs::write(dir.join(".bwoc/workspace.toml"), odd).unwrap();
+        assert_eq!(FleetSettings::load(&dir).pane_backend.as_deref(), Some("3"));
         let _ = fs::remove_dir_all(&dir);
     }
 

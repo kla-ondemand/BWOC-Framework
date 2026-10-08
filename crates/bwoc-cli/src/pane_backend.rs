@@ -2,18 +2,96 @@
 //! trait so a second multiplexer can sit beside tmux without touching the
 //! commands that use it.
 //!
-//! Callers today: `bwoc fleet term` (open + attach a fleet layout, in
+//! Callers: `bwoc fleet term` (open + attach a fleet layout, in
 //! `fleet_term.rs`) and the inbox wakeup in `bwoc send` (locate an agent's pane,
-//! deliver text to it, in `send.rs`). [`TmuxBackend`] is the only implementation
-//! and is what both callers use; there is no selection flag or config key yet.
+//! deliver text to it, in `send.rs`). Implementations: [`TmuxBackend`] (the
+//! default) and [`crate::herdr_backend::HerdrBackend`]. Which one runs is
+//! `bwoc fleet term --backend`, else `[fleet] pane_backend` in
+//! `.bwoc/workspace.toml` (see [`configured_kind`]), else tmux. `bwoc send`
+//! follows the workspace key only.
 //!
 //! Out of scope on purpose: `bwoc chat --tmux` (a tmux-named flag whose
 //! window-vs-session launch is tmux-specific), `spawn.rs`'s pane detection, and
 //! `sessions.rs`'s activity lookup.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::fleet_term::TmuxLayout;
+use crate::fleet_term::PaneLayout;
+
+/// Which [`PaneBackend`] to use — the `--backend` value and the
+/// `[fleet] pane_backend` workspace key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum PaneBackendKind {
+    /// tmux panes (the default).
+    Tmux,
+    /// herdr panes, driven over herdr's local socket.
+    Herdr,
+}
+
+impl PaneBackendKind {
+    /// Interpret a `[fleet] pane_backend` value. Absent → tmux; `Err` carries
+    /// an unrecognised value so the caller can name it.
+    pub(crate) fn from_config(raw: Option<&str>) -> Result<Self, String> {
+        match raw.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            None | Some("tmux") => Ok(Self::Tmux),
+            Some("herdr") => Ok(Self::Herdr),
+            Some(_) => Err(raw.unwrap_or_default().to_string()),
+        }
+    }
+}
+
+/// Set once the unknown-value warning has been printed, so a group send that
+/// wakes many recipients warns once per process, not once per recipient.
+static UNKNOWN_KIND_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// The workspace's `[fleet] pane_backend`. An unrecognised value prints one
+/// warning (prefixed `bwoc <cmd>:`) and falls back to tmux.
+pub(crate) fn configured_kind(workspace: &Path, cmd: &str) -> PaneBackendKind {
+    let raw = bwoc_core::workspace::FleetSettings::load(workspace).pane_backend;
+    match PaneBackendKind::from_config(raw.as_deref()) {
+        Ok(kind) => kind,
+        Err(value) => {
+            if !UNKNOWN_KIND_WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "bwoc {cmd}: warning: unknown [fleet] pane_backend = \"{value}\" in \
+                     .bwoc/workspace.toml (expected \"tmux\" or \"herdr\") — using tmux."
+                );
+            }
+            PaneBackendKind::Tmux
+        }
+    }
+}
+
+/// The backend for `kind` in `workspace`. `budget` bounds herdr's socket calls
+/// per operation (tmux ignores it).
+pub(crate) fn backend_for(
+    kind: PaneBackendKind,
+    workspace: &Path,
+    budget: std::time::Duration,
+) -> Box<dyn PaneBackend> {
+    match kind {
+        PaneBackendKind::Tmux => Box::new(TmuxBackend),
+        PaneBackendKind::Herdr => Box::new(crate::herdr_backend::HerdrBackend::for_workspace(
+            workspace, budget,
+        )),
+    }
+}
+
+/// The argv each fleet pane runs: `bwoc spawn` in the agent's directory with
+/// its backend. Shared by every [`PaneBackend`] so all of them launch the
+/// identical command.
+pub(crate) fn spawn_argv(bwoc_exe: &str, path: &str, backend: &str) -> Vec<String> {
+    vec![
+        bwoc_exe.into(),
+        "spawn".into(),
+        "--path".into(),
+        path.into(),
+        "--backend".into(),
+        backend.into(),
+    ]
+}
 
 /// An opaque reference to one live pane (or session) that text can be
 /// delivered to. The string is whatever the backend's own addressing uses: for
@@ -63,7 +141,7 @@ pub(crate) trait PaneBackend {
         &self,
         session: &str,
         agents: &[FleetAgent],
-        layout: TmuxLayout,
+        layout: PaneLayout,
         bwoc_exe: &str,
     ) -> Result<String, String>;
 
@@ -125,7 +203,7 @@ impl PaneBackend for TmuxBackend {
         &self,
         session: &str,
         agents: &[FleetAgent],
-        layout: TmuxLayout,
+        layout: PaneLayout,
         bwoc_exe: &str,
     ) -> Result<String, String> {
         let tuples: Vec<(String, String, String)> = agents
@@ -236,19 +314,14 @@ impl PaneBackend for TmuxBackend {
 pub(crate) fn tmux_fleet_commands(
     session: &str,
     agents: &[(String, String, String)],
-    layout: TmuxLayout,
+    layout: PaneLayout,
     bwoc_exe: &str,
 ) -> Vec<Vec<String>> {
+    // `--` ends tmux's own options; the rest is the shared pane argv.
     let spawn_argv = |path: &str, backend: &str| -> Vec<String> {
-        vec![
-            "--".into(),
-            bwoc_exe.into(),
-            "spawn".into(),
-            "--path".into(),
-            path.into(),
-            "--backend".into(),
-            backend.into(),
-        ]
+        let mut argv = vec!["--".to_string()];
+        argv.extend(spawn_argv(bwoc_exe, path, backend));
+        argv
     };
     let mut cmds: Vec<Vec<String>> = Vec::new();
     let Some(((id0, p0, b0), rest)) = agents.split_first() else {
@@ -370,7 +443,7 @@ fn match_pane_by_title(listing: &str, candidates: &[String]) -> Option<String> {
 #[cfg(test)]
 pub(crate) mod fake {
     use super::{FleetAgent, PaneBackend, PaneHandle};
-    use crate::fleet_term::TmuxLayout;
+    use crate::fleet_term::PaneLayout;
     use std::cell::RefCell;
 
     #[derive(Default)]
@@ -413,7 +486,7 @@ pub(crate) mod fake {
             &self,
             session: &str,
             agents: &[FleetAgent],
-            layout: TmuxLayout,
+            layout: PaneLayout,
             bwoc_exe: &str,
         ) -> Result<String, String> {
             let ids: Vec<String> = agents
@@ -478,7 +551,7 @@ mod tests {
 
     #[test]
     fn first_agent_seeds_the_session_and_spawns() {
-        let c = tmux_fleet_commands("bwoc-fleet", &agents(), TmuxLayout::Grid, "/bin/bwoc");
+        let c = tmux_fleet_commands("bwoc-fleet", &agents(), PaneLayout::Grid, "/bin/bwoc");
         let first = &c[0];
         assert_eq!(first[0], "new-session");
         assert!(first.contains(&"-d".to_string()), "detached: {first:?}");
@@ -500,7 +573,7 @@ mod tests {
 
     #[test]
     fn one_split_per_additional_agent_and_final_layout() {
-        let c = tmux_fleet_commands("s", &agents(), TmuxLayout::Columns, "bwoc");
+        let c = tmux_fleet_commands("s", &agents(), PaneLayout::Columns, "bwoc");
         let splits = c
             .iter()
             .filter(|cmd| cmd.first().map(String::as_str) == Some("split-window"))
@@ -519,7 +592,7 @@ mod tests {
 
     #[test]
     fn every_agent_pane_is_titled() {
-        let c = tmux_fleet_commands("s", &agents(), TmuxLayout::Grid, "bwoc");
+        let c = tmux_fleet_commands("s", &agents(), PaneLayout::Grid, "bwoc");
         for id in ["agent-pi", "agent-ji", "agent-mu"] {
             assert!(
                 c.iter()
@@ -536,7 +609,7 @@ mod tests {
 
     #[test]
     fn no_agents_yields_no_commands() {
-        assert!(tmux_fleet_commands("s", &[], TmuxLayout::Grid, "bwoc").is_empty());
+        assert!(tmux_fleet_commands("s", &[], PaneLayout::Grid, "bwoc").is_empty());
     }
 
     #[test]
@@ -566,6 +639,32 @@ mod tests {
             c.contains(&"bwoc-agent-pi".to_string()),
             "bwoc chat --tmux session (was silently missed): {c:?}"
         );
+    }
+
+    #[test]
+    fn pane_backend_config_values() {
+        use PaneBackendKind::*;
+        assert_eq!(
+            PaneBackendKind::from_config(None),
+            Ok(Tmux),
+            "absent → tmux"
+        );
+        assert_eq!(PaneBackendKind::from_config(Some("tmux")), Ok(Tmux));
+        assert_eq!(PaneBackendKind::from_config(Some("herdr")), Ok(Herdr));
+        assert_eq!(PaneBackendKind::from_config(Some(" Herdr ")), Ok(Herdr));
+        assert_eq!(
+            PaneBackendKind::from_config(Some("zellij")),
+            Err("zellij".to_string())
+        );
+        assert_eq!(PaneBackendKind::from_config(Some("")), Err(String::new()));
+    }
+
+    #[test]
+    fn tmux_panes_run_the_shared_spawn_argv() {
+        let c = tmux_fleet_commands("s", &agents(), PaneLayout::Grid, "/bin/bwoc");
+        let mut want = vec!["--".to_string()];
+        want.extend(spawn_argv("/bin/bwoc", "/ws/agents/agent-pi", "claude"));
+        assert!(c[0].ends_with(&want), "{:?}", c[0]);
     }
 
     #[test]

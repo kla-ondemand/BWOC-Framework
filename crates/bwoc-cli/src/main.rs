@@ -50,6 +50,7 @@ mod monitor;
 mod new;
 mod okr;
 mod outbox_cmd;
+mod pane_backend;
 mod peer;
 mod ping;
 mod plugin;

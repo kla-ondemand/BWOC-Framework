@@ -36,6 +36,7 @@ mod git_worktree;
 mod gws;
 mod handbook;
 mod help;
+mod herdr;
 mod i18n;
 mod inbox;
 mod info;
